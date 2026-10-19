@@ -1,0 +1,263 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/bg_light"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="16dp">
+
+        <!-- 頂部橫幅 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@color/line_green"
+            android:orientation="vertical"
+            android:padding="18dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="《LINE 散步趣》自動看廣告助手"
+                android:textColor="@color/card_white"
+                android:textSize="20sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="Android 11+ 無感截圖 ‧ 離線中文 OCR ‧ 手機即時框選水瓶取樣"
+                android:textColor="#E8F5E9"
+                android:textSize="13sp" />
+        </LinearLayout>
+
+        <!-- 卡片 1：權限狀態與啟動懸浮窗 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            android:background="@color/card_white"
+            android:elevation="2dp"
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="一、必要權限與啟動控制"
+                android:textColor="@color/text_primary"
+                android:textSize="16sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/tvPermissionStatus"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="檢查權限狀態中..."
+                android:textColor="@color/text_secondary"
+                android:textSize="14sp" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:orientation="horizontal">
+
+                <Button
+                    android:id="@+id/btnEnableAccessibility"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="1. 開啟無障礙服務"
+                    android:textSize="13sp" />
+
+                <Button
+                    android:id="@+id/btnEnableOverlay"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:layout_weight="1"
+                    android:text="2. 授權懸浮窗權限"
+                    android:textSize="13sp" />
+            </LinearLayout>
+
+            <Button
+                android:id="@+id/btnStartOverlayAndGame"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:backgroundTint="@color/line_green"
+                android:paddingVertical="12dp"
+                android:text="🚀 啟動懸浮控制窗並打開《LINE 散步趣》"
+                android:textColor="@color/card_white"
+                android:textSize="15sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+
+        <!-- 卡片 2：自動化任務模組開關 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            android:background="@color/card_white"
+            android:elevation="2dp"
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="二、自動化任務項目設定"
+                android:textColor="@color/text_primary"
+                android:textSize="16sp"
+                android:textStyle="bold" />
+
+            <CheckBox
+                android:id="@+id/cbStepBottle"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:text="【第一優先】步數獎勵（水瓶集滿自動點開看廣告領金幣）"
+                android:textColor="@color/text_primary"
+                android:textStyle="bold" />
+
+            <CheckBox
+                android:id="@+id/cbMoveGauge"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="移動距離獎勵（交通工具/火車集滿看廣告領金幣）"
+                android:textColor="@color/text_primary" />
+
+            <CheckBox
+                android:id="@+id/cbIdleReward"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="放置/時間獎勵（角色定時產出看廣告領金幣）"
+                android:textColor="@color/text_primary" />
+
+            <CheckBox
+                android:id="@+id/cbGachaTask"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="幸運扭蛋 / 刮刮樂（自動點擊免費看廣告抽獎）"
+                android:textColor="@color/text_primary" />
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:layout_marginVertical="8dp"
+                android:background="#E2E8F0" />
+
+            <CheckBox
+                android:id="@+id/cbClaimNormalWhenNoAd"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="若彈窗無廣告可看（或次數用盡），自動點擊一般領取/確認"
+                android:textColor="@color/text_secondary" />
+        </LinearLayout>
+
+        <!-- 卡片 3：手機端框選圖示範本管理 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            android:background="@color/card_white"
+            android:elevation="2dp"
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="三、已取樣圖示範本庫 (懸浮窗點 [✂️取樣] 新增)"
+                android:textColor="@color/text_primary"
+                android:textSize="16sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:text="💡 首次使用步驟：\n1. 點上方綠色按鈕啟動懸浮窗進入《LINE 散步趣》。\n2. 當畫面有「集滿的水瓶」時，點懸浮窗上的 [✂️取樣]，用手指把單一顆滿水瓶框起來並按儲存。\n3. 點懸浮窗 [▶開始]，即可全自動點擊水瓶 → 看廣告 → 關廣告 → 領取！"
+                android:textColor="@color/text_secondary"
+                android:textSize="13sp" />
+
+            <TextView
+                android:id="@+id/tvTemplateSummary"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:background="#F8FAFC"
+                android:padding="10dp"
+                android:text="載入範本統計中..."
+                android:textColor="@color/text_primary"
+                android:textSize="13sp" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:orientation="horizontal">
+
+                <Button
+                    android:id="@+id/btnClearBottleTemplates"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:backgroundTint="#64748B"
+                    android:text="重設水瓶範本"
+                    android:textSize="12sp" />
+
+                <Button
+                    android:id="@+id/btnClearAllTemplates"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:layout_weight="1"
+                    android:backgroundTint="@color/danger_red"
+                    android:text="清空所有範本"
+                    android:textSize="12sp" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- 卡片 4：即時執行日誌 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            android:layout_marginBottom="24dp"
+            android:background="@color/card_white"
+            android:elevation="2dp"
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="四、即時狀態與執行日誌"
+                android:textColor="@color/text_primary"
+                android:textSize="16sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/tvLiveLogs"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:background="#0F172A"
+                android:fontFamily="monospace"
+                android:minLines="7"
+                android:padding="12dp"
+                android:text="尚無執行紀錄..."
+                android:textColor="#38BDF8"
+                android:textSize="12sp" />
+        </LinearLayout>
+
+    </LinearLayout>
+</ScrollView>

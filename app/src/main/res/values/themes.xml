@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.LineWalkAutoAd" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/line_green</item>
+        <item name="colorPrimaryVariant">@color/line_green_dark</item>
+        <item name="colorOnPrimary">@color/card_white</item>
+        <item name="colorSecondary">@color/accent_amber</item>
+        <item name="android:statusBarColor">@color/line_green_dark</item>
+        <item name="android:windowBackground">@color/bg_light</item>
+    </style>
+</resources>

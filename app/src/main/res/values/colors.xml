@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="line_green">#06C755</color>
+    <color name="line_green_dark">#049B41</color>
+    <color name="accent_amber">#FFB300</color>
+    <color name="danger_red">#E53935</color>
+    <color name="bg_light">#F5F7FA</color>
+    <color name="card_white">#FFFFFF</color>
+    <color name="text_primary">#1E293B</color>
+    <color name="text_secondary">#64748B</color>
+</resources>

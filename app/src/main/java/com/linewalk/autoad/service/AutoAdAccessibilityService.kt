@@ -1,0 +1,193 @@
+package com.linewalk.autoad.service
+
+import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.GestureDescription
+import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.Path
+import android.graphics.Rect
+import android.util.Log
+import android.view.Display
+import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityNodeInfo
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.resume
+import kotlin.random.Random
+
+/**
+ * Android 11 (API 30+) 無障礙核心服務：
+ * 1. 使用 takeScreenshot() 免每次詢問螢幕錄製權限即可擷取畫面。
+ * 2. 使用 dispatchGesture() 派發帶有隨機座標微調 (Jitter) 與隨機按壓時間的擬真點擊。
+ * 3. 提供 UI 節點樹查詢與系統返回鍵 (GLOBAL_ACTION_BACK) 防迷路控制。
+ */
+class AutoAdAccessibilityService : AccessibilityService() {
+
+    @Volatile
+    private var lastEventPackageName: String? = null
+
+    override fun onServiceConnected() {
+        super.onServiceConnected()
+        _instance.value = this
+        Log.i(TAG, "AutoAdAccessibilityService 已連線啟動")
+    }
+
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        if (event == null) return
+        val pkg = event.packageName?.toString()
+        if (!pkg.isNullOrBlank() && pkg != packageName) {
+            // 忽略我們自己的懸浮窗套件名稱，紀錄底層真實前景 App 包名
+            lastEventPackageName = pkg
+        }
+    }
+
+    override fun onInterrupt() {
+        Log.w(TAG, "AutoAdAccessibilityService 被系統中斷")
+    }
+
+    override fun onUnbind(intent: Intent?): Boolean {
+        _instance.value = null
+        Log.i(TAG, "AutoAdAccessibilityService 已解除綁定")
+        return super.onUnbind(intent)
+    }
+
+    override fun onDestroy() {
+        _instance.value = null
+        super.onDestroy()
+    }
+
+    /**
+     * 取得目前前景視窗的 Package Name。
+     */
+    fun getForegroundPackageName(): String? {
+        val rootPkg = try {
+            rootInActiveWindow?.packageName?.toString()
+        } catch (e: Exception) {
+            null
+        }
+        if (!rootPkg.isNullOrBlank() && rootPkg != packageName) {
+            return rootPkg
+        }
+        return lastEventPackageName
+    }
+
+    /**
+     * 取得目前活動視窗的無障礙根節點 (供第一層節點樹檢查使用)。
+     */
+    fun getSafeRootNode(): AccessibilityNodeInfo? {
+        return try {
+            rootInActiveWindow
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /**
+     * 使用 Android 11+ (API 30) 內建無障礙截圖 API 擷取全螢幕軟體 Bitmap (ARGB_8888)。
+     * 注意：系統限制呼叫頻率約每秒 1~2 次，狀態機預設 2.2 秒呼叫一次完全符合規範。
+     */
+    suspend fun captureScreenBitmap(): Bitmap? = suspendCancellableCoroutine { cont ->
+        try {
+            takeScreenshot(
+                Display.DEFAULT_DISPLAY,
+                mainExecutor,
+                object : TakeScreenshotCallback {
+                    override fun onSuccess(screenshot: ScreenshotResult) {
+                        val hardwareBuffer = screenshot.hardwareBuffer
+                        val colorSpace = screenshot.colorSpace
+                        try {
+                            val hwBitmap = Bitmap.wrapHardwareBuffer(hardwareBuffer, colorSpace)
+                            val softBitmap = hwBitmap?.copy(Bitmap.Config.ARGB_8888, false)
+                            hwBitmap?.recycle()
+                            if (cont.isActive) {
+                                cont.resume(softBitmap)
+                            } else {
+                                softBitmap?.recycle()
+                            }
+                        } catch (t: Throwable) {
+                            Log.e(TAG, "轉換 Screenshot HardwareBuffer 失敗", t)
+                            if (cont.isActive) cont.resume(null)
+                        } finally {
+                            hardwareBuffer.close()
+                        }
+                    }
+
+                    override fun onFailure(errorCode: Int) {
+                        Log.w(TAG, "takeScreenshot 失敗，errorCode=$errorCode")
+                        if (cont.isActive) cont.resume(null)
+                    }
+                }
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "呼叫 takeScreenshot 發生例外", e)
+            if (cont.isActive) cont.resume(null)
+        }
+    }
+
+    /**
+     * 點擊目標矩形區域中心，並自動加入隨機偏移與隨機按壓時長 (65ms ~ 135ms)。
+     */
+    suspend fun clickRect(rect: Rect, maxJitterPx: Int = 6): Boolean {
+        val safeJitterX = minOf(maxJitterPx, (rect.width() / 4).coerceAtLeast(1))
+        val safeJitterY = minOf(maxJitterPx, (rect.height() / 4).coerceAtLeast(1))
+        val dx = Random.nextInt(-safeJitterX, safeJitterX + 1)
+        val dy = Random.nextInt(-safeJitterY, safeJitterY + 1)
+        return performClick(
+            x = (rect.centerX() + dx).toFloat(),
+            y = (rect.centerY() + dy).toFloat(),
+            jitterPx = 0
+        )
+    }
+
+    /**
+     * 在螢幕指定座標派發擬真點擊手勢。
+     */
+    suspend fun performClick(x: Float, y: Float, jitterPx: Int = 5): Boolean =
+        suspendCancellableCoroutine { cont ->
+            val metrics = resources.displayMetrics
+            val offsetX = if (jitterPx > 0) Random.nextInt(-jitterPx, jitterPx + 1) else 0
+            val offsetY = if (jitterPx > 0) Random.nextInt(-jitterPx, jitterPx + 1) else 0
+            val targetX = (x + offsetX).coerceIn(5f, (metrics.widthPixels - 5).toFloat())
+            val targetY = (y + offsetY).coerceIn(5f, (metrics.heightPixels - 5).toFloat())
+            val durationMs = Random.nextLong(65L, 138L)
+
+            val path = Path().apply {
+                moveTo(targetX, targetY)
+            }
+            val stroke = GestureDescription.StrokeDescription(path, 0L, durationMs)
+            val gesture = GestureDescription.Builder().addStroke(stroke).build()
+
+            val dispatched = dispatchGesture(
+                gesture,
+                object : GestureResultCallback() {
+                    override fun onCompleted(gestureDescription: GestureDescription?) {
+                        if (cont.isActive) cont.resume(true)
+                    }
+
+                    override fun onCancelled(gestureDescription: GestureDescription?) {
+                        if (cont.isActive) cont.resume(false)
+                    }
+                },
+                null
+            )
+            if (!dispatched && cont.isActive) {
+                cont.resume(false)
+            }
+        }
+
+    /**
+     * 觸發系統返回鍵 (用於從 Google Play 商店、外部瀏覽器或卡死廣告退回遊戲)。
+     */
+    fun navigateBack(): Boolean {
+        return performGlobalAction(GLOBAL_ACTION_BACK)
+    }
+
+    companion object {
+        private const val TAG = "AutoAdAccService"
+
+        private val _instance = MutableStateFlow<AutoAdAccessibilityService?>(null)
+        val instance: StateFlow<AutoAdAccessibilityService?> = _instance.asStateFlow()
+    }
+}
