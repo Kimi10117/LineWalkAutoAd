@@ -62,33 +62,56 @@ class BingoTask {
         val sh = screenBitmap.height
         val sw = screenBitmap.width
 
+        // 1. OCR 尋找「Get / get / GET / ▶Get / 領取」
         val match = ocrItems.firstOrNull { item ->
             val cy = item.bounds.centerY()
-            cy in (sh * 0.72f).toInt()..(sh * 0.90f).toInt() &&
-            (item.text.contains("Get", ignoreCase = true) || item.text.contains("領取"))
+            cy in (sh * 0.72f).toInt()..(sh * 0.90f).toInt() && (
+                item.text.contains("Get", ignoreCase = true) ||
+                item.text.contains("Cet", ignoreCase = true) ||
+                item.text.contains("領取") ||
+                item.text.contains("▶")
+            ) && !item.text.contains("今日上限") && !item.text.contains("開啟")
         }
         if (match != null) {
             return match.bounds
         }
 
-        // 顏色檢查：連線獎勵按鈕為紅色/珊瑚粉紅 (#FF4151) 橢圓膠囊按鈕
+        // 2. 精確連通區域色彩辨識：連線獎勵按鈕為珊瑚粉紅/紅色 (R > 215, G < 100, B < 120) 橢圓膠囊按鈕
         val yStart = (sh * 0.78f).toInt()
-        val yEnd = (sh * 0.86f).toInt()
+        val yEnd = (sh * 0.88f).toInt()
+        val xStart = (sw * 0.05f).toInt()
+        val xEnd = (sw * 0.95f).toInt()
+
+        val matchingPoints = mutableListOf<android.graphics.Point>()
         var y = yStart
         while (y <= yEnd) {
-            var x = (sw * 0.10f).toInt()
-            while (x <= (sw * 0.90f).toInt()) {
+            var x = xStart
+            while (x <= xEnd) {
                 val c = screenBitmap.getPixel(x, y)
                 val r = (c shr 16) and 0xFF
                 val g = (c shr 8) and 0xFF
                 val b = c and 0xFF
-                if (r > 215 && g < 85 && b < 105) {
-                    return Rect(x - 30, y - 20, x + 30, y + 20)
+                if (r > 215 && g < 100 && b < 120) {
+                    matchingPoints.add(android.graphics.Point(x, y))
                 }
-                x += 16
+                x += 3
             }
-            y += 8
+            y += 2
         }
+
+        if (matchingPoints.size >= 25) {
+            val firstClusterXs = matchingPoints.map { it.x }.sorted()
+            val minX = firstClusterXs.first()
+            val buttonXs = firstClusterXs.takeWhile { it - minX < (sw * 0.22f) }
+            val maxX = buttonXs.last()
+
+            val buttonPoints = matchingPoints.filter { it.x in minX..maxX }
+            val minY = buttonPoints.minOf { it.y }
+            val maxY = buttonPoints.maxOf { it.y }
+
+            return Rect(minX, minY, maxX, maxY)
+        }
+
         return null
     }
 

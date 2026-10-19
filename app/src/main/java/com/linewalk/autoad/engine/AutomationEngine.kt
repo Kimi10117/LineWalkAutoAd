@@ -87,6 +87,7 @@ enum class PatrolPhase(val title: String) {
     BINGO("每日賓果"),
     LOTTERY("抽抽樂"),
     MISSION("任務"),
+    RECEIVE_GIFT("接收好友禮物"),
     FRIEND_GIFT("好友送禮"),
     COMPLETED("全任務完成")
 }
@@ -114,6 +115,7 @@ class AutomationEngine private constructor(context: Context) {
     private val bingoTask = BingoTask()
     private val lotteryTask = LotteryTask()
     private val missionTask = MissionTask()
+    private val receiveGiftTask = ReceiveGiftTask()
     private val friendGiftTask = FriendGiftTask()
 
     /**
@@ -136,6 +138,7 @@ class AutomationEngine private constructor(context: Context) {
     private var isBingoCompleted = false
     private var isLotteryCompleted = false
     private var isMissionCompleted = false
+    private var isReceiveGiftCompleted = false
     private var isFriendGiftCompleted = false
     private val checkedMissionTabs = mutableSetOf<String>()
     private var friendGiftEmptyTicks = 0
@@ -159,6 +162,7 @@ class AutomationEngine private constructor(context: Context) {
         isBingoCompleted = false
         isLotteryCompleted = false
         isMissionCompleted = false
+        isReceiveGiftCompleted = false
         isFriendGiftCompleted = false
         checkedMissionTabs.clear()
         friendGiftEmptyTicks = 0
@@ -336,13 +340,19 @@ class AutomationEngine private constructor(context: Context) {
             return
         }
 
-        // C4. 檢查是否正在底部導覽列「好友」頁面
+        // C4. 檢查是否正在「接收禮物」彈窗
+        if (receiveGiftTask.isReceiveGiftDialogOpen(ocrItems, sh)) {
+            handleReceiveGiftDialog(service, screenBitmap, ocrItems, sw, sh)
+            return
+        }
+
+        // C5. 檢查是否正在底部導覽列「好友」頁面
         if (friendGiftTask.isFriendsPage(ocrItems)) {
             handleFriendsPage(service, screenBitmap, ocrItems, sw, sh)
             return
         }
 
-        // C5. 判斷目前是否在乾淨的《LINE 散步趣》主畫面（涵蓋『首頁(移動)』『時間』『遊戲』『步數』四大分頁）
+        // C6. 判斷目前是否在乾淨的《LINE 散步趣》主畫面（涵蓋『首頁(移動)』『時間』『遊戲』『步數』四大分頁）
         val onMainScreen = ocrRecognizer.isLineWalkMainScreenVisible(screenBitmap, ocrItems, templateMatcher)
         if (onMainScreen) {
             handleMainScreenPatrol(service, screenBitmap, ocrItems, sw, sh)
@@ -531,6 +541,42 @@ class AutomationEngine private constructor(context: Context) {
         updateDetail("✅ 任務已檢查完畢，準備進入下一項...", "✅ 任務完成")
     }
 
+    private suspend fun handleReceiveGiftDialog(
+        service: AutoAdAccessibilityService,
+        screenBitmap: android.graphics.Bitmap,
+        ocrItems: List<OcrItem>,
+        sw: Int,
+        sh: Int
+    ) {
+        val claimBtn = receiveGiftTask.findNextClaimGiftButton(screenBitmap, ocrItems)
+        if (claimBtn != null) {
+            currentPhaseEmptyTicks = 0
+            appendLog("🎁【接收禮物】點擊領取好友送來的禮物！")
+            FloatingOverlayService.clickWithOverlayPassthrough(claimBtn) {
+                service.clickRect(claimBtn)
+            }
+            adCloserHandler.onEnterAdMode()
+            transitionTo(EngineState.AD_WATCHING, "接收好友禮物，觀看廣告中...", "📺 廣告監控中...")
+            return
+        }
+
+        currentPhaseEmptyTicks++
+        if (currentPhaseEmptyTicks < 2) {
+            updateDetail("🔍 檢查是否有好友送來的禮物 ($currentPhaseEmptyTicks/2)...", "🔍 檢查禮物中...")
+            return
+        }
+
+        currentPhaseEmptyTicks = 0
+        isReceiveGiftCompleted = true
+        appendLog("✅【接收禮物】檢查完畢，點擊右上角 (X) 關閉視窗")
+        val closeBtn = receiveGiftTask.getCloseButtonBounds(sw, sh)
+        FloatingOverlayService.clickWithOverlayPassthrough(closeBtn) {
+            service.clickRect(closeBtn)
+        }
+        currentPhase = getNextPhase(PatrolPhase.RECEIVE_GIFT)
+        updateDetail("✅ 好友禮物已接收完畢，準備進入下一項...", "✅ 收禮完成")
+    }
+
     private suspend fun handleFriendsPage(
         service: AutoAdAccessibilityService,
         screenBitmap: android.graphics.Bitmap,
@@ -539,7 +585,7 @@ class AutomationEngine private constructor(context: Context) {
         sh: Int
     ) {
         // 1. 最優先檢查：是否跳出送禮確認彈窗（使用者指定：【都以送禮物也送自己為主】！）
-        val selfGiftOption = friendGiftTask.findSelfGiftButton(ocrItems)
+        val selfGiftOption = friendGiftTask.findSelfGiftButton(screenBitmap, ocrItems)
         if (selfGiftOption != null) {
             appendLog("🎁【好友送禮】點擊【${selfGiftOption.first}】(優先送禮物也送自己)！")
             FloatingOverlayService.clickWithOverlayPassthrough(selfGiftOption.second) {
@@ -759,6 +805,19 @@ class AutomationEngine private constructor(context: Context) {
                 updateDetail("🎯 開啟【任務】視窗中...", "🎯 開啟任務...")
             }
 
+            PatrolPhase.RECEIVE_GIFT -> {
+                if (!config.enableFriendGiftTask || isReceiveGiftCompleted) {
+                    currentPhase = getNextPhase(PatrolPhase.RECEIVE_GIFT)
+                    return
+                }
+                appendLog("🎁 點擊主畫面右上角【禮物盒】圖示按鈕...")
+                val giftBoxRect = receiveGiftTask.getHeaderGiftBoxRect(sw, sh)
+                FloatingOverlayService.clickWithOverlayPassthrough(giftBoxRect) {
+                    service.clickRect(giftBoxRect)
+                }
+                updateDetail("🎁 開啟【禮物】視窗接收禮物中...", "🎁 接收禮物中...")
+            }
+
             PatrolPhase.FRIEND_GIFT -> {
                 if (!config.enableFriendGiftTask || isFriendGiftCompleted) {
                     currentPhase = getNextPhase(PatrolPhase.FRIEND_GIFT)
@@ -773,7 +832,7 @@ class AutomationEngine private constructor(context: Context) {
             }
 
             PatrolPhase.COMPLETED -> {
-                stop("🎉 全日任務與巡邏獎勵皆已領取完畢！（四大分頁/每日賓果/抽抽樂/任務/好友送禮）")
+                stop("🎉 全日任務與巡邏獎勵皆已領取完畢！（四大分頁/每日賓果/抽抽樂/任務/收禮/送禮）")
             }
         }
     }
@@ -784,6 +843,7 @@ class AutomationEngine private constructor(context: Context) {
             PatrolPhase.BINGO,
             PatrolPhase.LOTTERY,
             PatrolPhase.MISSION,
+            PatrolPhase.RECEIVE_GIFT,
             PatrolPhase.FRIEND_GIFT
         )
         val startIdx = phaseList.indexOf(after) + 1
@@ -794,6 +854,7 @@ class AutomationEngine private constructor(context: Context) {
                 PatrolPhase.BINGO -> config.enableBingoTask && !isBingoCompleted
                 PatrolPhase.LOTTERY -> config.enableLotteryTask && !isLotteryCompleted
                 PatrolPhase.MISSION -> config.enableDailyMissionTask && !isMissionCompleted
+                PatrolPhase.RECEIVE_GIFT -> config.enableFriendGiftTask && !isReceiveGiftCompleted
                 PatrolPhase.FRIEND_GIFT -> config.enableFriendGiftTask && !isFriendGiftCompleted
                 PatrolPhase.COMPLETED -> false
             }

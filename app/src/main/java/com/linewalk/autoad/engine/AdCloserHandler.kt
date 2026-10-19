@@ -128,9 +128,9 @@ class AdCloserHandler(
             }
         }
 
-        // 2C. 若已回到乾淨的《LINE 散步趣》主畫面，判定已完成這支廣告！
-        if (elapsedSec >= 5 && ocrRecognizer.isLineWalkMainScreenVisible(screenBitmap, ocrItems, templateMatcher)) {
-            return AdStepResult.ReturnedToGame(null, "已回到散步趣主畫面")
+        // 2C. 若已回到《LINE 散步趣》主畫面或各項子畫面（賓果/好友/任務/抽抽樂/禮物），判定已完成這支廣告！
+        if (elapsedSec >= 4 && isGameScreenVisible(screenBitmap, ocrItems)) {
+            return AdStepResult.ReturnedToGame(null, "已回到散步趣介面")
         }
 
         // 3. 廣告前 4 秒保護期：靜候播放
@@ -237,6 +237,27 @@ class AdCloserHandler(
         }
         closeClickCount++
         service.clickRect(rect)
+    }
+
+    private fun isGameScreenVisible(screenBitmap: Bitmap, ocrItems: List<OcrItem>): Boolean {
+        if (ocrRecognizer.isLineWalkMainScreenVisible(screenBitmap, ocrItems, templateMatcher)) {
+            return true
+        }
+        val sh = screenBitmap.height
+        // 檢查是否回到每日賓果、好友排行榜、任務、抽抽樂或禮物盒彈窗
+        return ocrItems.any { item ->
+            val cy = item.bounds.centerY()
+            (cy < sh * 0.28f && (
+                item.text.contains("每日賓果") ||
+                item.text.contains("好友排行榜") ||
+                item.text.contains("排行榜") ||
+                item.text == "禮物" ||
+                item.text.contains("抽抽樂") ||
+                item.text.contains("任務")
+            )) || (cy > sh * 0.88f && (
+                item.text == "集點" || item.text == "好友" || item.text == "使用" || item.text == "精選"
+            ))
+        }
     }
 
     companion object {

@@ -98,31 +98,57 @@ class FriendGiftTask {
      * - 優先搜尋包含「送禮物也送自己」、「送自己」、「看廣告」或帶有播放圖示的按鈕
      * - 次選回傳「送禮物 / 贈送」一般按鈕
      */
-    fun findSelfGiftButton(ocrItems: List<OcrItem>): Pair<String, Rect>? {
-        // 1. 【第一優先】：「送禮物也送自己」/「送自己」/「看廣告」
+    fun findSelfGiftButton(
+        screenBitmap: Bitmap,
+        ocrItems: List<OcrItem>
+    ): Pair<String, Rect>? {
+        val sh = screenBitmap.height
+        val sw = screenBitmap.width
+
+        // 1. 【第一優先】OCR 辨識「也送給自己」/「送給自己」/「送禮物也送自己」/「送自己」
         val selfGiftOcr = ocrItems.firstOrNull { item ->
-            item.bounds.centerY() > 300 && (
+            val cy = item.bounds.centerY()
+            cy in (sh * 0.40f).toInt()..(sh * 0.65f).toInt() && (
+                item.text.contains("也送給自己") ||
+                item.text.contains("送給自己") ||
                 item.text.contains("送禮物也送自己") ||
                 item.text.contains("送自己") ||
-                (item.text.contains("送禮") && item.text.contains("自己")) ||
-                (item.text.contains("廣告") && item.text.contains("送"))
+                (item.text.contains("送") && item.text.contains("自己"))
             )
         }
         if (selfGiftOcr != null) {
-            return Pair("送禮物也送自己(看廣告)", selfGiftOcr.bounds)
+            return Pair("也送給自己(看廣告)", selfGiftOcr.bounds)
         }
 
-        // 2. 備援：若無看廣告送自己選項，回傳一般「送出 / 送禮物 / 贈送」
+        // 2. 綠色按鈕色彩辨識 (LINE 綠色 R < 40, G > 175, B < 110, y in 0.48..0.56, x in 0.20..0.80)
+        // 畫面上方的「也送給自己」為亮綠色長條按鈕！
+        val yTarget = (sh * 0.52f).toInt()
+        val c = screenBitmap.getPixel((sw * 0.50f).toInt(), yTarget)
+        val r = (c shr 16) and 0xFF
+        val g = (c shr 8) and 0xFF
+        val b = c and 0xFF
+        if (g > 160 && (g - r > 70) && (g - b > 50)) {
+            val greenBtn = Rect(
+                (sw * 0.18f).toInt(),
+                (sh * 0.495f).toInt(),
+                (sw * 0.82f).toInt(),
+                (sh * 0.545f).toInt()
+            )
+            return Pair("也送給自己(綠色按鈕)", greenBtn)
+        }
+
+        // 3. 備援：一般「贈送 / 送禮物 / 送出」按鈕
         val normalGiftOcr = ocrItems.firstOrNull { item ->
-            item.bounds.centerY() > 300 && (
+            val cy = item.bounds.centerY()
+            cy in (sh * 0.55f).toInt()..(sh * 0.70f).toInt() && (
+                item.text == "贈送" ||
                 item.text == "送出" ||
                 item.text == "送禮物" ||
-                item.text == "贈送" ||
                 item.text == "確認"
             )
         }
         if (normalGiftOcr != null) {
-            return Pair("一般送禮物", normalGiftOcr.bounds)
+            return Pair("一般贈送", normalGiftOcr.bounds)
         }
 
         return null
