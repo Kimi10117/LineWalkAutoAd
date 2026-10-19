@@ -233,8 +233,10 @@ class OcrRecognizer {
     ): Boolean {
         val sh = screenBitmap.height
 
-        // 1. 若下半部 (y = 0.68 ~ 0.83) 出現了『紅利 [▶] 15/60 獲得』的珊瑚粉紅按鈕，代表目前正開著領獎彈窗！
-        if (templateMatcher.findCoralPinkButton(screenBitmap, 0.68f, 0.83f, "彈窗粉紅鈕") != null) {
+        // 1. 若下半部出現了『紅利 [▶] 15/60 獲得』粉紅按鈕或『紅利 [▶] x 1 獲得』白底粉紅標籤按鈕，代表正開著領獎彈窗！
+        if (templateMatcher.findCoralPinkButton(screenBitmap, 0.66f, 0.88f, "彈窗粉紅鈕") != null ||
+            templateMatcher.findPopupBonusBadgeAdButton(screenBitmap) != null
+        ) {
             return false
         }
 
@@ -252,6 +254,8 @@ class OcrRecognizer {
                 (cy > 0.50f && (t.contains("跳過廣告") || t.contains("紅利") ||
                     t.contains("15 獲得") || t.contains("15獲得") ||
                     t.contains("60 獲得") || t.contains("60獲得") ||
+                    t.contains("x 1 獲得") || t.contains("x1 獲得") || t.contains("x1獲得") ||
+                    t.contains("1 獲得") || t.contains("1獲得") ||
                     t.contains("5 獲得") || t.contains("5獲得") ||
                     t == "關閉" || t == "確認" || t == "確定" ||
                     t == "取消" || t.contains("同意並繼續")))
@@ -312,6 +316,13 @@ class OcrRecognizer {
             "60獲得",
             "100 獲得",
             "100獲得",
+            "x 1 獲得",
+            "x1 獲得",
+            "x1獲得",
+            "× 1 獲得",
+            "×1 獲得",
+            "1 獲得",
+            "1獲得",
             "看廣告",
             "觀看廣告",
             "觀看影片",

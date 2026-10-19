@@ -81,6 +81,98 @@ class TemplateMatcher {
     }
 
     /**
+     * 判斷彈窗內某個按鈕高度 (centerY) 是否為「反灰不可點選」狀態（如無糖果時的灰色『跳過廣告』按鈕 #CCCCCC ~ #D2D2D2）。
+     * - 反灰按鈕的灰底比例 (r,g,b in 180..225 且無色彩飽和度) 高達 80% 以上。
+     * - 可點選按鈕（如有糖果時的『跳過廣告』或白底黑框的『紅利 [▶] x1 獲得』或粉紅鈕）灰底比例低於 10%。
+     */
+    fun isPopupButtonDisabledGray(screenBitmap: Bitmap, centerY: Int): Boolean {
+        val w = screenBitmap.width
+        val h = screenBitmap.height
+        val yStart = (centerY - (h * 0.018f).toInt()).coerceIn(0, h - 1)
+        val yEnd = (centerY + (h * 0.018f).toInt()).coerceIn(yStart + 1, h - 1)
+        val xStart = (w * 0.15f).toInt()
+        val xEnd = (w * 0.85f).toInt()
+
+        var grayPixels = 0
+        var totalSampled = 0
+        var y = yStart
+        while (y <= yEnd) {
+            var x = xStart
+            while (x <= xEnd) {
+                val c = screenBitmap.getPixel(x, y)
+                val r = (c shr 16) and 0xFF
+                val g = (c shr 8) and 0xFF
+                val b = c and 0xFF
+                if (r in 180..225 && abs(r - g) <= 12 && abs(g - b) <= 12) {
+                    grayPixels++
+                }
+                totalSampled++
+                x += 6
+            }
+            y += 3
+        }
+        return totalSampled > 0 && (grayPixels.toFloat() / totalSampled) >= 0.45f
+    }
+
+    /**
+     * 偵測《LINE 散步趣》彈窗左側的珊瑚粉紅『紅利』小標籤 (x = 0.07f..0.30f, y = 0.64f..0.86f)：
+     * 特別針對『時間(放置)』分頁的收成彈窗：其『紅利 [▶] x 1 獲得』按鈕本體為白底黑框，但左上角固定有珊瑚粉紅色的『紅利』標籤！
+     * 定位到『紅利』粉紅標籤後，直接點擊其正下方的看廣告按鈕區域。
+     */
+    fun findPopupBonusBadgeAdButton(screenBitmap: Bitmap): TemplateMatchResult? {
+        val w = screenBitmap.width
+        val h = screenBitmap.height
+        val startY = (h * 0.64f).toInt().coerceIn(0, h - 1)
+        val endY = (h * 0.86f).toInt().coerceIn(startY + 1, h - 1)
+        val startX = (w * 0.07f).toInt()
+        val endX = (w * 0.30f).toInt()
+
+        var maxPinkY = Int.MIN_VALUE
+        var matchedRows = 0
+
+        var y = startY
+        while (y <= endY) {
+            var pinkPixels = 0
+            var total = 0
+            var x = startX
+            while (x <= endX) {
+                val c = screenBitmap.getPixel(x, y)
+                val r = (c shr 16) and 0xFF
+                val g = (c shr 8) and 0xFF
+                val b = c and 0xFF
+                if (r > 215 && g in 35..125 && b in 45..135 && (r - g) > 110) {
+                    pinkPixels++
+                }
+                total++
+                x += 3
+            }
+            if (total > 0 && (pinkPixels.toFloat() / total) >= 0.45f) {
+                if (y > maxPinkY) maxPinkY = y
+                matchedRows++
+            }
+            y += 2
+        }
+
+        if (matchedRows >= 3 && maxPinkY > 0) {
+            val targetCenterY = (maxPinkY + (h * 0.032f).toInt()).coerceAtMost((h * 0.90f).toInt())
+            if (!isPopupButtonDisabledGray(screenBitmap, targetCenterY)) {
+                val rect = Rect(
+                    (w * 0.25f).toInt(),
+                    targetCenterY - 22,
+                    (w * 0.75f).toInt(),
+                    targetCenterY + 22
+                )
+                return TemplateMatchResult(
+                    score = 0.96f,
+                    bounds = rect,
+                    label = "紅利[x1獲得]看廣告鈕"
+                )
+            }
+        }
+        return null
+    }
+
+    /**
      * 偵測《LINE 散步趣》頂部分頁列 (y = 0.115f..0.123f) 目前停留在哪一個分頁：
      * - 0: 首頁 (移動, xRatio = 0.125f)
      * - 1: 步數 (xRatio = 0.375f)
