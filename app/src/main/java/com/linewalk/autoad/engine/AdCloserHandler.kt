@@ -17,6 +17,7 @@ import kotlin.math.hypot
 
 sealed class AdStepResult {
     data class RedirectRecovered(val externalPkg: String) : AdStepResult()
+    data object AdChoicesDismissed : AdStepResult()
     data class StillCountingDown(val remainingSec: Int, val elapsedSec: Int) : AdStepResult()
     data class WaitingGracePeriod(val elapsedSec: Int) : AdStepResult()
     data class ClickedCloseOrSkip(val sourceLabel: String, val bounds: Rect) : AdStepResult()
@@ -29,7 +30,7 @@ sealed class AdStepResult {
  * 通用多階段廣告關閉處理器 (AdCloserHandler)：
  * - 只有當真正偵測到《LINE 散步趣》主畫面 (isLineWalkMainScreenVisible) 時才判定廣告結束，
  *   不會因為廣告畫面內出現「邀請好友」「雙方都能獲得幣」而提早跳出廣告監控！
- * - 內建升級版幾何角落 X 偵測器，支援深色圓底白 X 與細線 X。
+ * - 內建升級版幾何角落 X 偵測器，支援深色圓底白 X 與細線 X，並排除 AdChoices『ⓘ ▷』圖示。
  */
 class AdCloserHandler(
     private val config: AppConfig,
@@ -41,13 +42,17 @@ class AdCloserHandler(
 
     private var adStartTimeMs: Long = 0L
     private var closeClickCount: Int = 0
+    private var adChoicesDismissCount: Int = 0
     private var lastClickedPoint: Point? = null
+    private val clickedHistory = mutableListOf<Point>()
     private val blacklistedPoints = mutableListOf<Point>()
 
     fun onEnterAdMode() {
         adStartTimeMs = System.currentTimeMillis()
         closeClickCount = 0
+        adChoicesDismissCount = 0
         lastClickedPoint = null
+        clickedHistory.clear()
         blacklistedPoints.clear()
     }
 
@@ -72,7 +77,7 @@ class AdCloserHandler(
         val sh = screenBitmap.height
         val elapsedSec = getElapsedSeconds()
 
-        // 1. 防迷路檢查：若誤觸跳轉到 Google Play 商店或外部瀏覽器，封鎖假 X 座標並立即按 BACK
+        // 1A. 防迷路檢查：若誤觸跳轉到 Google Play 商店或外部瀏覽器，封鎖假 X 座標並立即按 BACK
         val fgPkg = service.getForegroundPackageName()
         if (fgPkg != null && fgPkg in AppConfig.EXTERNAL_REDIRECT_PACKAGES) {
             lastClickedPoint?.let { badPt ->
@@ -81,6 +86,30 @@ class AdCloserHandler(
             }
             service.navigateBack()
             return AdStepResult.RedirectRecovered(fgPkg)
+        }
+
+        // 1B. 防誤觸 AdChoices 選單檢查：若誤點『ⓘ ▷』彈出『Hide Ad / Report Ad / Why am I seeing this ad?』選單，
+        // 立即將觸發座標加入黑名單，並點擊上方半透明遮罩區 (或返回鍵) 關閉選單讓廣告繼續播放！
+        if (ocrRecognizer.isAdChoicesMenuOpen(ocrItems)) {
+            lastClickedPoint?.let { badPt ->
+                blacklistedPoints.add(badPt)
+                lastClickedPoint = null
+            }
+            adChoicesDismissCount++
+            if (adChoicesDismissCount % 2 == 1) {
+                val backdropRect = Rect(
+                    (sw * 0.40f).toInt(),
+                    (sh * 0.25f).toInt(),
+                    (sw * 0.60f).toInt(),
+                    (sh * 0.35f).toInt()
+                )
+                service.clickRect(backdropRect)
+            } else {
+                service.navigateBack()
+            }
+            return AdStepResult.AdChoicesDismissed
+        } else {
+            adChoicesDismissCount = 0
         }
 
         // 2A. 若已關閉全螢幕廣告並跳出『獲得15張票券！ / 獲得金幣！』中央領獎彈窗，直接回傳並點擊 [ 關閉 ]！
@@ -188,7 +217,16 @@ class AdCloserHandler(
     }
 
     private suspend fun recordAndClick(service: AutoAdAccessibilityService, rect: Rect) {
-        lastClickedPoint = Point(rect.centerX(), rect.centerY())
+        val pt = Point(rect.centerX(), rect.centerY())
+        lastClickedPoint = pt
+        clickedHistory.add(pt)
+        // 若同一區域 (半徑 65px 內) 在同支廣告中已被點擊滿 2 次卻仍未關閉廣告，自動加入黑名單避免重複誤觸靜音鍵或假 X
+        val nearbyClicks = clickedHistory.count { p ->
+            hypot((p.x - pt.x).toDouble(), (p.y - pt.y).toDouble()) < BLACKLIST_RADIUS_PX
+        }
+        if (nearbyClicks >= 2) {
+            blacklistedPoints.add(pt)
+        }
         closeClickCount++
         service.clickRect(rect)
     }

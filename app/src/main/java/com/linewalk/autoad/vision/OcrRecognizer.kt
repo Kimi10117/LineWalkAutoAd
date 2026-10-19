@@ -285,6 +285,17 @@ class OcrRecognizer {
         return hasBottomNav && hasUpperStage
     }
 
+    /**
+     * 偵測是否誤觸了廣告右上角的『ⓘ / ▷ (AdChoices)』而跳出底部檢舉選單：
+     * 包含英文『Hide Ad / Report Ad / Why am I seeing this ad?』或中文『隱藏廣告 / 檢舉廣告 / 為什麼我會看到這則廣告』。
+     */
+    fun isAdChoicesMenuOpen(items: List<OcrItem>): Boolean {
+        return items.any { item ->
+            val t = item.text
+            AD_CHOICES_MENU_KEYWORDS.any { kw -> t.contains(kw, ignoreCase = true) }
+        }
+    }
+
     fun detectAdCountdownSeconds(items: List<OcrItem>, screenHeight: Int): Int? {
         val topBarThreshold = (screenHeight * 0.22f).toInt()
         for (item in items) {
@@ -307,6 +318,16 @@ class OcrRecognizer {
         private val COUNTDOWN_REGEX = Regex(
             "(?:還有|剩餘|倒數)?\\s*(\\d{1,2})\\s*(?:秒|s|S|sec)|(?:in|remaining)\\s*(\\d{1,2})\\s*s",
             RegexOption.IGNORE_CASE
+        )
+
+        val AD_CHOICES_MENU_KEYWORDS = listOf(
+            "Hide Ad",
+            "Report Ad",
+            "Why am I seeing",
+            "Mark ad as",
+            "隱藏廣告",
+            "檢舉廣告",
+            "為什麼我會看到"
         )
 
         val GAME_AD_TRIGGER_KEYWORDS = listOf(
@@ -387,7 +408,9 @@ class OcrRecognizer {
             "LINE POINTS",
             "安裝",
             "下載",
-            "雙方"
+            "雙方",
+            "Hide",
+            "Report"
         )
 
         val AD_CLOSE_OCR_KEYWORDS = listOf(
@@ -416,7 +439,11 @@ class OcrRecognizer {
             "隱私權",
             "條款",
             "邀請",
-            "好友"
+            "好友",
+            "Hide",
+            "Report",
+            "irrelevant",
+            "offensive"
         )
 
         val AD_REWARD_GRANTED_KEYWORDS = listOf(

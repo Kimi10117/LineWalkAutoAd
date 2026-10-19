@@ -22,7 +22,7 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="散步趣助手 v1.6 (LINE 散步趣專用)"
+                android:text="散步趣助手 v1.7 (LINE 散步趣專用)"
                 android:textColor="@color/card_white"
                 android:textSize="20sp"
                 android:textStyle="bold" />
@@ -150,39 +150,39 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="二、自動化任務項目設定"
+                android:text="二、自動巡邏順序設定 (移動 ➔ 時間 ➔ 遊戲 ➔ 步數)"
                 android:textColor="@color/text_primary"
                 android:textSize="16sp"
-                android:textStyle="bold" />
-
-            <CheckBox
-                android:id="@+id/cbStepBottle"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
-                android:text="【步數分頁】步數獎勵（自動領取所有『獲得票券』）"
-                android:textColor="@color/text_primary"
                 android:textStyle="bold" />
 
             <CheckBox
                 android:id="@+id/cbMoveGauge"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="【首頁分頁】移動距離獎勵（自動領取所有『獲得金幣』）"
-                android:textColor="@color/text_primary" />
+                android:layout_marginTop="6dp"
+                android:text="1.【移動 (首頁)】移動距離獎勵（第一優先領取『獲得金幣』）"
+                android:textColor="@color/text_primary"
+                android:textStyle="bold" />
 
             <CheckBox
                 android:id="@+id/cbIdleReward"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="【時間分頁】放置蘋果獎勵（自動領取所有『獲得票券』）"
+                android:text="2.【時間 (放置)】放置蘋果與寶箱獎勵（第二順位）"
                 android:textColor="@color/text_primary" />
 
             <CheckBox
                 android:id="@+id/cbGachaTask"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="【遊戲分頁】遊戲達成獎勵（自動檢查『獲得金幣』）"
+                android:text="3.【遊戲】觀看廣告抽獎獎勵（第三順位）"
+                android:textColor="@color/text_primary" />
+
+            <CheckBox
+                android:id="@+id/cbStepBottle"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="4.【步數】集滿水瓶領取票券獎勵（第四順位）"
                 android:textColor="@color/text_primary" />
 
             <View

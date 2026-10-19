@@ -61,7 +61,7 @@ enum class MainTab(
     val xRatio: Float,
     val yRatio: Float = 0.115f
 ) {
-    MOVE(0, "首頁(移動)", "首頁", 0.125f),
+    MOVE(0, "首頁(移動)", "移動", 0.125f),
     STEP(1, "步數", "步數", 0.375f),
     TIME(2, "時間(放置)", "時間", 0.625f),
     GAME(3, "遊戲", "遊戲", 0.875f);
@@ -99,12 +99,19 @@ class AutomationEngine private constructor(context: Context) {
     private val timeTask = IdleRewardTask()
     private val gameTask = GachaTask()
 
+    /**
+     * 嚴格分頁巡邏優先順序：
+     * 1. 移動 (首頁) ➔ 2. 時間 (放置) ➔ 3. 遊戲 ➔ 4. 步數
+     */
+    private val tabPriorityOrder = listOf(MainTab.MOVE, MainTab.TIME, MainTab.GAME, MainTab.STEP)
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var loopJob: Job? = null
 
     private var popupRetryTicks = 0
     private var rewardClaimRetryTicks = 0
-    private var currentTab: MainTab = MainTab.STEP
+    private var currentTab: MainTab = MainTab.MOVE
+    private var needsInitialTabSync = true
     private var emptyTicksOnCurrentTab = 0
     private val confirmedEmptyTabs = mutableSetOf<MainTab>()
 
@@ -123,10 +130,12 @@ class AutomationEngine private constructor(context: Context) {
         rewardClaimRetryTicks = 0
         emptyTicksOnCurrentTab = 0
         confirmedEmptyTabs.clear()
+        currentTab = tabPriorityOrder.firstOrNull { it.isEnabled(config) } ?: MainTab.MOVE
+        needsInitialTabSync = true
         transitionTo(
             newState = EngineState.IN_GAME_SCAN,
-            detail = "自動巡邏已啟動，將依序檢查『步數/首頁/時間/遊戲』所有分頁...",
-            safeOverlayText = "🔍 巡邏各分頁獎勵中..."
+            detail = "自動巡邏已啟動，優先順序：移動 ➔ 時間 ➔ 遊戲 ➔ 步數...",
+            safeOverlayText = "🔍 巡邏[移動➔時間➔遊戲➔步數]..."
         )
         _uiStatus.value = _uiStatus.value.copy(isRunning = true)
 
@@ -228,21 +237,58 @@ class AutomationEngine private constructor(context: Context) {
             return
         }
 
-        // C. 判斷目前是否在乾淨的《LINE 散步趣》主畫面（涵蓋『首頁』『步數』『時間』『遊戲』四大分頁）
+        // C. 判斷目前是否在乾淨的《LINE 散步趣》主畫面（涵蓋『首頁(移動)』『時間』『遊戲』『步數』四大分頁）
         val onMainScreen = ocrRecognizer.isLineWalkMainScreenVisible(screenBitmap, ocrItems, templateMatcher)
         if (onMainScreen) {
-            // 同步目前畫面上實際選取的分頁標籤
+            val enabledTabs = tabPriorityOrder.filter { it.isEnabled(config) }.ifEmpty { tabPriorityOrder }
+            val remainingTabs = enabledTabs.filter { it !in confirmedEmptyTabs }
+
+            if (remainingTabs.isEmpty()) {
+                val tabListStr = enabledTabs.joinToString("➔") { it.shortLabel }
+                stop("🎉 所有分頁 ($tabListStr) 獎勵皆已領取完畢！(共完成 ${_uiStatus.value.adsCompletedCount} 次)")
+                return
+            }
+
+            // 依優先順序（1.移動 ➔ 2.時間 ➔ 3.遊戲 ➔ 4.步數）決定當前應檢查的最高優先分頁
+            val desiredTab = remainingTabs.first()
+
+            // 若頂部分頁列未被懸浮窗遮擋，同步目前畫面上實際選取的分頁標籤
             templateMatcher.detectActiveMainTabIndex(screenBitmap)?.let { idx ->
                 MainTab.fromIndex(idx)?.let { detectedTab ->
                     currentTab = detectedTab
+                    if (currentTab == desiredTab) {
+                        needsInitialTabSync = false
+                    }
                 }
             }
 
+            // 若剛啟動尚未同步分頁、或目前所在分頁不是最高優先順序的待檢查分頁，立即切換至 desiredTab！
+            if (needsInitialTabSync || currentTab != desiredTab) {
+                needsInitialTabSync = false
+                currentTab = desiredTab
+                emptyTicksOnCurrentTab = 0
+                val tabRect = Rect(
+                    (sw * (desiredTab.xRatio - 0.05f)).toInt(),
+                    (sh * 0.103f).toInt(),
+                    (sw * (desiredTab.xRatio + 0.05f)).toInt(),
+                    (sh * 0.128f).toInt()
+                )
+                appendLog("🔄 依優先順序切換至【${desiredTab.tabName}】...")
+                FloatingOverlayService.clickWithOverlayPassthrough(tabRect) {
+                    service.clickRect(tabRect)
+                }
+                updateDetail(
+                    "🔄 已切換至【${desiredTab.tabName}】，正在檢查獎勵...",
+                    "🔄 切換至[${desiredTab.shortLabel}]檢查中..."
+                )
+                return
+            }
+
             val currentTask: GameTask = when (currentTab) {
-                MainTab.STEP -> stepTask
                 MainTab.MOVE -> moveTask
                 MainTab.TIME -> timeTask
                 MainTab.GAME -> gameTask
+                MainTab.STEP -> stepTask
             }
 
             val target = if (currentTask.isEnabled(config)) {
@@ -276,7 +322,7 @@ class AutomationEngine private constructor(context: Context) {
                 return
             }
 
-            // 本分頁目前沒有亮起的粉紅『獲得票券 / 獲得金幣』按鈕
+            // 本分頁目前沒有亮起的可領取獎勵按鈕
             emptyTicksOnCurrentTab++
             if (emptyTicksOnCurrentTab < 2) {
                 updateDetail(
@@ -286,32 +332,26 @@ class AutomationEngine private constructor(context: Context) {
                 return
             }
 
-            // 連續 2 次確認本分頁已無可領取項目 -> 標記本分頁已完成並自動切換至下一個分頁！
+            // 連續 2 次確認本分頁已無可領取項目 -> 標記本分頁已完成並依優先順序（移動➔時間➔遊戲➔步數）切換至下一分頁！
             emptyTicksOnCurrentTab = 0
             confirmedEmptyTabs.add(currentTab)
 
-            val enabledTabs = MainTab.entries.filter { it.isEnabled(config) }.ifEmpty { MainTab.entries }
-            val remainingTabs = enabledTabs.filter { it !in confirmedEmptyTabs }
-
-            if (remainingTabs.isEmpty()) {
-                val tabListStr = enabledTabs.joinToString("/") { it.shortLabel }
+            val nextRemainingTabs = enabledTabs.filter { it !in confirmedEmptyTabs }
+            if (nextRemainingTabs.isEmpty()) {
+                val tabListStr = enabledTabs.joinToString("➔") { it.shortLabel }
                 stop("🎉 所有分頁 ($tabListStr) 獎勵皆已領取完畢！(共完成 ${_uiStatus.value.adsCompletedCount} 次)")
                 return
             }
 
-            val orderedCycle = listOf(MainTab.STEP, MainTab.MOVE, MainTab.TIME, MainTab.GAME)
-            val startIdx = orderedCycle.indexOf(currentTab).coerceAtLeast(0)
-            val nextTab = (1..orderedCycle.size)
-                .map { offset -> orderedCycle[(startIdx + offset) % orderedCycle.size] }
-                .firstOrNull { it in remainingTabs } ?: remainingTabs.first()
-
+            val nextTab = nextRemainingTabs.first()
+            val remainOrderStr = nextRemainingTabs.joinToString("➔") { it.shortLabel }
             val tabRect = Rect(
                 (sw * (nextTab.xRatio - 0.05f)).toInt(),
                 (sh * 0.103f).toInt(),
                 (sw * (nextTab.xRatio + 0.05f)).toInt(),
                 (sh * 0.128f).toInt()
             )
-            appendLog("🔄【${currentTab.tabName}】已領完，自動切換至【${nextTab.tabName}】(待檢查:${remainingTabs.size}頁)")
+            appendLog("🔄【${currentTab.tabName}】已領完，依序切換至【${nextTab.tabName}】(待檢查:$remainOrderStr)")
             currentTab = nextTab
             FloatingOverlayService.clickWithOverlayPassthrough(tabRect) {
                 service.clickRect(tabRect)
@@ -319,6 +359,26 @@ class AutomationEngine private constructor(context: Context) {
             updateDetail(
                 "🔄 已切換至【${nextTab.tabName}】，正在檢查獎勵...",
                 "🔄 切換至[${nextTab.shortLabel}]檢查中..."
+            )
+            return
+        }
+
+        // D0. 若畫面正停留在誤觸 AdChoices『ⓘ ▷』彈出的『Hide Ad / Report Ad / Why am I seeing this ad?』選單，
+        // 立即點擊上方半透明遮罩關閉選單，並切回廣告監控狀態！
+        if (ocrRecognizer.isAdChoicesMenuOpen(ocrItems)) {
+            val backdropRect = Rect(
+                (sw * 0.40f).toInt(),
+                (sh * 0.25f).toInt(),
+                (sw * 0.60f).toInt(),
+                (sh * 0.35f).toInt()
+            )
+            appendLog("🛡️ 偵測到『Hide Ad / Report Ad』選單，自動點擊上方背景關閉並繼續監控廣告")
+            service.clickRect(backdropRect)
+            adCloserHandler.onEnterAdMode()
+            transitionTo(
+                EngineState.AD_WATCHING,
+                "已關閉 Hide Ad 選單，繼續等待廣告結束...",
+                "📺 監控廣告中..."
             )
             return
         }
@@ -460,6 +520,14 @@ class AutomationEngine private constructor(context: Context) {
         when (val res = adCloserHandler.processAdTick(service, screenBitmap, ocrItems)) {
             is AdStepResult.RedirectRecovered -> {
                 appendLog("🛡️ 誤跳轉外部套件 (${res.externalPkg})，已自動按返回鍵並封鎖假 X 座標！")
+            }
+
+            is AdStepResult.AdChoicesDismissed -> {
+                appendLog("🛡️ 偵測到誤觸『Hide Ad / Report Ad』選單，已自動關閉選單並封鎖該座標！")
+                updateDetail(
+                    "🛡️ 已關閉 Hide Ad 選單並封鎖誤觸座標，繼續播放廣告...",
+                    "🛡️ 已關閉選單，繼續監控..."
+                )
             }
 
             is AdStepResult.WaitingGracePeriod -> {

@@ -3,6 +3,7 @@ package com.linewalk.autoad.vision
 import android.graphics.Bitmap
 import android.graphics.Rect
 import android.graphics.RectF
+import com.linewalk.autoad.ui.FloatingOverlayService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlin.math.abs
@@ -194,6 +195,13 @@ class TemplateMatcher {
             val cx = tabCenters[idx]
             val xStart = (w * (cx - 0.045f)).toInt().coerceIn(0, w - 1)
             val xEnd = (w * (cx + 0.045f)).toInt().coerceIn(xStart + 1, w - 1)
+            // 若懸浮控制窗剛好遮住頂部分頁列，懸浮窗的深色底色會被誤判為深色選取圖示，此時回傳 null 交由引擎依點擊狀態追蹤
+            if (FloatingOverlayService.isInsideOverlay((xStart + xEnd) / 2, (yStart + yEnd) / 2) ||
+                FloatingOverlayService.isInsideOverlay(xStart, yStart) ||
+                FloatingOverlayService.isInsideOverlay(xEnd, yEnd)
+            ) {
+                return null
+            }
             var darkCount = 0
             var total = 0
             var y = yStart
@@ -487,6 +495,31 @@ class TemplateMatcher {
 
                         if (cardDiff <= 58f) {
                             val isBrightX = cardMean < 150f
+
+                            // 1. 中心點本身必須位於 X 的交叉線上，排除『ⓘ ▷』兩個圖示中間的黑縫！
+                            val centerPixelLum = lum(cx, cy)
+                            val centerContrast = if (isBrightX) centerPixelLum - cardMean else cardMean - centerPixelLum
+                            if (centerContrast < 45f) {
+                                cx += step
+                                continue
+                            }
+
+                            // 2. 檢查半徑 rHalf 的上下左右四個 V 型缺口：
+                            // 真正的『X』只有四條對角線，其正上、正下、正左、正右 (rHalf 處) 必須是背景底色！
+                            // 這能 100% 排除帶有垂直線或水平線的 AdChoices『ⓘ / ▷』圖示與喇叭圖示！
+                            val vTop = lum(cx, cy - rHalf)
+                            val vBot = lum(cx, cy + rHalf)
+                            val vLeft = lum(cx - rHalf, cy)
+                            val vRight = lum(cx + rHalf, cy)
+                            val maxVGapDiff = max(
+                                max(abs(vTop - cardMean), abs(vBot - cardMean)),
+                                max(abs(vLeft - cardMean), abs(vRight - cardMean))
+                            )
+                            if (maxVGapDiff > 35f) {
+                                cx += step
+                                continue
+                            }
+
                             val cLum = armLum(cx, cy, isBrightX)
                             val d1 = armLum(cx - rHalf, cy - rHalf, isBrightX)
                             val d2 = armLum(cx + rHalf, cy + rHalf, isBrightX)
