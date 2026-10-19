@@ -17,9 +17,10 @@ class LotteryTask {
 
     fun isEnabled(config: AppConfig): Boolean = config.enableLotteryTask
 
-    fun isLotteryDialogOpen(ocrItems: List<OcrItem>): Boolean {
+    fun isLotteryDialogOpen(ocrItems: List<OcrItem>, sh: Int = 0): Boolean {
+        val maxTopY = if (sh > 0) sh * 0.30f else 600f
         return ocrItems.any { item ->
-            item.bounds.top < 300 && (
+            item.bounds.centerY() < maxTopY && (
                 item.text.contains("抽抽樂") ||
                 item.text.contains("BIG") ||
                 (item.text.contains("50張") && item.text.contains("抽"))
@@ -61,7 +62,7 @@ class LotteryTask {
         val leftRedBtn = findFiftyDrawByColor(screenBitmap)
         if (leftRedBtn != null && !templateMatcher.isPopupButtonDisabledGray(screenBitmap, leftRedBtn.centerY())) {
             // 檢查票券餘額是否足夠 (若畫面頂部 OCR 有票券且數字 >= 50)
-            val hasEnoughTickets = checkHasEnoughTickets(ocrItems)
+            val hasEnoughTickets = checkHasEnoughTickets(ocrItems, sh)
             if (hasEnoughTickets != false) {
                 return Pair("50張抽一次(幾何顏色)", leftRedBtn)
             }
@@ -87,10 +88,10 @@ class LotteryTask {
         return null
     }
 
-    private fun checkHasEnoughTickets(ocrItems: List<OcrItem>): Boolean? {
-        // 頂部票券餘額通常位於 y < 0.15f
+    private fun checkHasEnoughTickets(ocrItems: List<OcrItem>, sh: Int = 0): Boolean? {
+        val maxTopY = if (sh > 0) sh * 0.18f else 350f
         for (item in ocrItems) {
-            if (item.bounds.top < 150) {
+            if (item.bounds.centerY() < maxTopY) {
                 val num = item.text.filter { it.isDigit() }.toIntOrNull()
                 if (num != null && num in 1..99999) {
                     return num >= 50

@@ -316,12 +316,15 @@ class AdCloserHandler(
         if (!matchesSubDialog) return false
 
         // 若畫面上仍存在未領取之連線按鈕 (如賓果紅底 [▶ Get])，代表廣告尚未觀看完成，不可判定為已回遊戲！
-        val hasBingoGetBtn = ocrItems.any { item ->
-            val cy = item.bounds.centerY()
-            cy in (sh * 0.75f).toInt()..(sh * 0.90f).toInt() &&
-            (item.text.contains("Get", ignoreCase = true) || item.text.contains("Cet", ignoreCase = true) || item.text.contains("領取"))
+        val isBingoScreen = ocrItems.any { it.text.contains("BINGO") || it.text.contains("賓果") }
+        if (isBingoScreen) {
+            val hasBingoGetBtn = ocrItems.any { item ->
+                val cy = item.bounds.centerY()
+                cy in (sh * 0.75f).toInt()..(sh * 0.90f).toInt() &&
+                (item.text.contains("Get", ignoreCase = true) || item.text.contains("Cet", ignoreCase = true) || (item.text.contains("領取") && !item.text.contains("已領取")))
+            }
+            if (hasBingoGetBtn) return false
         }
-        if (hasBingoGetBtn) return false
 
         return true
     }

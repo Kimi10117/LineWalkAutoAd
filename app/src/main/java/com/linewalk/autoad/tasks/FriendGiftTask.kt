@@ -24,9 +24,10 @@ class FriendGiftTask {
         giftedPoints.clear()
     }
 
-    fun isFriendsPage(ocrItems: List<OcrItem>): Boolean {
+    fun isFriendsPage(ocrItems: List<OcrItem>, sh: Int = 0): Boolean {
+        val maxTopY = if (sh > 0) sh * 0.25f else 500f
         return ocrItems.any { item ->
-            item.bounds.top < 260 && (
+            item.bounds.centerY() < maxTopY && (
                 item.text.contains("好友排行榜") ||
                 item.text.contains("排行榜") ||
                 item.text.contains("好友清單")

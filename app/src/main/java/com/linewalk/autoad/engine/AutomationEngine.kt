@@ -142,6 +142,7 @@ class AutomationEngine private constructor(context: Context) {
     private var isReceiveGiftCompleted = false
     private var isFriendGiftCompleted = false
     private val checkedMissionTabs = mutableSetOf<String>()
+    private val missionTabSequence = listOf("特別", "每日", "每週")
     private var friendGiftEmptyTicks = 0
     private var currentPhaseEmptyTicks = 0
 
@@ -402,13 +403,13 @@ class AutomationEngine private constructor(context: Context) {
         }
 
         // B2. 檢查是否正在「抽抽樂」彈窗
-        if (lotteryTask.isLotteryDialogOpen(ocrItems)) {
+        if (lotteryTask.isLotteryDialogOpen(ocrItems, sh)) {
             handleLotteryDialog(service, screenBitmap, ocrItems, sw, sh)
             return
         }
 
         // B3. 檢查是否正在「任務」彈窗
-        if (missionTask.isMissionDialogOpen(ocrItems)) {
+        if (missionTask.isMissionDialogOpen(ocrItems, sh, screenBitmap)) {
             handleMissionDialog(service, screenBitmap, ocrItems, sw, sh)
             return
         }
@@ -420,7 +421,7 @@ class AutomationEngine private constructor(context: Context) {
         }
 
         // B5. 檢查是否正在底部導覽列「好友」頁面
-        if (friendGiftTask.isFriendsPage(ocrItems)) {
+        if (friendGiftTask.isFriendsPage(ocrItems, sh)) {
             handleFriendsPage(service, screenBitmap, ocrItems, sw, sh)
             return
         }
@@ -599,41 +600,46 @@ class AutomationEngine private constructor(context: Context) {
         sw: Int,
         sh: Int
     ) {
-        // 1. 尋找清單中綠色「領取」按鈕 (排除「挑戰」)
+        val activeTab = missionTask.detectCurrentActiveTab(screenBitmap)
+        appendLog("📋【任務視窗】當前處於【$activeTab】分頁 (已檢查: ${checkedMissionTabs.joinToString()})")
+
+        // 1. 尋找清單中綠色「領取」按鈕 (嚴格排除「挑戰」與「已領取」)
         val claimBtn = missionTask.findClaimableMissionButton(screenBitmap, ocrItems)
         if (claimBtn != null) {
             currentPhaseEmptyTicks = 0
-            appendLog("🎯【任務】點擊綠色「領取」按鈕！")
+            appendLog("🎯【任務-$activeTab】點擊綠色「領取」按鈕！")
             FloatingOverlayService.clickWithOverlayPassthrough(claimBtn) {
                 service.clickRect(claimBtn)
             }
+            delay(500)
+            popupRetryTicks = 0
+            // 領取後可能觸發看廣告或獎勵彈窗，切入 TRIGGER_AD_POPUP 流程安全等候
+            transitionTo(
+                EngineState.TRIGGER_AD_POPUP,
+                "【任務-$activeTab】已點擊領取，等待獎勵或廣告載入中...",
+                "🎯 領取獎勵中..."
+            )
             return
         }
 
-        // 2. 當前分頁無可領取項目，依序切換檢查「每日」➔「每週」➔「特別」
-        if ("每日" !in checkedMissionTabs) {
-            checkedMissionTabs.add("每日")
-            appendLog("🔄【任務】切換至【每週】分頁檢查...")
-            val tabRect = missionTask.getTabRect("每週", sw, sh)
+        // 2. 當前分頁已無可領取項目，將當前分頁加入已檢查清單
+        checkedMissionTabs.add(activeTab)
+
+        // 3. 尋找下一個尚未檢查的分頁 (特別 ➔ 每日 ➔ 每週)
+        val nextTab = missionTabSequence.firstOrNull { it !in checkedMissionTabs }
+        if (nextTab != null) {
+            appendLog("🔄【任務】$activeTab 分頁已無可領取項目，切換至【$nextTab】分頁檢查...")
+            val tabRect = missionTask.getTabRect(nextTab, sw, sh, ocrItems)
             FloatingOverlayService.clickWithOverlayPassthrough(tabRect) {
                 service.clickRect(tabRect)
             }
+            updateDetail("🔄 切換至【$nextTab】任務分頁...", "🔄 切換分頁...")
             return
         }
 
-        if ("每週" !in checkedMissionTabs) {
-            checkedMissionTabs.add("每週")
-            appendLog("🔄【任務】切換至【特別】分頁檢查...")
-            val tabRect = missionTask.getTabRect("特別", sw, sh)
-            FloatingOverlayService.clickWithOverlayPassthrough(tabRect) {
-                service.clickRect(tabRect)
-            }
-            return
-        }
-
-        // 3. 所有分頁皆已檢查完畢
+        // 4. 所有分頁 (特別、每日、每週) 皆已檢查完畢，關閉視窗
         isMissionCompleted = true
-        appendLog("✅【任務】所有分頁任務皆已檢查領取完畢，關閉視窗")
+        appendLog("✅【任務】所有分頁（特別、每日、每週）皆已檢查領取完畢，關閉視窗")
         val closeBtn = missionTask.getCloseButtonBounds(sw, sh)
         FloatingOverlayService.clickWithOverlayPassthrough(closeBtn) {
             service.clickRect(closeBtn)
@@ -1130,7 +1136,6 @@ class AutomationEngine private constructor(context: Context) {
             FloatingOverlayService.clickWithOverlayPassthrough(promoSkip) {
                 service.clickRect(promoSkip)
             }
-            adCloserHandler.onAdClosedSuccess()
             transitionTo(EngineState.IN_GAME_SCAN, "已跳過推廣頁，繼續巡邏...", "🔍 巡邏畫面目標中...")
             return
         }
