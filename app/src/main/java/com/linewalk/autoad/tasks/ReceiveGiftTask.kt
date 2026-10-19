@@ -32,22 +32,20 @@ class ReceiveGiftTask {
      * 判斷「禮物」彈窗是否開啟中（嚴格排除超商「禮物卡/禮物券」等廣告卡片！）
      */
     fun isReceiveGiftDialogOpen(ocrItems: List<OcrItem>, sh: Int): Boolean {
-        val hasTitle = ocrItems.any { item ->
+        return ocrItems.any { item ->
             val cy = item.bounds.centerY()
             val t = item.text.trim()
-            cy in (sh * 0.20f).toInt()..(sh * 0.28f).toInt() &&
-                (t == "禮物" || t == "禮物盒") &&
-                !t.contains("卡") && !t.contains("券") && !t.contains("超商")
+            t.contains("送來的禮物") ||
+            (t.contains("收到") && t.contains("禮物")) ||
+            (t.contains("剩餘") && t.contains("天") && cy < sh * 0.85f) ||
+            ((t == "禮物" || t == "禮物盒" || (t.contains("禮物") && t.length <= 4)) &&
+             cy < sh * 0.35f && !t.contains("卡") && !t.contains("券") && !t.contains("超商"))
         }
-        val hasContent = ocrItems.any { item ->
-            item.text.contains("送來的禮物") ||
-            (item.text.contains("收到") && item.text.contains("禮物"))
-        }
-        return hasTitle && hasContent
     }
 
     /**
-     * 尋找禮物清單中下一個待領取的綠色播放按鈕 [▶] (x ≈ 0.66f..0.91f, y ≈ 0.28f..0.85f)
+     * 尋找禮物清單中下一個待領取的綠色播放按鈕 [▶] (x ≈ 0.62f..0.94f, y ≈ 0.28f..0.85f)
+     * 支援 2D 綠色像素連通區塊 (綠色膠囊外框+中央綠色播放三角形) 與 OCR (「剩餘天數」正上方) 雙重定位！
      */
     fun findNextClaimGiftButton(
         screenBitmap: Bitmap,
@@ -56,27 +54,68 @@ class ReceiveGiftTask {
         val sh = screenBitmap.height
         val sw = screenBitmap.width
 
-        // 1. OCR 尋找「剩下 / 天 / 收到」右側或下方的區塊
-        val yStart = (sh * 0.28f).toInt()
-        val yEnd = (sh * 0.85f).toInt()
-        val xTarget = (sw * 0.77f).toInt()
+        // 1. 優先：2D 顏色區域辨識搜尋右側綠色播放按鈕 (x ≈ 0.62f..0.94f, y ≈ 0.28f..0.85f)
+        val x1 = (sw * 0.62f).toInt().coerceIn(0, sw - 1)
+        val x2 = (sw * 0.94f).toInt().coerceIn(x1 + 1, sw)
+        val y1 = (sh * 0.28f).toInt().coerceIn(0, sh - 1)
+        val y2 = (sh * 0.85f).toInt().coerceIn(y1 + 1, sh)
 
-        // 2. 顏色辨識：搜尋綠色播放按鈕 (LINE 綠色 R < 50, G > 175, B < 110)
-        var y = yStart
-        while (y <= yEnd) {
-            val c = screenBitmap.getPixel(xTarget, y)
-            val r = (c shr 16) and 0xFF
-            val g = (c shr 8) and 0xFF
-            val b = c and 0xFF
-            if (g > 175 && (g - r > 100) && (g - b > 80)) {
-                return Rect(
-                    (sw * 0.66f).toInt(),
-                    y - 20,
-                    (sw * 0.91f).toInt(),
-                    y + 20
-                )
+        val greenPoints = mutableListOf<android.graphics.Point>()
+        var y = y1
+        while (y < y2) {
+            var x = x1
+            while (x < x2) {
+                val c = screenBitmap.getPixel(x, y)
+                val r = (c shr 16) and 0xFF
+                val g = (c shr 8) and 0xFF
+                val b = c and 0xFF
+                // LINE 亮綠色：G 顯著高於 R 與 B (膠囊外框與內部綠色播放三角形)
+                if (g > 140 && g > r + 30 && g > b + 30) {
+                    greenPoints.add(android.graphics.Point(x, y))
+                }
+                x += 2
             }
-            y += 8
+            y += 2
+        }
+
+        if (greenPoints.size >= 20) {
+            val minX = greenPoints.minOf { it.x }
+            val maxX = greenPoints.maxOf { it.x }
+            val minY = greenPoints.minOf { it.y }
+            val maxY = greenPoints.maxOf { it.y }
+            // 按鈕高度合理範圍 (15px ~ 0.15 * sh)
+            if (maxY - minY in 15..(sh * 0.15f).toInt()) {
+                return Rect(minX, minY, maxX, maxY)
+            }
+        }
+
+        // 2. OCR 輔助定位：尋找「剩餘 / 天 / 剩餘1天」文字，綠色播放按鈕就在其正上方約 30~50px
+        val daysItem = ocrItems.firstOrNull { item ->
+            val cy = item.bounds.centerY()
+            val cx = item.bounds.centerX()
+            cy in (sh * 0.30f).toInt()..(sh * 0.88f).toInt() &&
+            cx > sw * 0.55f &&
+            (item.text.contains("剩餘") || item.text.contains("天"))
+        }
+        if (daysItem != null) {
+            val cx = daysItem.bounds.centerX()
+            val cy = daysItem.bounds.centerY()
+            val btnHalfW = (sw * 0.14f).toInt()
+            val btnHalfH = (sh * 0.025f).toInt()
+            val btnCenterY = cy - (sh * 0.038f).toInt()
+            return Rect(cx - btnHalfW, btnCenterY - btnHalfH, cx + btnHalfW, btnCenterY + btnHalfH)
+        }
+
+        // 3. OCR 尋找「▶」播放按鈕
+        val playItem = ocrItems.firstOrNull { item ->
+            val cy = item.bounds.centerY()
+            val cx = item.bounds.centerX()
+            cy in (sh * 0.28f).toInt()..(sh * 0.85f).toInt() &&
+            cx > sw * 0.60f &&
+            (item.text.contains("▶") || item.text.contains(">"))
+        }
+        if (playItem != null) {
+            return playItem.bounds
         }
 
         return null
@@ -87,10 +126,10 @@ class ReceiveGiftTask {
      */
     fun getCloseButtonBounds(sw: Int, sh: Int): Rect {
         return Rect(
-            (sw * 0.86f).toInt(),
-            (sh * 0.21f).toInt(),
-            (sw * 0.95f).toInt(),
-            (sh * 0.26f).toInt()
+            (sw * 0.84f).toInt(),
+            (sh * 0.20f).toInt(),
+            (sw * 0.96f).toInt(),
+            (sh * 0.27f).toInt()
         )
     }
 }

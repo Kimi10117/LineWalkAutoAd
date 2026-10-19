@@ -162,8 +162,8 @@ class AdCloserHandler(
             }
         }
 
-        // 2C. 若已回到《LINE 散步趣》主畫面或各項子畫面（賓果/好友/任務/抽抽樂/禮物），判定已完成這支廣告！
-        if (elapsedSec >= 2 && isGameScreenVisible(service, screenBitmap, ocrItems)) {
+        // 2C. 若廣告已播放足夠時間 (至少 6 秒) 且已回到《LINE 散步趣》介面，判定已完成這支廣告！
+        if (elapsedSec >= 6 && isGameScreenVisible(service, screenBitmap, ocrItems)) {
             return AdStepResult.ReturnedToGame(null, "已回到散步趣介面")
         }
 
@@ -285,7 +285,7 @@ class AdCloserHandler(
         service.clickRect(rect, maxJitterPx = 2)
     }
 
-    private fun isGameScreenVisible(service: AutoAdAccessibilityService, screenBitmap: Bitmap, ocrItems: List<OcrItem>): Boolean {
+    fun isGameScreenVisible(service: AutoAdAccessibilityService, screenBitmap: Bitmap, ocrItems: List<OcrItem>): Boolean {
         val fgPkg = service.getForegroundPackageName()
         if (fgPkg != null && AppConfig.isRedirectPackage(fgPkg)) {
             return false
@@ -295,7 +295,7 @@ class AdCloserHandler(
         }
         val sh = screenBitmap.height
         // 檢查是否回到每日賓果、好友排行榜、任務、抽抽樂或禮物盒彈窗 (排除全家禮物卡等廣告字眼)
-        return ocrItems.any { item ->
+        val matchesSubDialog = ocrItems.any { item ->
             val cy = item.bounds.centerY()
             val t = item.text.trim()
             (cy < sh * 0.35f && (
@@ -313,6 +313,17 @@ class AdCloserHandler(
                 t == "集點" || t == "好友" || t == "使用" || t == "精選"
             ))
         }
+        if (!matchesSubDialog) return false
+
+        // 若畫面上仍存在未領取之連線按鈕 (如賓果紅底 [▶ Get])，代表廣告尚未觀看完成，不可判定為已回遊戲！
+        val hasBingoGetBtn = ocrItems.any { item ->
+            val cy = item.bounds.centerY()
+            cy in (sh * 0.75f).toInt()..(sh * 0.90f).toInt() &&
+            (item.text.contains("Get", ignoreCase = true) || item.text.contains("Cet", ignoreCase = true) || item.text.contains("領取"))
+        }
+        if (hasBingoGetBtn) return false
+
+        return true
     }
 
     companion object {

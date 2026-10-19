@@ -268,6 +268,69 @@ class AutomationEngine private constructor(context: Context) {
         }
     }
 
+    /**
+     * 檢查是否彈出「玩遊戲賺點數 / 免費參加」推廣宣傳頁，並自動定位底部的「跳過」文字按鈕 (y ≈ 0.88f)
+     */
+    private fun findPlayGamePromoSkipButton(
+        screenBitmap: android.graphics.Bitmap,
+        ocrItems: List<OcrItem>,
+        sw: Int,
+        sh: Int
+    ): Rect? {
+        val hasPromoContent = ocrItems.any { item ->
+            val t = item.text
+            t.contains("玩遊戲") || t.contains("賺點數") || t.contains("挑選喜歡的遊戲") || t.contains("同意並繼續")
+        }
+        if (!hasPromoContent) return null
+
+        // 1. OCR 尋找「跳過」或「略過」
+        val skipItem = ocrItems.firstOrNull { item ->
+            val cy = item.bounds.centerY()
+            cy in (sh * 0.80f).toInt()..(sh * 0.96f).toInt() &&
+            (item.text.contains("跳過") || item.text.contains("略過"))
+        }
+        if (skipItem != null) return skipItem.bounds
+
+        // 2. 藍色文字色塊辨識：搜尋底部中央「跳過」文字 (y ≈ 0.86f..0.94f, x ≈ 0.35f..0.65f)
+        val bluePoints = mutableListOf<android.graphics.Point>()
+        val y1 = (sh * 0.86f).toInt().coerceIn(0, sh - 1)
+        val y2 = (sh * 0.94f).toInt().coerceIn(y1 + 1, sh)
+        val x1 = (sw * 0.35f).toInt().coerceIn(0, sw - 1)
+        val x2 = (sw * 0.65f).toInt().coerceIn(x1 + 1, sw)
+
+        var y = y1
+        while (y < y2) {
+            var x = x1
+            while (x < x2) {
+                val c = screenBitmap.getPixel(x, y)
+                val r = (c shr 16) and 0xFF
+                val g = (c shr 8) and 0xFF
+                val b = c and 0xFF
+                if (b > 140 && b > r + 40 && b > g + 40) {
+                    bluePoints.add(android.graphics.Point(x, y))
+                }
+                x += 2
+            }
+            y += 2
+        }
+
+        if (bluePoints.size >= 15) {
+            val minX = bluePoints.minOf { it.x }
+            val maxX = bluePoints.maxOf { it.x }
+            val minY = bluePoints.minOf { it.y }
+            val maxY = bluePoints.maxOf { it.y }
+            return Rect(minX, minY, maxX, maxY)
+        }
+
+        // 3. 固定熱區 Fallback
+        return Rect(
+            (sw * 0.38f).toInt(),
+            (sh * 0.88f).toInt(),
+            (sw * 0.62f).toInt(),
+            (sh * 0.94f).toInt()
+        )
+    }
+
     private suspend fun handleInGameScan(
         service: AutoAdAccessibilityService,
         screenBitmap: android.graphics.Bitmap,
@@ -362,6 +425,16 @@ class AutomationEngine private constructor(context: Context) {
             return
         }
 
+        // B6. 檢查是否彈出「玩遊戲賺點數 / 免費參加」推廣宣傳頁，自動點擊底部「跳過」
+        val promoSkip = findPlayGamePromoSkipButton(screenBitmap, ocrItems, sw, sh)
+        if (promoSkip != null) {
+            appendLog("🎮 偵測到【玩遊戲賺點數】推廣頁，自動點擊底部 [跳過]！")
+            FloatingOverlayService.clickWithOverlayPassthrough(promoSkip) {
+                service.clickRect(promoSkip)
+            }
+            return
+        }
+
         // C. 檢查四大分頁下半部是否彈出領獎彈窗（優先點可用的『跳過廣告(糖果)』，其次點『紅利 15/60/x1 獲得』）！
         val popupAction = findPopupActionTarget(screenBitmap, ocrItems)
         if (popupAction != null) {
@@ -382,13 +455,13 @@ class AutomationEngine private constructor(context: Context) {
         }
 
         // D. 若不在主畫面（代表有宣傳視窗如『邀請好友』、『玩遊戲賺點數 -> 跳過』、領獎確認窗或全螢幕廣告）：
-        // D1. 短字按鈕 OCR（跳過 / 略過 / 確認 / 確定 / 關閉，字數 <= 6，避開底部導覽列 y < 0.86f）
+        // D1. 短字按鈕 OCR（跳過 / 略過 / 確認 / 確定 / 關閉，字數 <= 6，覆蓋到 y < 0.94f）
         val dismissOrSkipOcr = ocrRecognizer.findMatch(
             items = ocrItems,
             keywords = OcrRecognizer.GAME_CLAIM_CONFIRM_KEYWORDS,
             screenWidth = sw,
             screenHeight = sh,
-            roiNormalized = RectF(0.05f, 0.04f, 0.95f, 0.86f),
+            roiNormalized = RectF(0.05f, 0.04f, 0.95f, 0.94f),
             excludeKeywords = OcrRecognizer.GAME_CLAIM_EXCLUDE_KEYWORDS,
             maxTextLength = 6
         )
@@ -441,12 +514,13 @@ class AutomationEngine private constructor(context: Context) {
         val rewardBtn = bingoTask.findConnectionRewardButton(screenBitmap, ocrItems)
         if (rewardBtn != null) {
             currentPhaseEmptyTicks = 0
-            appendLog("🎯【每日賓果】點擊領取連線獎勵！")
+            appendLog("🎯【每日賓果】點擊領取連線獎勵 [▶ Get]！")
             FloatingOverlayService.clickWithOverlayPassthrough(rewardBtn) {
                 service.clickRect(rewardBtn)
             }
-            adCloserHandler.onEnterAdMode()
-            transitionTo(EngineState.AD_WATCHING, "已領取賓果連線獎勵，等待廣告/獎勵確認...", "📺 廣告監控中...")
+            delay(500)
+            popupRetryTicks = 0
+            transitionTo(EngineState.TRIGGER_AD_POPUP, "已點擊賓果連線獎勵，等待廣告或確認視窗...", "⏳ 領取連線中...")
             return
         }
 
@@ -578,12 +652,13 @@ class AutomationEngine private constructor(context: Context) {
         val claimBtn = receiveGiftTask.findNextClaimGiftButton(screenBitmap, ocrItems)
         if (claimBtn != null) {
             currentPhaseEmptyTicks = 0
-            appendLog("🎁【接收禮物】點擊領取好友送來的禮物！")
+            appendLog("🎁【接收禮物】點擊領取好友送來的禮物 (綠色播放鈕)！")
             FloatingOverlayService.clickWithOverlayPassthrough(claimBtn) {
                 service.clickRect(claimBtn)
             }
-            adCloserHandler.onEnterAdMode()
-            transitionTo(EngineState.AD_WATCHING, "接收好友禮物，觀看廣告中...", "📺 廣告監控中...")
+            delay(500)
+            popupRetryTicks = 0
+            transitionTo(EngineState.TRIGGER_AD_POPUP, "已點擊領取禮物，等待廣告或確認視窗...", "🎁 領取禮物中...")
             return
         }
 
@@ -935,6 +1010,17 @@ class AutomationEngine private constructor(context: Context) {
             return
         }
 
+        // 若彈出「玩遊戲賺點數」推廣宣傳頁，自動點擊底部 [跳過]
+        val promoSkip = findPlayGamePromoSkipButton(screenBitmap, ocrItems, sw, sh)
+        if (promoSkip != null) {
+            appendLog("🎮 偵測到【玩遊戲賺點數】推廣頁，自動點擊底部 [跳過]！")
+            FloatingOverlayService.clickWithOverlayPassthrough(promoSkip) {
+                service.clickRect(promoSkip)
+            }
+            transitionTo(EngineState.IN_GAME_SCAN, "已跳過推廣頁，繼續巡邏...", "🔍 巡邏畫面目標中...")
+            return
+        }
+
         // 若彈窗按鈕皆在冷卻中且出現 [取消]，立即點擊 [取消] 關閉彈窗以利後續巡邏
         val cancelBtn = ocrRecognizer.findPopupCancelButton(screenBitmap, ocrItems)
         if (cancelBtn != null) {
@@ -953,7 +1039,8 @@ class AutomationEngine private constructor(context: Context) {
             val cy = item.bounds.centerY()
             cy < sh * 0.16f && (item.text.contains("正在載入") || item.text.contains(".com") || item.text.contains("http"))
         }
-        if (directGeoX != null || isExternalDirect || hasBrowserTitleDirect) {
+        val isGameScreen = adCloserHandler.isGameScreenVisible(service, screenBitmap, ocrItems)
+        if (directGeoX != null || isExternalDirect || hasBrowserTitleDirect || (!isGameScreen && popupRetryTicks >= 2)) {
             appendLog("📺 點擊目標後已直接進入全螢幕廣告/宣傳頁，啟動廣告監控流程！")
             adCloserHandler.onEnterAdMode()
             transitionTo(EngineState.AD_WATCHING, "已進入廣告畫面，安全監控中...", "📺 廣告監控中...")
@@ -1035,6 +1122,19 @@ class AutomationEngine private constructor(context: Context) {
         screenBitmap: android.graphics.Bitmap,
         ocrItems: List<OcrItem>
     ) {
+        val sw = screenBitmap.width
+        val sh = screenBitmap.height
+        val promoSkip = findPlayGamePromoSkipButton(screenBitmap, ocrItems, sw, sh)
+        if (promoSkip != null) {
+            appendLog("🎮 廣告中偵測到【玩遊戲賺點數】推廣頁，自動點擊底部 [跳過]！")
+            FloatingOverlayService.clickWithOverlayPassthrough(promoSkip) {
+                service.clickRect(promoSkip)
+            }
+            adCloserHandler.onAdClosedSuccess()
+            transitionTo(EngineState.IN_GAME_SCAN, "已跳過推廣頁，繼續巡邏...", "🔍 巡邏畫面目標中...")
+            return
+        }
+
         when (val res = adCloserHandler.processAdTick(service, screenBitmap, ocrItems)) {
             is AdStepResult.RedirectRecovered -> {
                 appendLog("🛡️ 誤跳轉外部套件/網頁 (${res.externalPkg})，已自動按返回鍵關閉並繼續監控廣告")

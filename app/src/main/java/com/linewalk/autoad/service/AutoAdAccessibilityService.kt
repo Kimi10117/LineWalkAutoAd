@@ -28,6 +28,12 @@ class AutoAdAccessibilityService : AccessibilityService() {
     @Volatile
     private var lastEventPackageName: String? = null
 
+    @Volatile
+    var lastCapturedWidth: Int = 0
+
+    @Volatile
+    var lastCapturedHeight: Int = 0
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         _instance.value = this
@@ -101,6 +107,10 @@ class AutoAdAccessibilityService : AccessibilityService() {
                             val hwBitmap = Bitmap.wrapHardwareBuffer(hardwareBuffer, colorSpace)
                             val softBitmap = hwBitmap?.copy(Bitmap.Config.ARGB_8888, false)
                             hwBitmap?.recycle()
+                            softBitmap?.let {
+                                lastCapturedWidth = it.width
+                                lastCapturedHeight = it.height
+                            }
                             if (cont.isActive) {
                                 cont.resume(softBitmap)
                             } else {
@@ -146,11 +156,12 @@ class AutoAdAccessibilityService : AccessibilityService() {
      */
     suspend fun performClick(x: Float, y: Float, jitterPx: Int = 5): Boolean =
         suspendCancellableCoroutine { cont ->
-            val metrics = resources.displayMetrics
+            val maxW = if (lastCapturedWidth > 0) lastCapturedWidth else resources.displayMetrics.widthPixels
+            val maxH = if (lastCapturedHeight > 0) lastCapturedHeight else resources.displayMetrics.heightPixels
             val offsetX = if (jitterPx > 0) Random.nextInt(-jitterPx, jitterPx + 1) else 0
             val offsetY = if (jitterPx > 0) Random.nextInt(-jitterPx, jitterPx + 1) else 0
-            val targetX = (x + offsetX).coerceIn(5f, (metrics.widthPixels - 5).toFloat())
-            val targetY = (y + offsetY).coerceIn(5f, (metrics.heightPixels - 5).toFloat())
+            val targetX = (x + offsetX).coerceIn(5f, (maxW - 5).toFloat())
+            val targetY = (y + offsetY).coerceIn(5f, (maxH - 5).toFloat())
             val durationMs = Random.nextLong(65L, 138L)
 
             val path = Path().apply {

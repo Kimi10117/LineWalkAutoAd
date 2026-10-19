@@ -75,10 +75,10 @@ class BingoTask {
         // 1. 優先：依序檢查 4 大 BINGO 連線欄位 (1 BINGO: 18%, 3 BINGO: 39%, 5 BINGO: 61%, 8 BINGO: 82%) 之紅色膠囊按鈕
         val colCenters = listOf(0.18f, 0.39f, 0.61f, 0.82f)
         for (cx in colCenters) {
-            val x1 = (sw * (cx - 0.085f)).toInt().coerceIn(0, sw - 1)
-            val x2 = (sw * (cx + 0.085f)).toInt().coerceIn(x1 + 1, sw)
-            val y1 = (sh * 0.805f).toInt().coerceIn(0, sh - 1)
-            val y2 = (sh * 0.885f).toInt().coerceIn(y1 + 1, sh)
+            val x1 = (sw * (cx - 0.09f)).toInt().coerceIn(0, sw - 1)
+            val x2 = (sw * (cx + 0.09f)).toInt().coerceIn(x1 + 1, sw)
+            val y1 = (sh * 0.78f).toInt().coerceIn(0, sh - 1)
+            val y2 = (sh * 0.89f).toInt().coerceIn(y1 + 1, sh)
 
             val redPoints = mutableListOf<android.graphics.Point>()
             var y = y1
@@ -90,7 +90,7 @@ class BingoTask {
                     val g = (c shr 8) and 0xFF
                     val b = c and 0xFF
                     // 紅色/珊瑚紅判定：R 顯著高於 G 與 B
-                    if (r > 160 && r > g + 40 && r > b + 40) {
+                    if (r > 155 && r > g + 35 && r > b + 35) {
                         redPoints.add(android.graphics.Point(x, y))
                     }
                     x += 2
@@ -98,12 +98,14 @@ class BingoTask {
                 y += 2
             }
 
-            if (redPoints.size >= 20) {
+            if (redPoints.size >= 15) {
                 val minX = redPoints.minOf { it.x }
                 val maxX = redPoints.maxOf { it.x }
                 val minY = redPoints.minOf { it.y }
                 val maxY = redPoints.maxOf { it.y }
-                return Rect(minX, minY, maxX, maxY)
+                if (maxY - minY in 12..(sh * 0.12f).toInt()) {
+                    return Rect(minX, minY, maxX, maxY)
+                }
             }
         }
 
