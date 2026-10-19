@@ -306,6 +306,18 @@ class AutomationEngine private constructor(context: Context) {
             return
         }
 
+        // B2. 檢查是否停留在已無可領取項目的下半部彈窗（下方有 [取消] 按鈕，如時間分頁已點完且在冷卻中）：
+        val cancelBtn = ocrRecognizer.findPopupCancelButton(screenBitmap, ocrItems)
+        if (cancelBtn != null) {
+            emptyTicksOnCurrentTab = 0
+            appendLog("✨ 偵測到彈窗已點完/冷卻中，點擊 [取消] 關閉彈窗進行後續巡邏")
+            FloatingOverlayService.clickWithOverlayPassthrough(cancelBtn) {
+                service.clickRect(cancelBtn)
+            }
+            updateDetail("✨ 已點掉 [取消] 按鈕，繼續後續巡邏...", "✨ 已點取消...")
+            return
+        }
+
         // C1. 檢查是否正在「每日賓果」彈窗
         if (bingoTask.isBingoDialogOpen(ocrItems)) {
             handleBingoDialog(service, screenBitmap, ocrItems, sw, sh)
@@ -802,6 +814,18 @@ class AutomationEngine private constructor(context: Context) {
         val popupAction = findPopupActionTarget(screenBitmap, ocrItems)
         if (popupAction != null) {
             executePopupAction(service, popupAction)
+            return
+        }
+
+        // 若彈窗按鈕皆在冷卻中且出現 [取消]，立即點擊 [取消] 關閉彈窗以利後續巡邏
+        val cancelBtn = ocrRecognizer.findPopupCancelButton(screenBitmap, ocrItems)
+        if (cancelBtn != null) {
+            appendLog("↩️ 彈窗項目皆在冷卻中，自動點擊 [取消] 關閉彈窗進行後續巡邏")
+            FloatingOverlayService.clickWithOverlayPassthrough(cancelBtn) {
+                service.clickRect(cancelBtn)
+            }
+            emptyTicksOnCurrentTab = 0
+            transitionTo(EngineState.IN_GAME_SCAN, "已點擊 [取消]，繼續後續巡邏...", "🔍 繼續巡邏中...")
             return
         }
 

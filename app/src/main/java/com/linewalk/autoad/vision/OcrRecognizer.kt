@@ -224,6 +224,59 @@ class OcrRecognizer {
     }
 
     /**
+     * 尋找下半部彈窗（如『時間』分頁點擊獲得票券後，按鈕皆在冷卻中）底部的 [ 取消 ] 按鈕：
+     * - OCR 在螢幕下半部 (y = 0.82..0.97, x = 0.30..0.70) 尋找「取消」
+     * - 或當下半部彈窗出現「回復還需 / 還需 / 00:」且按鈕不可用時，回傳底部標準取消區域 (x: 38%..62%, y: 90%..95%)！
+     */
+    fun findPopupCancelButton(
+        screenBitmap: Bitmap,
+        items: List<OcrItem>
+    ): Rect? {
+        val sw = screenBitmap.width
+        val sh = screenBitmap.height
+
+        // 1. OCR 搜尋下半部 (y = 0.82..0.97, x = 0.30..0.70) 的「取消」文字
+        val cancelOcr = findMatch(
+            items = items,
+            keywords = listOf("取消"),
+            screenWidth = sw,
+            screenHeight = sh,
+            roiNormalized = RectF(0.30f, 0.82f, 0.70f, 0.97f),
+            maxTextLength = 4
+        )
+        if (cancelOcr != null) {
+            return cancelOcr.bounds
+        }
+
+        // 2. 備援：若畫面上方為半透明遮罩，下半部出現「回復還需 / 還需 / 00:」倒數中，且有彈窗標題
+        val hasCooldownText = items.any { item ->
+            val cy = item.bounds.centerY()
+            cy in (sh * 0.60f).toInt()..(sh * 0.90f).toInt() && (
+                item.text.contains("回復還需") ||
+                item.text.contains("還需") ||
+                item.text.contains("回復")
+            )
+        }
+        val hasModalTitle = items.any { item ->
+            val cy = item.bounds.centerY()
+            cy in (sh * 0.55f).toInt()..(sh * 0.72f).toInt() && (
+                item.text.contains("獲得票券") || item.text.contains("獲得金幣")
+            )
+        }
+
+        if (hasCooldownText && hasModalTitle) {
+            return Rect(
+                (sw * 0.38f).toInt(),
+                (sh * 0.90f).toInt(),
+                (sw * 0.62f).toInt(),
+                (sh * 0.95f).toInt()
+            )
+        }
+
+        return null
+    }
+
+    /**
      * 判斷目前畫面是否為《LINE 散步趣》的主畫面（涵蓋『首頁』『步數』『時間』『遊戲』四大分頁，且未開啟彈窗）。
      */
     fun isLineWalkMainScreenVisible(

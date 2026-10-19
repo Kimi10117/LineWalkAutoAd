@@ -120,7 +120,15 @@ class AdCloserHandler(
             }
         }
 
-        // 2B. 若已回到乾淨的《LINE 散步趣》主畫面，判定已完成這支廣告！
+        // 2B. 若廣告結束後畫面停留在『獲得票券！/ 獲得金幣！』下半部彈窗且按鈕皆在冷卻中 (下方有 [取消] 按鈕)，直接點擊 [取消] 關閉彈窗回到遊戲！
+        if (elapsedSec >= 3) {
+            val cancelBtn = ocrRecognizer.findPopupCancelButton(screenBitmap, ocrItems)
+            if (cancelBtn != null) {
+                return AdStepResult.ReturnedToGame(cancelBtn, "已點擊彈窗 [取消]")
+            }
+        }
+
+        // 2C. 若已回到乾淨的《LINE 散步趣》主畫面，判定已完成這支廣告！
         if (elapsedSec >= 5 && ocrRecognizer.isLineWalkMainScreenVisible(screenBitmap, ocrItems, templateMatcher)) {
             return AdStepResult.ReturnedToGame(null, "已回到散步趣主畫面")
         }
