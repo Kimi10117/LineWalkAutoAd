@@ -961,7 +961,7 @@ class AutomationEngine private constructor(context: Context) {
             }
 
             is AdStepResult.ReturnedToGame -> {
-                if (res.sourceLabel == "已點擊彈窗 [取消]") {
+                if (res.label == "已點擊彈窗 [取消]") {
                     val cancelRect = res.confirmBounds ?: Rect(
                         (screenBitmap.width * 0.38f).toInt(),
                         (screenBitmap.height * 0.90f).toInt(),
