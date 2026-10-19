@@ -101,9 +101,27 @@ class AppConfig(context: Context) {
         val EXTERNAL_REDIRECT_PACKAGES = setOf(
             "com.android.vending",             // Google Play 商店
             "com.android.chrome",              // Chrome 瀏覽器
+            "com.google.android.apps.chrome",  // Chrome 應用
             "com.sec.android.app.sbrowser",    // 三星瀏覽器
             "org.mozilla.firefox",             // Firefox
-            "com.microsoft.emmx"               // Edge
+            "com.microsoft.emmx",              // Edge
+            "com.brave.browser",               // Brave
+            "com.opera.browser",               // Opera
+            "com.opera.mini.native",           // Opera Mini
+            "com.mi.globalbrowser",            // 小米瀏覽器
+            "com.coloros.browser",             // OPPO 瀏覽器
+            "com.heytap.browser",              // Heytap 瀏覽器
+            "com.vivo.browser",                // Vivo 瀏覽器
+            "com.huawei.browser"               // 華為瀏覽器
         )
+
+        fun isRedirectPackage(pkg: String?): Boolean {
+            if (pkg.isNullOrBlank()) return false
+            if (pkg in EXTERNAL_REDIRECT_PACKAGES) return true
+            val lower = pkg.lowercase()
+            return lower.contains("browser") ||
+                lower.contains("chrome") ||
+                lower.contains("vending")
+        }
     }
 }

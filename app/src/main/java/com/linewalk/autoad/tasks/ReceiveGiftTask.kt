@@ -29,18 +29,19 @@ class ReceiveGiftTask {
     }
 
     /**
-     * 判斷「禮物」彈窗是否開啟中
+     * 判斷「禮物」彈窗是否開啟中（嚴格排除超商「禮物卡/禮物券」等廣告卡片！）
      */
     fun isReceiveGiftDialogOpen(ocrItems: List<OcrItem>, sh: Int): Boolean {
         val hasTitle = ocrItems.any { item ->
             val cy = item.bounds.centerY()
-            cy in (sh * 0.20f).toInt()..(sh * 0.30f).toInt() && item.text.contains("禮物")
+            val t = item.text.trim()
+            cy in (sh * 0.20f).toInt()..(sh * 0.28f).toInt() &&
+                (t == "禮物" || t == "禮物盒") &&
+                !t.contains("卡") && !t.contains("券") && !t.contains("超商")
         }
         val hasContent = ocrItems.any { item ->
-            item.text.contains("收到") ||
             item.text.contains("送來的禮物") ||
-            item.text.contains("剩下") ||
-            item.text.contains("天")
+            (item.text.contains("收到") && item.text.contains("禮物"))
         }
         return hasTitle && hasContent
     }

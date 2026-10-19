@@ -271,6 +271,27 @@ class AutomationEngine private constructor(context: Context) {
         val sw = screenBitmap.width
         val sh = screenBitmap.height
 
+        // 0A. 防外部瀏覽器/商店殘留：若目前前景停留在外部跳轉網頁或 Chrome Custom Tabs，立即按 BACK 並切換至廣告監控
+        val fgPkg = service.getForegroundPackageName()
+        val isExternal = fgPkg != null && AppConfig.isRedirectPackage(fgPkg)
+        val hasBrowserTitle = ocrItems.any { item ->
+            val cy = item.bounds.centerY()
+            cy < sh * 0.16f && (
+                item.text.contains("正在載入") ||
+                item.text.contains("klook") ||
+                item.text.contains(".com") ||
+                item.text.contains("http") ||
+                item.text.contains("www.")
+            )
+        }
+        if (isExternal || hasBrowserTitle) {
+            appendLog("🛡️ 偵測到外部瀏覽器/跳轉網頁 (${fgPkg ?: "InAppBrowser"})，自動按返回鍵關閉並啟動廣告監控")
+            service.navigateBack()
+            adCloserHandler.onEnterAdMode()
+            transitionTo(EngineState.AD_WATCHING, "已關閉外部網頁，監控廣告中...", "📺 廣告監控中...")
+            return
+        }
+
         // 0. 防誤觸 AdChoices『ⓘ ▷』彈出的『Hide Ad / Report Ad / Why am I seeing this ad?』選單檢查
         if (ocrRecognizer.isAdChoicesMenuOpen(ocrItems)) {
             val backdropRect = Rect(
@@ -388,14 +409,19 @@ class AutomationEngine private constructor(context: Context) {
             return
         }
 
-        // D3. 幾何角落 X 偵測器（如『邀請好友』右上角的圓底白 X！）
+        // D3. 幾何角落 X 偵測器（如『邀請好友』右上角 X，或全螢幕廣告左上/右上角 X！）
         val geoX = templateMatcher.detectCornerGeometricX(
             screenBitmap = screenBitmap,
             blacklistedCoord = FloatingOverlayService::isInsideOverlay
         )
         if (geoX != null) {
-            appendLog("👆 偵測到宣傳頁/廣告角落關閉鈕: ${geoX.label}")
-            service.clickRect(geoX.bounds)
+            appendLog("📺 偵測到全螢幕宣傳頁/廣告角落關閉鈕 (${geoX.label})，切換至廣告監控流程安全關閉！")
+            adCloserHandler.onEnterAdMode()
+            transitionTo(
+                EngineState.AD_WATCHING,
+                "偵測到廣告/宣傳視窗 (${geoX.label})，安全等待與關閉中...",
+                "📺 廣告監控中..."
+            )
             return
         }
 
@@ -916,6 +942,24 @@ class AutomationEngine private constructor(context: Context) {
             return
         }
 
+        // 檢查是否點擊目標後已直接開啟全螢幕廣告、宣傳頁或外部跳轉網頁
+        val directGeoX = templateMatcher.detectCornerGeometricX(
+            screenBitmap = screenBitmap,
+            blacklistedCoord = FloatingOverlayService::isInsideOverlay
+        )
+        val fgPkgDirect = service.getForegroundPackageName()
+        val isExternalDirect = fgPkgDirect != null && AppConfig.isRedirectPackage(fgPkgDirect)
+        val hasBrowserTitleDirect = ocrItems.any { item ->
+            val cy = item.bounds.centerY()
+            cy < sh * 0.16f && (item.text.contains("正在載入") || item.text.contains(".com") || item.text.contains("http"))
+        }
+        if (directGeoX != null || isExternalDirect || hasBrowserTitleDirect) {
+            appendLog("📺 點擊目標後已直接進入全螢幕廣告/宣傳頁，啟動廣告監控流程！")
+            adCloserHandler.onEnterAdMode()
+            transitionTo(EngineState.AD_WATCHING, "已進入廣告畫面，安全監控中...", "📺 廣告監控中...")
+            return
+        }
+
         if (popupRetryTicks >= 2 && config.claimNormalWhenNoAd) {
             val normalOrSkip = ocrRecognizer.findMatch(
                 items = ocrItems,
@@ -993,7 +1037,11 @@ class AutomationEngine private constructor(context: Context) {
     ) {
         when (val res = adCloserHandler.processAdTick(service, screenBitmap, ocrItems)) {
             is AdStepResult.RedirectRecovered -> {
-                appendLog("🛡️ 誤跳轉外部套件 (${res.externalPkg})，已自動按返回鍵並封鎖假 X 座標！")
+                appendLog("🛡️ 誤跳轉外部套件/網頁 (${res.externalPkg})，已自動按返回鍵關閉並繼續監控廣告")
+                updateDetail(
+                    "🛡️ 已關閉外部網頁 (${res.externalPkg})，繼續監控廣告...",
+                    "🛡️ 關閉網頁，繼續監控..."
+                )
             }
 
             is AdStepResult.AdChoicesDismissed -> {

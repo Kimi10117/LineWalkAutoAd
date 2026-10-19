@@ -242,6 +242,7 @@ class OcrRecognizer {
             screenWidth = sw,
             screenHeight = sh,
             roiNormalized = RectF(0.30f, 0.82f, 0.70f, 0.97f),
+            excludeKeywords = listOf("預訂", "訂購", "禮物卡", "購買"),
             maxTextLength = 4
         )
         if (cancelOcr != null) {

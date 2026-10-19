@@ -43,6 +43,7 @@ class AdCloserHandler(
     private var adStartTimeMs: Long = 0L
     private var closeClickCount: Int = 0
     private var adChoicesDismissCount: Int = 0
+    private var redirectCount: Int = 0
     private var lastClickedPoint: Point? = null
     private val clickedHistory = mutableListOf<Point>()
     private val blacklistedPoints = mutableListOf<Point>()
@@ -51,6 +52,7 @@ class AdCloserHandler(
         adStartTimeMs = System.currentTimeMillis()
         closeClickCount = 0
         adChoicesDismissCount = 0
+        redirectCount = 0
         lastClickedPoint = null
         clickedHistory.clear()
         blacklistedPoints.clear()
@@ -77,15 +79,33 @@ class AdCloserHandler(
         val sh = screenBitmap.height
         val elapsedSec = getElapsedSeconds()
 
-        // 1A. 防迷路檢查：若誤觸跳轉到 Google Play 商店或外部瀏覽器，封鎖假 X 座標並立即按 BACK
+        // 1A. 防迷路檢查：若誤觸跳轉到 Google Play 商店或外部瀏覽器/Chrome Custom Tabs，立即按 BACK 並恢復
         val fgPkg = service.getForegroundPackageName()
-        if (fgPkg != null && fgPkg in AppConfig.EXTERNAL_REDIRECT_PACKAGES) {
+        val isExternal = fgPkg != null && AppConfig.isRedirectPackage(fgPkg)
+        val hasBrowserTitle = ocrItems.any { item ->
+            val cy = item.bounds.centerY()
+            cy < sh * 0.16f && (
+                item.text.contains("正在載入") ||
+                item.text.contains("klook") ||
+                item.text.contains(".com") ||
+                item.text.contains("http") ||
+                item.text.contains("www.")
+            )
+        }
+
+        if (isExternal || hasBrowserTitle) {
+            redirectCount++
             lastClickedPoint?.let { badPt ->
-                blacklistedPoints.add(badPt)
+                val inCorner = (badPt.x < sw * 0.20f || badPt.x > sw * 0.80f) && badPt.y < sh * 0.20f
+                if (!inCorner) {
+                    blacklistedPoints.add(badPt)
+                }
                 lastClickedPoint = null
             }
             service.navigateBack()
-            return AdStepResult.RedirectRecovered(fgPkg)
+            // 廣告跳轉恢復後，給予 2.5 秒緩衝期讓廣告畫面重新穩定，避免立即再度誤觸
+            adStartTimeMs = System.currentTimeMillis() - 2500L
+            return AdStepResult.RedirectRecovered(fgPkg ?: "InAppBrowser")
         }
 
         // 1B. 防誤觸 AdChoices 選單檢查：若誤點『ⓘ ▷』彈出『Hide Ad / Report Ad / Why am I seeing this ad?』選單，
@@ -129,7 +149,7 @@ class AdCloserHandler(
         }
 
         // 2C. 若已回到《LINE 散步趣》主畫面或各項子畫面（賓果/好友/任務/抽抽樂/禮物），判定已完成這支廣告！
-        if (elapsedSec >= 4 && isGameScreenVisible(screenBitmap, ocrItems)) {
+        if (elapsedSec >= 4 && isGameScreenVisible(service, screenBitmap, ocrItems)) {
             return AdStepResult.ReturnedToGame(null, "已回到散步趣介面")
         }
 
@@ -205,6 +225,13 @@ class AdCloserHandler(
             }
         }
 
+        // 8B. Meta 廣告 / 輪播廣告專用安全返回策略：
+        // 若該廣告曾觸發跳轉外部網頁且播放已超過 8 秒，嘗試發送系統返回鍵安全關閉廣告（Android 廣告 Activity 收到返回鍵即可安全關閉）！
+        if (elapsedSec >= 8 && redirectCount > 0 && elapsedSec % 4 == 0) {
+            service.navigateBack()
+            return AdStepResult.WatchdogBackTriggered(elapsedSec)
+        }
+
         // 9. 防卡死 Watchdog：若單支廣告超過最大等待秒數，嘗試發送系統返回鍵或點右上角標準 X 熱區
         if (elapsedSec >= config.maxAdWaitSeconds) {
             if (elapsedSec % 8 < 4) {
@@ -236,26 +263,31 @@ class AdCloserHandler(
             blacklistedPoints.add(pt)
         }
         closeClickCount++
-        service.clickRect(rect)
+        service.clickRect(rect, maxJitterPx = 2)
     }
 
-    private fun isGameScreenVisible(screenBitmap: Bitmap, ocrItems: List<OcrItem>): Boolean {
+    private fun isGameScreenVisible(service: AutoAdAccessibilityService, screenBitmap: Bitmap, ocrItems: List<OcrItem>): Boolean {
+        val fgPkg = service.getForegroundPackageName()
+        if (fgPkg != null && AppConfig.isRedirectPackage(fgPkg)) {
+            return false
+        }
         if (ocrRecognizer.isLineWalkMainScreenVisible(screenBitmap, ocrItems, templateMatcher)) {
             return true
         }
         val sh = screenBitmap.height
-        // 檢查是否回到每日賓果、好友排行榜、任務、抽抽樂或禮物盒彈窗
+        // 檢查是否回到每日賓果、好友排行榜、任務、抽抽樂或禮物盒彈窗 (排除全家禮物卡等廣告字眼)
         return ocrItems.any { item ->
             val cy = item.bounds.centerY()
+            val t = item.text.trim()
             (cy < sh * 0.28f && (
-                item.text.contains("每日賓果") ||
-                item.text.contains("好友排行榜") ||
-                item.text.contains("排行榜") ||
-                item.text == "禮物" ||
-                item.text.contains("抽抽樂") ||
-                item.text.contains("任務")
+                t.contains("每日賓果") ||
+                t.contains("好友排行榜") ||
+                t.contains("排行榜") ||
+                ((t == "禮物" || t == "禮物盒") && !t.contains("卡") && !t.contains("券") && !t.contains("超商")) ||
+                t.contains("抽抽樂") ||
+                t.contains("任務")
             )) || (cy > sh * 0.88f && (
-                item.text == "集點" || item.text == "好友" || item.text == "使用" || item.text == "精選"
+                t == "集點" || t == "好友" || t == "使用" || t == "精選"
             ))
         }
     }
