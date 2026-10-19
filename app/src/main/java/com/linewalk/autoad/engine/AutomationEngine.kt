@@ -15,6 +15,7 @@ import com.linewalk.autoad.tasks.IdleRewardTask
 import com.linewalk.autoad.tasks.LotteryTask
 import com.linewalk.autoad.tasks.MissionTask
 import com.linewalk.autoad.tasks.MoveGaugeTask
+import com.linewalk.autoad.tasks.ReceiveGiftTask
 import com.linewalk.autoad.tasks.StepBottleTask
 import com.linewalk.autoad.ui.FloatingOverlayService
 import com.linewalk.autoad.vision.NodeInspector
@@ -182,6 +183,7 @@ class AutomationEngine private constructor(context: Context) {
             PatrolPhase.BINGO -> "每日賓果"
             PatrolPhase.LOTTERY -> "抽抽樂"
             PatrolPhase.MISSION -> "任務"
+            PatrolPhase.RECEIVE_GIFT -> "接收好友禮物"
             PatrolPhase.FRIEND_GIFT -> "好友送禮"
             PatrolPhase.COMPLETED -> "已完成"
         }
