@@ -69,7 +69,10 @@ class NodeInspector {
                         }
                         val isExcluded = EXCLUDE_TEXTS.any {
                             text.contains(it) || desc.contains(it)
-                        }
+                        } || viewId.contains("adjoe") || (
+                            cy in (screenHeight * 0.14f).toInt()..(screenHeight * 0.35f).toInt() &&
+                            (text.contains("遊玩") || desc.contains("遊玩") || text.contains("開始") || desc.contains("開始"))
+                        )
 
                         if (!isCountingDown && !isExcluded && (idMatch || exactSymbolMatch || keywordMatch)) {
                             if (blacklistedCoord?.invoke(cx, cy) != true) {
@@ -198,7 +201,8 @@ class NodeInspector {
         )
 
         private val EXCLUDE_TEXTS = listOf(
-            "同意並繼續", "隱私權", "條款", "不看廣告"
+            "同意並繼續", "隱私權", "條款", "不看廣告",
+            "開始遊玩", "遊玩", "輕鬆賺", "輕鬆", "adjoe", "Sponsored", "line points game"
         )
     }
 }

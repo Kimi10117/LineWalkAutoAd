@@ -341,24 +341,35 @@ class OcrRecognizer {
         // 4. 檢查是否有主畫面的底部導覽列 (集點/好友/使用/精選) 與四大分頁 (首頁/步數/時間/遊戲) 元素
         var hasBottomNav = false
         var hasUpperStage = false
+        var hasTopCoins = false
+
         for (item in items) {
-            val t = item.text
+            val t = item.text.replace(" ", "")
             val cy = item.bounds.centerY().toFloat() / sh
-            if (cy > 0.88f && (t == "集點" || t == "好友" || t == "使用" || t == "精選")) {
+
+            // 底部導覽列：集點 / 好友 / 使用 / 精選
+            if (cy > 0.85f && (t.contains("集點") || t.contains("好友") || t.contains("使用") || t.contains("精選"))) {
                 hasBottomNav = true
             }
-            if (cy < 0.56f && (
-                    t == "首頁" || t == "步數" || t == "時間" || t == "遊戲" ||
-                        t.contains("距離下次累積") || t.contains("今天的步數") ||
-                        t.contains("獲得票券") || t.contains("獲得金幣") ||
-                        t.contains("玩遊戲賺點數") || t.contains("達成條件") ||
-                        t == "賓果" || t == "抽抽樂" || t == "糖果"
-                    )
+
+            // 頂部四大分頁與各分頁主要特徵字眼
+            if (cy < 0.58f && (
+                    t.contains("首頁") || t.contains("步數") || t.contains("時間") || t.contains("遊戲") ||
+                    t.contains("距離下次") || t.contains("今天的步數") ||
+                    t.contains("獲得票券") || t.contains("獲得金幣") ||
+                    t.contains("達成條件") || t.contains("簡單賺金幣") ||
+                    t.contains("賓果") || t.contains("抽抽樂") || t.contains("糖果")
+                )
             ) {
                 hasUpperStage = true
             }
+
+            // 頂部狀態列資產數值 (金幣/票券數字)
+            if (cy < 0.10f && t.any { it.isDigit() }) {
+                hasTopCoins = true
+            }
         }
-        return hasBottomNav && hasUpperStage
+        return hasBottomNav && (hasUpperStage || hasTopCoins)
     }
 
     /**

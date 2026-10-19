@@ -35,6 +35,8 @@ import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.max
+import kotlin.math.min
 
 enum class EngineState(val title: String, val shortTitle: String) {
     IDLE("已暫停待命", "待命"),
@@ -132,6 +134,7 @@ class AutomationEngine private constructor(context: Context) {
     private var rewardClaimRetryTicks = 0
     private var currentTab: MainTab = MainTab.MOVE
     private var needsInitialTabSync = true
+    private var tabSwitchAttempts = 0
     private var emptyTicksOnCurrentTab = 0
     private val confirmedEmptyTabs = mutableSetOf<MainTab>()
 
@@ -172,6 +175,7 @@ class AutomationEngine private constructor(context: Context) {
         currentPhaseEmptyTicks = 0
         currentTab = tabPriorityOrder.firstOrNull { it.isEnabled(config) } ?: MainTab.MOVE
         needsInitialTabSync = true
+        tabSwitchAttempts = 0
 
         currentPhase = if (tabPriorityOrder.any { it.isEnabled(config) }) {
             PatrolPhase.MAIN_TABS
@@ -485,7 +489,9 @@ class AutomationEngine private constructor(context: Context) {
         // D3. 幾何角落 X 偵測器（如『邀請好友』右上角 X，或全螢幕廣告左上/右上角 X！）
         val geoX = templateMatcher.detectCornerGeometricX(
             screenBitmap = screenBitmap,
-            blacklistedCoord = FloatingOverlayService::isInsideOverlay
+            blacklistedCoord = { x, y ->
+                FloatingOverlayService.isInsideOverlay(x, y) || y < sh * 0.08f || (y in (sh * 0.14f).toInt()..(sh * 0.35f).toInt())
+            }
         )
         if (geoX != null) {
             appendLog("📺 偵測到全螢幕宣傳頁/廣告角落關閉鈕 (${geoX.label})，切換至廣告監控流程安全關閉！")
@@ -750,6 +756,50 @@ class AutomationEngine private constructor(context: Context) {
         updateDetail("🎉 好友送禮全部完成，返回首頁中...", "🎉 好友送禮完成")
     }
 
+    private fun getTabRect(tab: MainTab, sw: Int, sh: Int, ocrItems: List<OcrItem>): Rect {
+        val tabKeywords = when (tab) {
+            MainTab.MOVE -> listOf("首頁", "移動")
+            MainTab.STEP -> listOf("步數")
+            MainTab.TIME -> listOf("時間")
+            MainTab.GAME -> listOf("遊戲")
+        }
+
+        val ocrMatch = ocrItems.firstOrNull { item ->
+            val cy = item.bounds.centerY()
+            val cx = item.bounds.centerX()
+            val yInRange = cy in (sh * 0.08f).toInt()..(sh * 0.16f).toInt()
+            val xInRange = when (tab) {
+                MainTab.MOVE -> cx < sw * 0.30f
+                MainTab.STEP -> cx in (sw * 0.20f).toInt()..(sw * 0.55f).toInt()
+                MainTab.TIME -> cx in (sw * 0.45f).toInt()..(sw * 0.80f).toInt()
+                MainTab.GAME -> cx > sw * 0.70f
+            }
+            yInRange && xInRange && tabKeywords.any { kw -> item.text.contains(kw) }
+        }
+
+        if (ocrMatch != null) {
+            val padX = max(30, (sw * 0.04f).toInt())
+            val padY = max(20, (sh * 0.015f).toInt())
+            return Rect(
+                (ocrMatch.bounds.left - padX).coerceIn(0, sw),
+                (ocrMatch.bounds.top - padY).coerceIn(0, sh),
+                (ocrMatch.bounds.right + padX).coerceIn(0, sw),
+                (ocrMatch.bounds.bottom + padY).coerceIn(0, sh)
+            )
+        }
+
+        val halfWidth = (sw * 0.06f).toInt()
+        val centerX = (sw * tab.xRatio).toInt()
+        val top = (sh * 0.098f).toInt()
+        val bottom = (sh * 0.132f).toInt()
+        return Rect(
+            (centerX - halfWidth).coerceIn(0, sw),
+            top.coerceIn(0, sh),
+            (centerX + halfWidth).coerceIn(0, sw),
+            bottom.coerceIn(0, sh)
+        )
+    }
+
     private suspend fun handleMainScreenPatrol(
         service: AutoAdAccessibilityService,
         screenBitmap: android.graphics.Bitmap,
@@ -777,20 +827,14 @@ class AutomationEngine private constructor(context: Context) {
                         currentTab = detectedTab
                         if (currentTab == desiredTab) {
                             needsInitialTabSync = false
+                            tabSwitchAttempts = 0
                         }
                     }
                 }
 
                 if (needsInitialTabSync || currentTab != desiredTab) {
-                    needsInitialTabSync = false
-                    currentTab = desiredTab
                     emptyTicksOnCurrentTab = 0
-                    val tabRect = Rect(
-                        (sw * (desiredTab.xRatio - 0.05f)).toInt(),
-                        (sh * 0.103f).toInt(),
-                        (sw * (desiredTab.xRatio + 0.05f)).toInt(),
-                        (sh * 0.128f).toInt()
-                    )
+                    val tabRect = getTabRect(desiredTab, sw, sh, ocrItems)
                     appendLog("🔄 依優先順序切換至【${desiredTab.tabName}】...")
                     FloatingOverlayService.clickWithOverlayPassthrough(tabRect) {
                         service.clickRect(tabRect)
@@ -799,6 +843,13 @@ class AutomationEngine private constructor(context: Context) {
                         "🔄 已切換至【${desiredTab.tabName}】，正在檢查獎勵...",
                         "🔄 切換至[${desiredTab.shortLabel}]檢查中..."
                     )
+                    tabSwitchAttempts++
+                    if (tabSwitchAttempts >= 2) {
+                        currentTab = desiredTab
+                        needsInitialTabSync = false
+                        tabSwitchAttempts = 0
+                    }
+                    delay(500)
                     return
                 }
 

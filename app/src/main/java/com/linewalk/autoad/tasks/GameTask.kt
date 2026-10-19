@@ -104,8 +104,8 @@ class StepBottleTask : GameTask {
             keywords = listOf("獲得票券", "領取票券", "獲得金幣"),
             screenWidth = screenBitmap.width,
             screenHeight = screenBitmap.height,
-            roiNormalized = RectF(0.15f, 0.22f, 0.85f, 0.38f),
-            excludeKeywords = listOf("雙重", "LINE POINTS", "輕鬆賺", "輕鬆", "開始遊玩", "遊玩", "AD", "adjoe")
+            roiNormalized = RectF(0.15f, 0.25f, 0.85f, 0.38f),
+            excludeKeywords = listOf("雙重", "LINE POINTS", "輕鬆賺", "輕鬆", "開始遊玩", "遊玩", "AD", "adjoe", "Sponsored")
         )
         if (ticketBtnOcr != null && isButtonColorfulAndActive(screenBitmap, ticketBtnOcr.bounds)) {
             return TaskTriggerTarget(
@@ -174,8 +174,8 @@ class MoveGaugeTask : GameTask {
             keywords = listOf("獲得金幣", "獲得票券"),
             screenWidth = screenBitmap.width,
             screenHeight = screenBitmap.height,
-            roiNormalized = RectF(0.15f, 0.22f, 0.85f, 0.38f),
-            excludeKeywords = listOf("雙重", "LINE POINTS", "輕鬆賺", "輕鬆", "開始遊玩", "遊玩", "AD", "adjoe")
+            roiNormalized = RectF(0.15f, 0.25f, 0.85f, 0.38f),
+            excludeKeywords = listOf("雙重", "LINE POINTS", "輕鬆賺", "輕鬆", "開始遊玩", "遊玩", "AD", "adjoe", "Sponsored")
         )
         if (coinBtnOcr != null && isButtonColorfulAndActive(screenBitmap, coinBtnOcr.bounds)) {
             return TaskTriggerTarget(
@@ -243,8 +243,8 @@ class IdleRewardTask : GameTask {
             keywords = listOf("獲得票券", "獲得金幣"),
             screenWidth = screenBitmap.width,
             screenHeight = screenBitmap.height,
-            roiNormalized = RectF(0.15f, 0.22f, 0.85f, 0.38f),
-            excludeKeywords = listOf("雙重", "LINE POINTS", "輕鬆賺", "輕鬆", "開始遊玩", "遊玩", "AD", "adjoe")
+            roiNormalized = RectF(0.15f, 0.25f, 0.85f, 0.38f),
+            excludeKeywords = listOf("雙重", "LINE POINTS", "輕鬆賺", "輕鬆", "開始遊玩", "遊玩", "AD", "adjoe", "Sponsored")
         )
         if (ticketBtnOcr != null && isButtonColorfulAndActive(screenBitmap, ticketBtnOcr.bounds)) {
             return TaskTriggerTarget(

@@ -22,7 +22,7 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="散步趣助手 v1.13.4 (LINE 散步趣專用)"
+                    android:text="散步趣助手 v1.13.5 (LINE 散步趣專用)"
                     android:textColor="@color/card_white"
                     android:textSize="20sp"
                     android:textStyle="bold" />
