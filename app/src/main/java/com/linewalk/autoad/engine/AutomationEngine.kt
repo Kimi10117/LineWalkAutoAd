@@ -236,8 +236,13 @@ class AutomationEngine private constructor(context: Context) {
 
         val fgPkg = service.getForegroundPackageName()
         if (fgPkg != null && fgPkg in AppConfig.EXTERNAL_REDIRECT_PACKAGES) {
-            appendLog("🛡️ 偵測到外部套件 ($fgPkg)，自動按返回鍵退回遊戲")
+            appendLog("🛡️ 偵測到外部套件 ($fgPkg)，自動按返回鍵退回廣告")
+            adCloserHandler.markRecentRedirect()
             service.navigateBack()
+            if (_uiStatus.value.state != EngineState.AD_WATCHING) {
+                adCloserHandler.onEnterAdMode(preserveRedirectState = true)
+                transitionTo(EngineState.AD_WATCHING, "已關閉外部套件，監控廣告中...", "📺 廣告監控中...")
+            }
             return
         }
 
@@ -286,8 +291,9 @@ class AutomationEngine private constructor(context: Context) {
         }
         if (isExternal || hasBrowserTitle) {
             appendLog("🛡️ 偵測到外部瀏覽器/跳轉網頁 (${fgPkg ?: "InAppBrowser"})，自動按返回鍵關閉並啟動廣告監控")
+            adCloserHandler.markRecentRedirect()
             service.navigateBack()
-            adCloserHandler.onEnterAdMode()
+            adCloserHandler.onEnterAdMode(preserveRedirectState = true)
             transitionTo(EngineState.AD_WATCHING, "已關閉外部網頁，監控廣告中...", "📺 廣告監控中...")
             return
         }
@@ -915,6 +921,7 @@ class AutomationEngine private constructor(context: Context) {
             val remainOrderStr = nextRemainingTabs.joinToString("➔") { it.shortLabel }
             appendLog("🔄【${currentTab.tabName}】冷卻中，依序切換至【${nextTab.tabName}】(待檢查: $remainOrderStr)")
             currentTab = nextTab
+            needsInitialTabSync = true
         }
 
         transitionTo(EngineState.IN_GAME_SCAN, "已點擊 [取消]，切換至下一分頁/任務...", "🔍 切換巡邏中...")
@@ -1187,7 +1194,44 @@ class AutomationEngine private constructor(context: Context) {
             return PopupActionTarget.CandySkipAd("糖果[跳過廣告]", skipAdCandyOcr.bounds)
         }
 
-        // 1. 偵測下半部彈窗區 (y = 66% ~ 88%) 的整條珊瑚粉紅按鈕 (如步數/首頁的『紅利 [▶] 15/60 獲得』)
+        // 解析金幣/票券數值輔助函式（嚴格遵循使用者指令：以收到金幣數量最多的按鈕為第一優先選取！）
+        fun parseRewardCoins(text: String): Int {
+            val t = text.replace(" ", "")
+            if (t.contains("100")) return 100
+            if (t.contains("60")) return 60
+            if (t.contains("50")) return 50
+            if (t.contains("30")) return 30
+            if (t.contains("15")) return 15
+            if (t.contains("10")) return 10
+            if (t.contains("5")) return 5
+            if (t.contains("2倍") || t.contains("加倍")) return 2
+            if (t.contains("x1") || t.contains("×1") || t.contains("1獲得") || t.contains("x 1") || t.contains("× 1")) return 1
+            return 0
+        }
+
+        // 儲存所有可點擊的看廣告/領取按鈕候選項目及其對應金幣數量: List<Pair<PopupActionTarget, Int>>
+        val candidates = mutableListOf<Pair<PopupActionTarget, Int>>()
+
+        // 1. 搜尋彈窗區 (y = 58% ~ 92%) 中所有符合關鍵字的 OCR 項目，解析其金幣數值
+        val roiTop = (sh * 0.58f).toInt()
+        val roiBottom = (sh * 0.92f).toInt()
+        for (item in ocrItems) {
+            val cy = item.bounds.centerY()
+            if (cy in roiTop..roiBottom && item.text.length <= 16) {
+                val matchesKeyword = OcrRecognizer.GAME_AD_TRIGGER_KEYWORDS.any { kw -> item.text.contains(kw, ignoreCase = true) }
+                val hasRewardWord = item.text.contains("獲得") || item.text.contains("金幣") || item.text.contains("票券") || item.text.contains("x1") || item.text.contains("×1")
+                if ((matchesKeyword || hasRewardWord) &&
+                    OcrRecognizer.GAME_AD_EXCLUDE_KEYWORDS.none { ex -> item.text.contains(ex, ignoreCase = true) } &&
+                    !ocrRecognizer.isAreaInCooldown(ocrItems, cy - 20, cy + 20) &&
+                    !templateMatcher.isPopupButtonDisabledGray(screenBitmap, cy)
+                ) {
+                    val coins = parseRewardCoins(item.text)
+                    candidates.add(PopupActionTarget.WatchAd("OCR[${item.text}](${coins}幣)", item.bounds) to coins)
+                }
+            }
+        }
+
+        // 2. 偵測下半部彈窗區 (y = 66% ~ 88%) 的整條珊瑚粉紅按鈕 (如步數/首頁的『紅利 [▶] 15/60 獲得』)
         val pinkPopupBtn = templateMatcher.findCoralPinkButton(
             screenBitmap = screenBitmap,
             yStartRatio = 0.66f,
@@ -1198,19 +1242,21 @@ class AutomationEngine private constructor(context: Context) {
             !ocrRecognizer.isAreaInCooldown(ocrItems, pinkPopupBtn.bounds.top - 20, pinkPopupBtn.bounds.bottom + 20) &&
             !templateMatcher.isPopupButtonDisabledGray(screenBitmap, pinkPopupBtn.bounds.centerY())
         ) {
-            return PopupActionTarget.WatchAd(pinkPopupBtn.label, pinkPopupBtn.bounds)
+            val nearbyOcr = ocrItems.firstOrNull { kotlin.math.abs(it.bounds.centerY() - pinkPopupBtn.bounds.centerY()) < 35 }
+            val coins = if (nearbyOcr != null) parseRewardCoins(nearbyOcr.text) else 15
+            candidates.add(PopupActionTarget.WatchAd("${pinkPopupBtn.label}(${coins}幣)", pinkPopupBtn.bounds) to coins)
         }
 
-        // 2. 偵測彈窗左側的珊瑚粉紅『紅利』小標籤 (特別針對『時間』分頁的白底黑框『紅利 [▶] x 1 獲得』按鈕！)
+        // 3. 偵測彈窗左側的珊瑚粉紅『紅利』小標籤 (特別針對『時間』分頁的白底黑框『紅利 [▶] x 1 獲得』按鈕！)
         val badgePopupBtn = templateMatcher.findPopupBonusBadgeAdButton(screenBitmap)
         if (badgePopupBtn != null &&
             !ocrRecognizer.isAreaInCooldown(ocrItems, badgePopupBtn.bounds.top - 20, badgePopupBtn.bounds.bottom + 20) &&
             !templateMatcher.isPopupButtonDisabledGray(screenBitmap, badgePopupBtn.bounds.centerY())
         ) {
-            return PopupActionTarget.WatchAd(badgePopupBtn.label, badgePopupBtn.bounds)
+            candidates.add(PopupActionTarget.WatchAd(badgePopupBtn.label, badgePopupBtn.bounds) to 1)
         }
 
-        // 3. 若 OCR 看到『紅利』標籤 (y = 64% ~ 86%)，點擊其正下方的看廣告按鈕
+        // 4. 若 OCR 看到『紅利』標籤 (y = 64% ~ 86%)，加入其正下方的看廣告按鈕
         val bonusTag = ocrRecognizer.findMatch(
             items = ocrItems,
             keywords = listOf("紅利"),
@@ -1225,25 +1271,7 @@ class AutomationEngine private constructor(context: Context) {
                 !templateMatcher.isPopupButtonDisabledGray(screenBitmap, targetY)
             ) {
                 val btnRect = Rect((sw * 0.30f).toInt(), targetY - 20, (sw * 0.70f).toInt(), targetY + 20)
-                return PopupActionTarget.WatchAd("OCR[紅利下方看廣告鈕]", btnRect)
-            }
-        }
-
-        // 4. ML Kit 中文 OCR 搜尋彈窗區 (y = 0.68 ~ 0.90) 的『x 1 獲得 / 15 獲得 / 60 獲得』且排除反灰按鈕
-        val roiTop = (sh * 0.68f).toInt()
-        val roiBottom = (sh * 0.90f).toInt()
-        for (kw in OcrRecognizer.GAME_AD_TRIGGER_KEYWORDS) {
-            val match = ocrItems.firstOrNull { item ->
-                val cy = item.bounds.centerY()
-                cy in roiTop..roiBottom &&
-                    item.text.length <= 12 &&
-                    item.text.contains(kw, ignoreCase = true) &&
-                    OcrRecognizer.GAME_AD_EXCLUDE_KEYWORDS.none { ex -> item.text.contains(ex, ignoreCase = true) } &&
-                    !ocrRecognizer.isAreaInCooldown(ocrItems, cy - 20, cy + 20) &&
-                    !templateMatcher.isPopupButtonDisabledGray(screenBitmap, cy)
-            }
-            if (match != null) {
-                return PopupActionTarget.WatchAd("OCR[${match.text}]", match.bounds)
+                candidates.add(PopupActionTarget.WatchAd("OCR[紅利下方看廣告鈕]", btnRect) to 15)
             }
         }
 
@@ -1262,8 +1290,14 @@ class AutomationEngine private constructor(context: Context) {
                 !ocrRecognizer.isAreaInCooldown(ocrItems, tplMatch.bounds.top - 20, tplMatch.bounds.bottom + 20) &&
                 !templateMatcher.isPopupButtonDisabledGray(screenBitmap, tplMatch.bounds.centerY())
             ) {
-                return PopupActionTarget.WatchAd(tplMatch.label, tplMatch.bounds)
+                candidates.add(PopupActionTarget.WatchAd(tplMatch.label, tplMatch.bounds) to 1)
             }
+        }
+
+        // 依照獲得金幣數量由大到小排序 (100 > 60 > 50 > 30 > 15 > 10 > 5 > 2 > 1 > 0)，選取金幣最高者！
+        if (candidates.isNotEmpty()) {
+            val bestCandidate = candidates.maxByOrNull { it.second } ?: candidates.first()
+            return bestCandidate.first
         }
 
         return null

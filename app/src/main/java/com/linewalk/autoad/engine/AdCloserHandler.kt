@@ -44,18 +44,31 @@ class AdCloserHandler(
     private var closeClickCount: Int = 0
     private var adChoicesDismissCount: Int = 0
     private var redirectCount: Int = 0
+    private var hasRecentRedirect: Boolean = false
     private var lastClickedPoint: Point? = null
     private val clickedHistory = mutableListOf<Point>()
     private val blacklistedPoints = mutableListOf<Point>()
 
-    fun onEnterAdMode() {
-        adStartTimeMs = System.currentTimeMillis()
-        closeClickCount = 0
-        adChoicesDismissCount = 0
-        redirectCount = 0
+    fun onEnterAdMode(preserveRedirectState: Boolean = false) {
+        if (!preserveRedirectState) {
+            adStartTimeMs = System.currentTimeMillis()
+            closeClickCount = 0
+            adChoicesDismissCount = 0
+            redirectCount = 0
+            hasRecentRedirect = false
+            lastClickedPoint = null
+            clickedHistory.clear()
+            blacklistedPoints.clear()
+        }
+    }
+
+    fun markRecentRedirect(clickedPoint: Point? = null) {
+        hasRecentRedirect = true
+        redirectCount++
+        (clickedPoint ?: lastClickedPoint)?.let { badPt ->
+            blacklistedPoints.add(badPt)
+        }
         lastClickedPoint = null
-        clickedHistory.clear()
-        blacklistedPoints.clear()
     }
 
     fun getElapsedSeconds(): Int {
@@ -79,7 +92,7 @@ class AdCloserHandler(
         val sh = screenBitmap.height
         val elapsedSec = getElapsedSeconds()
 
-        // 1A. 防迷路檢查：若誤觸跳轉到 Google Play 商店或外部瀏覽器/Chrome Custom Tabs，立即按 BACK 並恢復
+        // 1A. 防迷路檢查：若誤觸跳轉到 Google Play 商店或外部瀏覽器/Chrome Custom Tabs，立即按 BACK 並標記跳轉恢復
         val fgPkg = service.getForegroundPackageName()
         val isExternal = fgPkg != null && AppConfig.isRedirectPackage(fgPkg)
         val hasBrowserTitle = ocrItems.any { item ->
@@ -94,18 +107,19 @@ class AdCloserHandler(
         }
 
         if (isExternal || hasBrowserTitle) {
-            redirectCount++
-            lastClickedPoint?.let { badPt ->
-                val inCorner = (badPt.x < sw * 0.20f || badPt.x > sw * 0.80f) && badPt.y < sh * 0.20f
-                if (!inCorner) {
-                    blacklistedPoints.add(badPt)
-                }
-                lastClickedPoint = null
-            }
+            markRecentRedirect()
             service.navigateBack()
-            // 廣告跳轉恢復後，給予 2.5 秒緩衝期讓廣告畫面重新穩定，避免立即再度誤觸
-            adStartTimeMs = System.currentTimeMillis() - 2500L
             return AdStepResult.RedirectRecovered(fgPkg ?: "InAppBrowser")
+        }
+
+        // 1A-2. Meta 輪播廣告 / 外部跳轉安全防死循環返回機制：
+        // 若剛剛剛從外部瀏覽器/Custom Tabs 透過返回鍵回到廣告畫面：
+        // 由於點擊該廣告角落或畫面會再度觸發跳轉外部網頁，因此切勿再點擊畫面！
+        // 直接對廣告 Activity 發送系統返回鍵 (navigateBack)，安全關閉廣告退回遊戲！
+        if (hasRecentRedirect) {
+            hasRecentRedirect = false
+            service.navigateBack()
+            return AdStepResult.WatchdogBackTriggered(elapsedSec)
         }
 
         // 1B. 防誤觸 AdChoices 選單檢查：若誤點『ⓘ ▷』彈出『Hide Ad / Report Ad / Why am I seeing this ad?』選單，
@@ -133,7 +147,7 @@ class AdCloserHandler(
         }
 
         // 2A. 若已關閉全螢幕廣告並跳出『獲得15張票券！ / 獲得金幣！』中央領獎彈窗，直接回傳並點擊 [ 關閉 ]！
-        if (elapsedSec >= 4) {
+        if (elapsedSec >= 2) {
             val modalClose = ocrRecognizer.findCenterRewardModalCloseButton(screenBitmap, ocrItems)
             if (modalClose != null) {
                 return AdStepResult.ReturnedToGame(modalClose.second, "已關閉領獎彈窗 (${modalClose.first})")
@@ -141,7 +155,7 @@ class AdCloserHandler(
         }
 
         // 2B. 若廣告結束後畫面停留在『獲得票券！/ 獲得金幣！』下半部彈窗且按鈕皆在冷卻中 (下方有 [取消] 按鈕)，直接點擊 [取消] 關閉彈窗回到遊戲！
-        if (elapsedSec >= 3) {
+        if (elapsedSec >= 2) {
             val cancelBtn = ocrRecognizer.findPopupCancelButton(screenBitmap, ocrItems)
             if (cancelBtn != null) {
                 return AdStepResult.ReturnedToGame(cancelBtn, "已點擊彈窗 [取消]")
@@ -149,12 +163,12 @@ class AdCloserHandler(
         }
 
         // 2C. 若已回到《LINE 散步趣》主畫面或各項子畫面（賓果/好友/任務/抽抽樂/禮物），判定已完成這支廣告！
-        if (elapsedSec >= 4 && isGameScreenVisible(service, screenBitmap, ocrItems)) {
+        if (elapsedSec >= 2 && isGameScreenVisible(service, screenBitmap, ocrItems)) {
             return AdStepResult.ReturnedToGame(null, "已回到散步趣介面")
         }
 
-        // 3. 廣告前 4 秒保護期：靜候播放
-        if (elapsedSec < 4) {
+        // 3. 廣告前保護期 (2.5 秒)：靜候播放
+        if (elapsedSec < 3) {
             return AdStepResult.WaitingGracePeriod(elapsedSec)
         }
 
@@ -214,10 +228,13 @@ class AdCloserHandler(
         }
 
         // 8. 第三層辨識 B：啟動「高精度免樣本幾何角落 X 偵測器」（支援右上角/左上角圓底白 X 與細線 X）
-        if (elapsedSec >= 5 || rewardGrantedOcr != null) {
+        // 大幅加速：3 秒後即開始尋找角落 X；若播放已超過 8 秒或已獲得獎勵，啟動放寬模式 (isRelaxed) 偵測半透明 X！
+        if (elapsedSec >= 3 || rewardGrantedOcr != null) {
+            val isRelaxed = elapsedSec >= 8 || rewardGrantedOcr != null
             val geoMatch = templateMatcher.detectCornerGeometricX(
                 screenBitmap = screenBitmap,
-                blacklistedCoord = ::isInvalidOrBlacklisted
+                blacklistedCoord = ::isInvalidOrBlacklisted,
+                isRelaxed = isRelaxed
             )
             if (geoMatch != null) {
                 recordAndClick(service, geoMatch.bounds)
@@ -225,16 +242,18 @@ class AdCloserHandler(
             }
         }
 
-        // 8B. Meta 廣告 / 輪播廣告專用安全返回策略：
-        // 若該廣告曾觸發跳轉外部網頁且播放已超過 8 秒，嘗試發送系統返回鍵安全關閉廣告（Android 廣告 Activity 收到返回鍵即可安全關閉）！
-        if (elapsedSec >= 8 && redirectCount > 0 && elapsedSec % 4 == 0) {
+        // 8B. 主動安全返回策略（大幅加速廣告關閉速度，告別 60 秒乾等）：
+        // - 若該廣告曾觸發跳轉外部網頁 (redirectCount > 0)，每次 tick 優先發送返回鍵關閉廣告
+        // - 若廣告無倒數計時（例如 Meta 輪播、靜態廣告或已播完的互動式 end-card），且已播放超過 12 秒：
+        //   在 12s, 16s, 20s, 24s, 28s, 32s 嘗試發送返回鍵，迅速關閉廣告，不必乾等 60 秒！
+        if (remainingSec == null && (redirectCount > 0 || elapsedSec in listOf(12, 16, 20, 24, 28, 32))) {
             service.navigateBack()
             return AdStepResult.WatchdogBackTriggered(elapsedSec)
         }
 
-        // 9. 防卡死 Watchdog：若單支廣告超過最大等待秒數，嘗試發送系統返回鍵或點右上角標準 X 熱區
+        // 9. 防卡死 Watchdog：若單支廣告超過最大等待秒數 (預設 32 秒)，嘗試發送系統返回鍵或點右上角標準 X 熱區
         if (elapsedSec >= config.maxAdWaitSeconds) {
-            if (elapsedSec % 8 < 4) {
+            if (elapsedSec % 4 < 2) {
                 service.navigateBack()
             } else {
                 val fallbackRect = Rect(

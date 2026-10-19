@@ -427,11 +427,12 @@ class TemplateMatcher {
     /**
      * 高精度免樣本幾何角落「X」偵測器：
      * 支援細線條 X（含 3x3 鄰域容錯）與深色圓底白 X / 淺色圓底黑 X，
-     * 掃描畫面右上角 (x=83%~97%, y=3.5%~14.5%) 與左上角 (x=3%~17%, y=3.5%~14.5%)。
+     * 掃描畫面右上角 (x=75%~98%, y=2%~18%) 與左上角 (x=2%~25%, y=2%~18%)。
      */
     suspend fun detectCornerGeometricX(
         screenBitmap: Bitmap,
-        blacklistedCoord: ((Int, Int) -> Boolean)? = null
+        blacklistedCoord: ((Int, Int) -> Boolean)? = null,
+        isRelaxed: Boolean = false
     ): TemplateMatchResult? = withContext(Dispatchers.Default) {
         val sw = screenBitmap.width
         val sh = screenBitmap.height
@@ -442,13 +443,16 @@ class TemplateMatcher {
 
         val searchZones = listOf(
             // 右上角 (最常見，如『邀請好友』右上角灰底圓形 X)
-            Rect((sw * 0.83f).toInt(), (sh * 0.035f).toInt(), (sw * 0.97f).toInt(), (sh * 0.145f).toInt()),
+            Rect((sw * 0.75f).toInt(), (sh * 0.02f).toInt(), (sw * 0.98f).toInt(), (sh * 0.18f).toInt()),
             // 左上角
-            Rect((sw * 0.03f).toInt(), (sh * 0.035f).toInt(), (sw * 0.17f).toInt(), (sh * 0.145f).toInt())
+            Rect((sw * 0.02f).toInt(), (sh * 0.02f).toInt(), (sw * 0.25f).toInt(), (sh * 0.18f).toInt())
         )
 
         var bestCandidate: TemplateMatchResult? = null
-        var bestRawScore = 82f
+        var bestRawScore = if (isRelaxed) 65f else 82f
+        val centerContrastMin = if (isRelaxed) 35f else 45f
+        val contrastMin = if (isRelaxed) 45f else 55f
+        val minArmContrastMin = if (isRelaxed) 22f else 35f
 
         for ((zoneIdx, zone) in searchZones.withIndex()) {
             val zw = zone.width()
@@ -501,7 +505,7 @@ class TemplateMatcher {
                             // 1. 中心點本身必須位於 X 的交叉線上，排除『ⓘ ▷』兩個圖示中間的黑縫！
                             val centerPixelLum = lum(cx, cy)
                             val centerContrast = if (isBrightX) centerPixelLum - cardMean else cardMean - centerPixelLum
-                            if (centerContrast < 45f) {
+                            if (centerContrast < centerContrastMin) {
                                 cx += step
                                 continue
                             }
@@ -536,7 +540,7 @@ class TemplateMatcher {
                                 cardMean - max(cLum, max(max(d1, d2), max(d3, d4)))
                             }
 
-                            if (contrast > 55f && minArmContrast > 35f) {
+                            if (contrast > contrastMin && minArmContrast > minArmContrastMin) {
                                 val rawScore = contrast - (cardDiff * 0.5f)
                                 if (rawScore > bestRawScore) {
                                     bestRawScore = rawScore
