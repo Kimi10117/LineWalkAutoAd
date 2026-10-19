@@ -80,7 +80,6 @@ class OcrRecognizer {
                 val cy = item.bounds.centerY()
                 if (FloatingOverlayService.isInsideOverlay(cx, cy)) return@firstOrNull false
 
-                // 避開頂部中間 dynamicSpot 動態島區域
                 val inDynamicIsland = cy < screenHeight * 0.045f &&
                     cx in (screenWidth * 0.28f).toInt()..(screenWidth * 0.72f).toInt()
                 if (inDynamicIsland) return@firstOrNull false
@@ -97,26 +96,45 @@ class OcrRecognizer {
     }
 
     /**
-     * 判斷目前畫面是否為《LINE 散步趣》的主畫面（即尚未彈出全螢幕廣告或遮罩彈窗）。
-     * 重要：在主畫面時，下半部 (y = 0.45 ~ 0.90) 是內嵌橫幅廣告（如 Amazon Shopping 安裝），絕對不可點擊！
+     * 判斷目前畫面是否為《LINE 散步趣》的主畫面（且下半部沒有被『獲得票券！/ 紅利 / 15 獲得』等彈窗蓋住）。
      */
     fun isLineWalkMainScreenVisible(
+        screenBitmap: Bitmap,
         items: List<OcrItem>,
-        screenWidth: Int,
-        screenHeight: Int
+        templateMatcher: TemplateMatcher
     ): Boolean {
-        var score = 0
+        val sw = screenBitmap.width
+        val sh = screenBitmap.height
+
+        // 1. 若下半部 (y = 0.68 ~ 0.83) 出現了『紅利 [▶] 15 獲得』的珊瑚粉紅按鈕，代表目前正開著領獎彈窗！
+        if (templateMatcher.findCoralPinkButton(screenBitmap, 0.68f, 0.83f, "彈窗粉紅鈕") != null) {
+            return false
+        }
+
+        // 2. 若下半部 (y > 0.50) 出現了彈窗專屬字眼（如『跳過廣告』『紅利』『15 獲得』『取消』『同意並繼續』），代表開著彈窗！
+        val hasBottomPopupText = items.any { item ->
+            val cy = item.bounds.centerY().toFloat() / sh
+            val t = item.text
+            cy > 0.50f && (t.contains("跳過廣告") || t.contains("紅利") || t.contains("15 獲得") ||
+                t.contains("15獲得") || t.contains("5 獲得") || t.contains("5獲得") ||
+                t == "取消" || t.contains("同意並繼續"))
+        }
+        if (hasBottomPopupText) return false
+
+        // 3. 檢查是否有主畫面的底部導覽列 (集點/好友/使用/精選) 與上半部舞台元素
+        var hasBottomNav = false
+        var hasUpperStage = false
         for (item in items) {
             val t = item.text
-            val cy = item.bounds.centerY().toFloat() / screenHeight
-            if (cy < 0.48f && (t.contains("距離下次累積") || t.contains("獲得票券") || t == "賓果" || t == "抽抽樂" || t == "糖果")) {
-                score += 2
+            val cy = item.bounds.centerY().toFloat() / sh
+            if (cy > 0.88f && (t == "集點" || t == "好友" || t == "使用" || t == "精選")) {
+                hasBottomNav = true
             }
-            if (cy > 0.88f && (t == "集點" || t == "好友" || t == "精選")) {
-                score += 1
+            if (cy < 0.48f && (t.contains("距離下次累積") || t.contains("獲得票券") || t == "賓果" || t == "抽抽樂" || t == "糖果")) {
+                hasUpperStage = true
             }
         }
-        return score >= 2
+        return hasBottomNav && hasUpperStage
     }
 
     fun detectAdCountdownSeconds(items: List<OcrItem>, screenHeight: Int): Int? {
@@ -143,18 +161,16 @@ class OcrRecognizer {
             RegexOption.IGNORE_CASE
         )
 
-        /** 彈窗中觸發看廣告的常見按鈕文字（包含散步趣『看廣告獲得 5 張 / 看影片 / 2倍』） */
+        /** 彈窗中觸發看廣告的常見按鈕文字（包含散步趣『15 獲得 / 紅利 / 看廣告』） */
         val GAME_AD_TRIGGER_KEYWORDS = listOf(
+            "15 獲得",
+            "15獲得",
             "看廣告",
             "觀看廣告",
             "觀看影片",
             "看影片",
             "廣告領取",
             "看廣告獲得",
-            "獲得 5",
-            "獲得5",
-            "5張",
-            "5 張",
             "2倍",
             "加倍",
             "再抽一次",
@@ -162,10 +178,10 @@ class OcrRecognizer {
         )
 
         val GAME_AD_EXCLUDE_KEYWORDS = listOf(
+            "跳過廣告",
             "不看廣告",
             "不用看",
             "略過廣告",
-            "跳過廣告",
             "關閉廣告",
             "賺點數",
             "免費參加",
@@ -184,11 +200,16 @@ class OcrRecognizer {
             "關閉",
             "好",
             "OK",
+            "5 獲得",
+            "5獲得",
             "暫不",
             "不用了"
         )
 
         val GAME_CLAIM_EXCLUDE_KEYWORDS = listOf(
+            "跳過廣告",
+            "15 獲得",
+            "15獲得",
             "同意並繼續",
             "不看廣告",
             "看廣告",
@@ -208,7 +229,6 @@ class OcrRecognizer {
             "下載"
         )
 
-        /** 廣告播放完畢或推銷畫面的略過/跳過/關閉文字 */
         val AD_CLOSE_OCR_KEYWORDS = listOf(
             "略過廣告",
             "跳過廣告",

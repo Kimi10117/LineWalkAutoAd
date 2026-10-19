@@ -64,7 +64,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest-apk
-          name: "散步趣助手 v1.2 (最新自動建置 - Run #${{ github.run_number }})"
-          body: "✅ 版本：v1.2 (Run #${{ github.run_number }})`n- 內建自動辨識步數頁粉紅色『獲得票券』按鈕（免手動框選即可自動點開看廣告！）`n- 鎖定主畫面下半部內嵌橫幅廣告防誤觸保護（不會再點到主畫面底下的 Amazon 等安裝廣告跳去 Play 商店）`n- 鎖定永久數位簽章（安裝此版後，未來更新可直接覆蓋安裝免刪舊版）"
+          name: "散步趣助手 v1.3 (最新自動建置 - Run #${{ github.run_number }})"
+          body: "✅ 版本：v1.3 (Run #${{ github.run_number }})`n- 精準鎖定『獲得票券！』彈窗中的粉紅色『紅利 [▶] 15 獲得』按鈕（自動排除上方灰色跳過廣告與下方 5 獲得）`n- 支援直接覆蓋更新（已安裝 v1.2 者直接點安裝即可更新，免刪舊版！）"
           files: LineWalkAutoAd.apk
           prerelease: false

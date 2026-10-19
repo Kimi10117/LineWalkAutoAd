@@ -34,14 +34,9 @@ interface GameTask {
     ): TaskTriggerTarget?
 }
 
-/**
- * 檢查按鈕區域是否為「亮色可點擊狀態」（例如粉紅色『獲得票券』、綠色或黃色按鈕），
- * 若已經領完變成灰階按鈕 (R≈G≈B 飽和度極低)，則回傳 false 避免重複點擊死按鈕！
- */
 private fun isButtonColorfulAndActive(bitmap: Bitmap, bounds: Rect): Boolean {
     val sw = bitmap.width
     val sh = bitmap.height
-    // 取文字框周圍外擴一點的按鈕底色區域
     val left = (bounds.left - 20).coerceIn(0, sw - 1)
     val top = (bounds.top - 10).coerceIn(0, sh - 1)
     val right = (bounds.right + 20).coerceIn(left + 1, sw)
@@ -62,7 +57,6 @@ private fun isButtonColorfulAndActive(bitmap: Bitmap, bounds: Rect): Boolean {
             val b = c and 0xFF
             val maxC = max(r, max(g, b))
             val minC = min(r, min(g, b))
-            // 粉紅/紅/綠/橘黃色按鈕的 RGB 最大最小差值 (Chroma) 通常 > 45
             if (maxC - minC > 45 && maxC > 120) {
                 colorfulPixels++
             }
@@ -76,7 +70,7 @@ private fun isButtonColorfulAndActive(bitmap: Bitmap, bounds: Rect): Boolean {
 
 /**
  * 【第一優先任務】步數獎勵任務 (StepBottleTask)：
- * 1. 免取樣直接透過 OCR 辨識畫面中上方的粉紅色『獲得票券』按鈕（y = 0.20 ~ 0.40）！
+ * 1. 直接使用珊瑚粉紅按鈕偵測器 (findCoralPinkButton y=0.25~0.37) + OCR 辨識『獲得票券』（即使熊大對話框擋住部分文字也能毫秒級定位！）。
  * 2. 亦支援比對使用者自訂框選的範本 (STEP_BOTTLE)。
  */
 class StepBottleTask : GameTask {
@@ -93,7 +87,22 @@ class StepBottleTask : GameTask {
         templateMatcher: TemplateMatcher,
         ocrRecognizer: OcrRecognizer
     ): TaskTriggerTarget? {
-        // 1. 直接透過 OCR 尋找《LINE 散步趣》步數舞台區的「獲得票券」按鈕 (完全免手動取樣！)
+        // 1. 優先透過珊瑚粉紅長條按鈕偵測器尋找主畫面 y=25%~37% 的『獲得票券』按鈕
+        val pinkBtn = templateMatcher.findCoralPinkButton(
+            screenBitmap = screenBitmap,
+            yStartRatio = 0.25f,
+            yEndRatio = 0.37f,
+            label = "粉紅[獲得票券]鈕"
+        )
+        if (pinkBtn != null) {
+            return TaskTriggerTarget(
+                taskName = displayName,
+                targetLabel = pinkBtn.label,
+                bounds = pinkBtn.bounds
+            )
+        }
+
+        // 2. OCR 尋找『獲得票券 / 領取票券 / 獲得金幣』
         val ticketBtnOcr = ocrRecognizer.findMatch(
             items = ocrItems,
             keywords = listOf("獲得票券", "領取票券", "獲得金幣"),
@@ -110,7 +119,7 @@ class StepBottleTask : GameTask {
             )
         }
 
-        // 2. 使用者自訂框選的水瓶或按鈕範本
+        // 3. 使用者自訂框選的水瓶或按鈕範本
         val bottleTemplates = templateStorage.getTemplates(TemplateCategory.STEP_BOTTLE).map { it.bitmap }
         if (bottleTemplates.isNotEmpty()) {
             val match = templateMatcher.findBestTemplateMatch(
@@ -133,9 +142,6 @@ class StepBottleTask : GameTask {
     }
 }
 
-/**
- * 【任務二】首頁（移動距離）獎勵任務 (MoveGaugeTask)
- */
 class MoveGaugeTask : GameTask {
     override val id: String = "move_gauge"
     override val displayName: String = "移動距離獎勵"
@@ -150,7 +156,6 @@ class MoveGaugeTask : GameTask {
         templateMatcher: TemplateMatcher,
         ocrRecognizer: OcrRecognizer
     ): TaskTriggerTarget? {
-        // 1. 使用者框選的首頁移動獎勵範本
         val templates = templateStorage.getTemplates(TemplateCategory.MOVE_GAUGE).map { it.bitmap }
         if (templates.isNotEmpty()) {
             val match = templateMatcher.findBestTemplateMatch(
@@ -170,29 +175,23 @@ class MoveGaugeTask : GameTask {
             }
         }
 
-        // 2. OCR 尋找舞台區的「獲得票券 / 獲得金幣 / 領取」亮色按鈕
-        val ocrMatch = ocrRecognizer.findMatch(
-            items = ocrItems,
-            keywords = listOf("獲得票券", "獲得金幣", "領取獎勵"),
-            screenWidth = screenBitmap.width,
-            screenHeight = screenBitmap.height,
-            roiNormalized = RectF(0.15f, 0.20f, 0.85f, 0.42f),
-            excludeKeywords = listOf("雙重", "LINE POINTS")
+        val pinkBtn = templateMatcher.findCoralPinkButton(
+            screenBitmap = screenBitmap,
+            yStartRatio = 0.25f,
+            yEndRatio = 0.38f,
+            label = "粉紅獎勵鈕"
         )
-        if (ocrMatch != null && isButtonColorfulAndActive(screenBitmap, ocrMatch.bounds)) {
+        if (pinkBtn != null) {
             return TaskTriggerTarget(
                 taskName = displayName,
-                targetLabel = "OCR[${ocrMatch.text}]",
-                bounds = ocrMatch.bounds
+                targetLabel = pinkBtn.label,
+                bounds = pinkBtn.bounds
             )
         }
         return null
     }
 }
 
-/**
- * 【任務三】時間（放置）獎勵任務 (IdleRewardTask)
- */
 class IdleRewardTask : GameTask {
     override val id: String = "idle_reward"
     override val displayName: String = "時間放置獎勵"
@@ -229,9 +228,6 @@ class IdleRewardTask : GameTask {
     }
 }
 
-/**
- * 【任務四】抽抽樂 / 糖果看廣告任務 (GachaTask)
- */
 class GachaTask : GameTask {
     override val id: String = "gacha_task"
     override val displayName: String = "抽抽樂與糖果"

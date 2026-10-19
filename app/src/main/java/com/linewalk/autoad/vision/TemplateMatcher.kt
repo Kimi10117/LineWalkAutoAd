@@ -17,16 +17,78 @@ data class TemplateMatchResult(
 )
 
 /**
- * 第三層辨識：高效能純 Kotlin 雙層金字塔局部圖像匹配器 (TemplateMatcher)
- * 結合「零均值正規化互相關 (ZNCC)」與「RGB 色彩相似度」，
- * 能夠精準區分《LINE 散步趣》中「已集滿發亮的水瓶」與「未集滿的灰暗水瓶」，
- * 同時提供「免樣本幾何角落 X 偵測器」作為廣告關閉按鈕的備援。
+ * 第三層辨識：
+ * 1. 內建《LINE 散步趣》專屬珊瑚粉紅按鈕偵測器 (findCoralPinkButton)，
+ *    可在 1 毫秒內精準定位主畫面的『獲得票券』(y=25%~37%) 與彈窗中的『紅利 [▶] 15 獲得』(y=68%~83%)。
+ * 2. 雙階段粗精搜 ZNCC + RGB 局部模板匹配器。
+ * 3. 免樣本幾何角落 X 偵測器。
  */
 class TemplateMatcher {
 
     /**
-     * 在螢幕截圖的指定相對區域 (Normalized ROI) 內，從多張範本中找出最高分的匹配位置。
+     * 偵測《LINE 散步趣》招牌的珊瑚粉紅色長條按鈕 (#FF4151 ~ #FF4E5B)：
+     * - 主畫面『獲得票券』按鈕位於 yStartRatio=0.25f .. yEndRatio=0.37f
+     * - 彈窗內『紅利 [▶] 15 獲得』看廣告按鈕位於 yStartRatio=0.68f .. yEndRatio=0.83f
      */
+    fun findCoralPinkButton(
+        screenBitmap: Bitmap,
+        yStartRatio: Float,
+        yEndRatio: Float,
+        label: String
+    ): TemplateMatchResult? {
+        val w = screenBitmap.width
+        val h = screenBitmap.height
+        val startY = (h * yStartRatio).toInt().coerceIn(0, h - 1)
+        val endY = (h * yEndRatio).toInt().coerceIn(startY + 1, h - 1)
+        val startX = (w * 0.20f).toInt()
+        val endX = (w * 0.80f).toInt()
+
+        var minPinkY = Int.MAX_VALUE
+        var maxPinkY = Int.MIN_VALUE
+        var matchedRowCount = 0
+
+        var y = startY
+        while (y <= endY) {
+            var pinkPixels = 0
+            var totalSampled = 0
+            var x = startX
+            while (x <= endX) {
+                val c = screenBitmap.getPixel(x, y)
+                val r = (c shr 16) and 0xFF
+                val g = (c shr 8) and 0xFF
+                val b = c and 0xFF
+                // LINE 散步趣粉紅按鈕色彩特徵: R > 215, G 介於 35~125, B 介於 45~135, 且 R-G > 110
+                if (r > 215 && g in 35..125 && b in 45..135 && (r - g) > 110) {
+                    pinkPixels++
+                }
+                totalSampled++
+                x += 8
+            }
+            if (totalSampled > 0 && (pinkPixels.toFloat() / totalSampled) >= 0.45f) {
+                if (y < minPinkY) minPinkY = y
+                if (y > maxPinkY) maxPinkY = y
+                matchedRowCount++
+            }
+            y += 4
+        }
+
+        // 確認粉紅區塊具有足夠的按鈕高度 (至少 3 個取樣列)
+        if (matchedRowCount >= 3 && maxPinkY > minPinkY) {
+            val rect = Rect(
+                (w * 0.25f).toInt(),
+                minPinkY,
+                (w * 0.75f).toInt(),
+                maxPinkY
+            )
+            return TemplateMatchResult(
+                score = 0.98f,
+                bounds = rect,
+                label = label
+            )
+        }
+        return null
+    }
+
     suspend fun findBestTemplateMatch(
         screenBitmap: Bitmap,
         templates: List<Bitmap>,
@@ -54,11 +116,6 @@ class TemplateMatcher {
         bestMatch
     }
 
-    /**
-     * 雙階段粗搜 + 精搜模板比對 (Coarse-to-Fine ZNCC + RGB Similarity)：
-     * 1. 先以步長 step=3 進行快速網格掃描找出前幾名候選點。
-     * 2. 再於候選點周圍 +-3 px 進行逐像素精確定位。
-     */
     private fun matchSingleTemplate(
         screen: Bitmap,
         template: Bitmap,
@@ -87,7 +144,6 @@ class TemplateMatcher {
         val tplPixels = IntArray(tw * th)
         template.getPixels(tplPixels, 0, tw, 0, 0, tw, th)
 
-        // 為了加速計算，在模板上均勻抽樣網格點 (最多約 15x15 = 225 個取樣點)
         val sampleStepX = max(1, tw / 14)
         val sampleStepY = max(1, th / 14)
 
@@ -163,11 +219,9 @@ class TemplateMatcher {
             } else {
                 (crossSum / (sqrt(max(scrVarSum, 1e-4f)) * tplStd)).coerceIn(-1f, 1f)
             }
-            // 綜合結構相似度 (ZNCC 65%) 與色彩相似度 (RGB 35%)
             return 0.65f * zncc + 0.35f * colorSim
         }
 
-        // 第一階段：粗略掃描 (步長 3px)
         val coarseStep = 3
         var bestCoarseScore = -1f
         var bestCoarseX = -1
@@ -196,7 +250,6 @@ class TemplateMatcher {
 
         if (bestCoarseScore < threshold - 0.08f || bestCoarseX < 0) return null
 
-        // 第二階段：局部逐像素精搜
         var finalScore = bestCoarseScore
         var finalX = bestCoarseX
         var finalY = bestCoarseY
@@ -228,11 +281,6 @@ class TemplateMatcher {
         )
     }
 
-    /**
-     * 免樣本幾何角落「X」偵測器：
-     * 當廣告的關閉按鈕是純圖形且不在無障礙節點樹、也沒有 OCR 文字時，
-     * 掃描畫面右上角與左上角是否具有典型的「圓底/方底對角線 X 圖示」特徵。
-     */
     suspend fun detectCornerGeometricX(
         screenBitmap: Bitmap,
         blacklistedCoord: ((Int, Int) -> Boolean)? = null
@@ -242,11 +290,8 @@ class TemplateMatcher {
         val boxSize = (min(sw, sh) * 0.048f).toInt().coerceIn(36, 72)
         val half = boxSize / 2
 
-        // 定義右上角與左上角兩個常見的廣告 X 熱區
         val searchZones = listOf(
-            // 右上角 (優先)
             Rect((sw * 0.82f).toInt(), (sh * 0.025f).toInt(), (sw * 0.985f).toInt(), (sh * 0.14f).toInt()),
-            // 左上角
             Rect((sw * 0.015f).toInt(), (sh * 0.025f).toInt(), (sw * 0.18f).toInt(), (sh * 0.14f).toInt())
         )
 
@@ -274,7 +319,6 @@ class TemplateMatcher {
                     val absX = zone.left + cx
                     val absY = zone.top + cy
                     if (blacklistedCoord?.invoke(absX, absY) != true) {
-                        // X 圖示特徵：中心與兩條對角線亮度相近，且與上下左右四個非對角象限有明顯對比度，且兩條對角線對稱
                         val centerLum = lum(cx, cy)
                         val r = (half * 0.55f).toInt().coerceAtLeast(6)
 
