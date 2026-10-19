@@ -134,7 +134,6 @@ class AutomationEngine private constructor(context: Context) {
     private var rewardClaimRetryTicks = 0
     private var currentTab: MainTab = MainTab.MOVE
     private var needsInitialTabSync = true
-    private var tabSwitchAttempts = 0
     private var emptyTicksOnCurrentTab = 0
     private val confirmedEmptyTabs = mutableSetOf<MainTab>()
 
@@ -175,7 +174,6 @@ class AutomationEngine private constructor(context: Context) {
         currentPhaseEmptyTicks = 0
         currentTab = tabPriorityOrder.firstOrNull { it.isEnabled(config) } ?: MainTab.MOVE
         needsInitialTabSync = true
-        tabSwitchAttempts = 0
 
         currentPhase = if (tabPriorityOrder.any { it.isEnabled(config) }) {
             PatrolPhase.MAIN_TABS
@@ -479,7 +477,14 @@ class AutomationEngine private constructor(context: Context) {
         }
 
         // D2. 無障礙節點樹關閉按鈕
-        val closeNode = nodeInspector.findAdCloseNode(service.getSafeRootNode(), sw, sh)
+        val closeNode = nodeInspector.findAdCloseNode(
+            root = service.getSafeRootNode(),
+            screenWidth = sw,
+            screenHeight = sh,
+            blacklistedCoord = { x, y ->
+                FloatingOverlayService.isInsideOverlay(x, y) || (y in (sh * 0.12f).toInt()..(sh * 0.36f).toInt())
+            }
+        )
         if (closeNode != null) {
             appendLog("✨ 自動點擊關閉節點: ${closeNode.label}")
             service.clickRect(closeNode.bounds)
@@ -769,17 +774,17 @@ class AutomationEngine private constructor(context: Context) {
             val cx = item.bounds.centerX()
             val yInRange = cy in (sh * 0.08f).toInt()..(sh * 0.16f).toInt()
             val xInRange = when (tab) {
-                MainTab.MOVE -> cx < sw * 0.30f
-                MainTab.STEP -> cx in (sw * 0.20f).toInt()..(sw * 0.55f).toInt()
-                MainTab.TIME -> cx in (sw * 0.45f).toInt()..(sw * 0.80f).toInt()
-                MainTab.GAME -> cx > sw * 0.70f
+                MainTab.MOVE -> cx < sw * 0.28f
+                MainTab.STEP -> cx in (sw * 0.22f).toInt()..(sw * 0.52f).toInt()
+                MainTab.TIME -> cx in (sw * 0.48f).toInt()..(sw * 0.78f).toInt()
+                MainTab.GAME -> cx > sw * 0.72f
             }
             yInRange && xInRange && tabKeywords.any { kw -> item.text.contains(kw) }
         }
 
         if (ocrMatch != null) {
-            val padX = max(30, (sw * 0.04f).toInt())
-            val padY = max(20, (sh * 0.015f).toInt())
+            val padX = max(20, (sw * 0.03f).toInt())
+            val padY = max(8, (sh * 0.008f).toInt())
             return Rect(
                 (ocrMatch.bounds.left - padX).coerceIn(0, sw),
                 (ocrMatch.bounds.top - padY).coerceIn(0, sh),
@@ -788,16 +793,22 @@ class AutomationEngine private constructor(context: Context) {
             )
         }
 
-        val halfWidth = (sw * 0.06f).toInt()
-        val centerX = (sw * tab.xRatio).toInt()
-        val top = (sh * 0.098f).toInt()
-        val bottom = (sh * 0.132f).toInt()
-        return Rect(
-            (centerX - halfWidth).coerceIn(0, sw),
-            top.coerceIn(0, sh),
-            (centerX + halfWidth).coerceIn(0, sw),
-            bottom.coerceIn(0, sh)
-        )
+        // Fallback: 幾何座標 (每個分頁佔 25% 寬度，高 10%~13.6%)
+        val left = when (tab) {
+            MainTab.MOVE -> (sw * 0.02f).toInt()
+            MainTab.STEP -> (sw * 0.26f).toInt()
+            MainTab.TIME -> (sw * 0.51f).toInt()
+            MainTab.GAME -> (sw * 0.76f).toInt()
+        }
+        val right = when (tab) {
+            MainTab.MOVE -> (sw * 0.24f).toInt()
+            MainTab.STEP -> (sw * 0.49f).toInt()
+            MainTab.TIME -> (sw * 0.74f).toInt()
+            MainTab.GAME -> (sw * 0.98f).toInt()
+        }
+        val top = (sh * 0.100f).toInt()
+        val bottom = (sh * 0.136f).toInt()
+        return Rect(left, top, right, bottom)
     }
 
     private suspend fun handleMainScreenPatrol(
@@ -827,29 +838,23 @@ class AutomationEngine private constructor(context: Context) {
                         currentTab = detectedTab
                         if (currentTab == desiredTab) {
                             needsInitialTabSync = false
-                            tabSwitchAttempts = 0
                         }
                     }
                 }
 
+                // 若當前停留在其他分頁（如遊戲分頁），必須先切換分頁，絕不在錯誤分頁上執行任務！
                 if (needsInitialTabSync || currentTab != desiredTab) {
                     emptyTicksOnCurrentTab = 0
                     val tabRect = getTabRect(desiredTab, sw, sh, ocrItems)
-                    appendLog("🔄 依優先順序切換至【${desiredTab.tabName}】...")
+                    appendLog("🔄 依優先順序切換至【${desiredTab.tabName}】(目前在【${currentTab.tabName}】)...")
                     FloatingOverlayService.clickWithOverlayPassthrough(tabRect) {
                         service.clickRect(tabRect)
                     }
                     updateDetail(
-                        "🔄 已切換至【${desiredTab.tabName}】，正在檢查獎勵...",
-                        "🔄 切換至[${desiredTab.shortLabel}]檢查中..."
+                        "🔄 正在切換至【${desiredTab.tabName}】...",
+                        "🔄 切換至[${desiredTab.shortLabel}]..."
                     )
-                    tabSwitchAttempts++
-                    if (tabSwitchAttempts >= 2) {
-                        currentTab = desiredTab
-                        needsInitialTabSync = false
-                        tabSwitchAttempts = 0
-                    }
-                    delay(500)
+                    delay(600)
                     return
                 }
 

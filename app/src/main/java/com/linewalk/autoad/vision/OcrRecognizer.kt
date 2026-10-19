@@ -338,38 +338,54 @@ class OcrRecognizer {
         }
         if (hasPopupOrPromoText) return false
 
-        // 4. 檢查是否有主畫面的底部導覽列 (集點/好友/使用/精選) 與四大分頁 (首頁/步數/時間/遊戲) 元素
-        var hasBottomNav = false
+        // 4. 主畫面特徵判定（頂部四大分頁、遊戲分頁、狀態列資產數值、底部導覽列）
+        var hasTopTabs = false
+        var hasGamePage = false
         var hasUpperStage = false
         var hasTopCoins = false
+        var hasBottomNav = false
 
+        var topTabCount = 0
         for (item in items) {
             val t = item.text.replace(" ", "")
             val cy = item.bounds.centerY().toFloat() / sh
 
-            // 底部導覽列：集點 / 好友 / 使用 / 精選
-            if (cy > 0.85f && (t.contains("集點") || t.contains("好友") || t.contains("使用") || t.contains("精選"))) {
-                hasBottomNav = true
+            // 頂部四大分頁 (cy in 0.08f..0.18f)
+            if (cy in 0.08f..0.18f && (t.contains("首頁") || t.contains("步數") || t.contains("時間") || t.contains("遊戲"))) {
+                topTabCount++
             }
 
-            // 頂部四大分頁與各分頁主要特徵字眼
+            // 遊戲分頁專屬特徵
+            if (t.contains("LINEPOINTS") || t.contains("簡單賺金幣") || t.contains("秘寶挖挖哇") ||
+                t.contains("數獨達人") || t.contains("接龍高手") || t.contains("玩LINE")
+            ) {
+                hasGamePage = true
+            }
+
+            // 一般分頁特徵
             if (cy < 0.58f && (
-                    t.contains("首頁") || t.contains("步數") || t.contains("時間") || t.contains("遊戲") ||
                     t.contains("距離下次") || t.contains("今天的步數") ||
                     t.contains("獲得票券") || t.contains("獲得金幣") ||
-                    t.contains("達成條件") || t.contains("簡單賺金幣") ||
-                    t.contains("賓果") || t.contains("抽抽樂") || t.contains("糖果")
+                    t.contains("達成條件") || t.contains("賓果") || t.contains("抽抽樂") || t.contains("糖果")
                 )
             ) {
                 hasUpperStage = true
             }
 
-            // 頂部狀態列資產數值 (金幣/票券數字)
+            // 頂部狀態列資產數值
             if (cy < 0.10f && t.any { it.isDigit() }) {
                 hasTopCoins = true
             }
+
+            // 底部導覽列：集點 / 好友 / 使用 / 精選
+            if (cy > 0.85f && (t.contains("集點") || t.contains("好友") || t.contains("使用") || t.contains("精選"))) {
+                hasBottomNav = true
+            }
         }
-        return hasBottomNav && (hasUpperStage || hasTopCoins)
+        hasTopTabs = topTabCount >= 1
+
+        // 具備頂部分頁、遊戲分頁特徵、底部導覽列，或頂部資產+內容，即為乾淨主畫面！
+        return hasTopTabs || hasGamePage || hasBottomNav || (hasTopCoins && hasUpperStage)
     }
 
     /**

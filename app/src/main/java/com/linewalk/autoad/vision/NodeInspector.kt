@@ -43,15 +43,16 @@ class NodeInspector {
                     val cx = rect.centerX()
                     val cy = rect.centerY()
 
-                    // 排除懸浮窗本身與頂部中間 dynamicSpot 動態島
+                    // 排除懸浮窗本身、頂部中間 dynamicSpot 動態島，以及頂部橫幅廣告區間 (y: 12% ~ 36%)
                     val inOverlay = FloatingOverlayService.isInsideOverlay(cx, cy)
                     val inDynamicIsland = cy < screenHeight * 0.045f &&
                         cx in (screenWidth * 0.28f).toInt()..(screenWidth * 0.72f).toInt()
+                    val inAdBannerZone = cy in (screenHeight * 0.12f).toInt()..(screenHeight * 0.36f).toInt()
 
                     val validSize = rect.width() in 16..(screenWidth * 0.45f).toInt() &&
                         rect.height() in 16..(screenHeight * 0.14f).toInt()
 
-                    if (!inOverlay && !inDynamicIsland && validSize) {
+                    if (!inOverlay && !inDynamicIsland && !inAdBannerZone && validSize) {
                         val viewId = node.viewIdResourceName?.lowercase().orEmpty()
                         val text = node.text?.toString()?.trim().orEmpty()
                         val desc = node.contentDescription?.toString()?.trim().orEmpty()
@@ -69,10 +70,7 @@ class NodeInspector {
                         }
                         val isExcluded = EXCLUDE_TEXTS.any {
                             text.contains(it) || desc.contains(it)
-                        } || viewId.contains("adjoe") || (
-                            cy in (screenHeight * 0.14f).toInt()..(screenHeight * 0.35f).toInt() &&
-                            (text.contains("遊玩") || desc.contains("遊玩") || text.contains("開始") || desc.contains("開始"))
-                        )
+                        } || viewId.contains("adjoe")
 
                         if (!isCountingDown && !isExcluded && (idMatch || exactSymbolMatch || keywordMatch)) {
                             if (blacklistedCoord?.invoke(cx, cy) != true) {

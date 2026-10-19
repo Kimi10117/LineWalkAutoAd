@@ -83,14 +83,14 @@ class StepBottleTask : GameTask {
         templateMatcher: TemplateMatcher,
         ocrRecognizer: OcrRecognizer
     ): TaskTriggerTarget? {
-        // 1. 優先透過珊瑚粉紅長條按鈕偵測器尋找主畫面 y=25%~38% 的『獲得票券 / 獲得金幣』按鈕
+        // 1. 優先透過珊瑚粉紅長條按鈕偵測器尋找主畫面 y=29%~40% 的『獲得票券 / 獲得金幣』按鈕
         val pinkBtn = templateMatcher.findCoralPinkButton(
             screenBitmap = screenBitmap,
-            yStartRatio = 0.25f,
-            yEndRatio = 0.38f,
+            yStartRatio = 0.29f,
+            yEndRatio = 0.40f,
             label = "粉紅[獲得票券]鈕"
         )
-        if (pinkBtn != null) {
+        if (pinkBtn != null && pinkBtn.bounds.centerY() >= screenBitmap.height * 0.29f) {
             return TaskTriggerTarget(
                 taskName = displayName,
                 targetLabel = pinkBtn.label,
@@ -98,16 +98,18 @@ class StepBottleTask : GameTask {
             )
         }
 
-        // 2. OCR 尋找彩色的『獲得票券 / 領取票券 / 獲得金幣』
+        // 2. OCR 尋找彩色的『獲得票券 / 領取票券 / 獲得金幣』(嚴格限制 y >= 29.5%)
         val ticketBtnOcr = ocrRecognizer.findMatch(
             items = ocrItems,
             keywords = listOf("獲得票券", "領取票券", "獲得金幣"),
             screenWidth = screenBitmap.width,
             screenHeight = screenBitmap.height,
-            roiNormalized = RectF(0.15f, 0.25f, 0.85f, 0.38f),
-            excludeKeywords = listOf("雙重", "LINE POINTS", "輕鬆賺", "輕鬆", "開始遊玩", "遊玩", "AD", "adjoe", "Sponsored")
+            roiNormalized = RectF(0.15f, 0.295f, 0.85f, 0.40f),
+            excludeKeywords = listOf("雙重", "LINE POINTS", "輕鬆賺", "輕鬆", "開始遊玩", "遊玩", "AD", "adjoe", "Sponsored", "簡單賺金幣")
         )
-        if (ticketBtnOcr != null && isButtonColorfulAndActive(screenBitmap, ticketBtnOcr.bounds)) {
+        if (ticketBtnOcr != null && ticketBtnOcr.bounds.centerY() >= screenBitmap.height * 0.29f &&
+            isButtonColorfulAndActive(screenBitmap, ticketBtnOcr.bounds)
+        ) {
             return TaskTriggerTarget(
                 taskName = displayName,
                 targetLabel = "按鈕[${ticketBtnOcr.text}]",
@@ -157,11 +159,11 @@ class MoveGaugeTask : GameTask {
     ): TaskTriggerTarget? {
         val pinkBtn = templateMatcher.findCoralPinkButton(
             screenBitmap = screenBitmap,
-            yStartRatio = 0.25f,
-            yEndRatio = 0.38f,
+            yStartRatio = 0.29f,
+            yEndRatio = 0.40f,
             label = "粉紅[獲得金幣]鈕"
         )
-        if (pinkBtn != null) {
+        if (pinkBtn != null && pinkBtn.bounds.centerY() >= screenBitmap.height * 0.29f) {
             return TaskTriggerTarget(
                 taskName = displayName,
                 targetLabel = pinkBtn.label,
@@ -174,10 +176,12 @@ class MoveGaugeTask : GameTask {
             keywords = listOf("獲得金幣", "獲得票券"),
             screenWidth = screenBitmap.width,
             screenHeight = screenBitmap.height,
-            roiNormalized = RectF(0.15f, 0.25f, 0.85f, 0.38f),
-            excludeKeywords = listOf("雙重", "LINE POINTS", "輕鬆賺", "輕鬆", "開始遊玩", "遊玩", "AD", "adjoe", "Sponsored")
+            roiNormalized = RectF(0.15f, 0.295f, 0.85f, 0.40f),
+            excludeKeywords = listOf("雙重", "LINE POINTS", "輕鬆賺", "輕鬆", "開始遊玩", "遊玩", "AD", "adjoe", "Sponsored", "簡單賺金幣")
         )
-        if (coinBtnOcr != null && isButtonColorfulAndActive(screenBitmap, coinBtnOcr.bounds)) {
+        if (coinBtnOcr != null && coinBtnOcr.bounds.centerY() >= screenBitmap.height * 0.29f &&
+            isButtonColorfulAndActive(screenBitmap, coinBtnOcr.bounds)
+        ) {
             return TaskTriggerTarget(
                 taskName = displayName,
                 targetLabel = "按鈕[${coinBtnOcr.text}]",
@@ -226,11 +230,11 @@ class IdleRewardTask : GameTask {
     ): TaskTriggerTarget? {
         val pinkBtn = templateMatcher.findCoralPinkButton(
             screenBitmap = screenBitmap,
-            yStartRatio = 0.25f,
-            yEndRatio = 0.38f,
+            yStartRatio = 0.29f,
+            yEndRatio = 0.40f,
             label = "粉紅[獲得票券]鈕"
         )
-        if (pinkBtn != null) {
+        if (pinkBtn != null && pinkBtn.bounds.centerY() >= screenBitmap.height * 0.29f) {
             return TaskTriggerTarget(
                 taskName = displayName,
                 targetLabel = pinkBtn.label,
@@ -243,10 +247,12 @@ class IdleRewardTask : GameTask {
             keywords = listOf("獲得票券", "獲得金幣"),
             screenWidth = screenBitmap.width,
             screenHeight = screenBitmap.height,
-            roiNormalized = RectF(0.15f, 0.25f, 0.85f, 0.38f),
-            excludeKeywords = listOf("雙重", "LINE POINTS", "輕鬆賺", "輕鬆", "開始遊玩", "遊玩", "AD", "adjoe", "Sponsored")
+            roiNormalized = RectF(0.15f, 0.295f, 0.85f, 0.40f),
+            excludeKeywords = listOf("雙重", "LINE POINTS", "輕鬆賺", "輕鬆", "開始遊玩", "遊玩", "AD", "adjoe", "Sponsored", "簡單賺金幣")
         )
-        if (ticketBtnOcr != null && isButtonColorfulAndActive(screenBitmap, ticketBtnOcr.bounds)) {
+        if (ticketBtnOcr != null && ticketBtnOcr.bounds.centerY() >= screenBitmap.height * 0.29f &&
+            isButtonColorfulAndActive(screenBitmap, ticketBtnOcr.bounds)
+        ) {
             return TaskTriggerTarget(
                 taskName = displayName,
                 targetLabel = "按鈕[${ticketBtnOcr.text}]",
@@ -304,7 +310,7 @@ class GachaTask : GameTask {
             yEndRatio = 0.58f,
             label = "機台[獲得金幣]粉紅鈕"
         )
-        if (pinkGameBtn != null) {
+        if (pinkGameBtn != null && pinkGameBtn.bounds.centerY() >= screenBitmap.height * 0.45f) {
             return TaskTriggerTarget(
                 taskName = displayName,
                 targetLabel = pinkGameBtn.label,
@@ -319,9 +325,9 @@ class GachaTask : GameTask {
             screenWidth = screenBitmap.width,
             screenHeight = screenBitmap.height,
             roiNormalized = RectF(0.20f, 0.46f, 0.80f, 0.58f),
-            excludeKeywords = listOf("輕鬆賺", "輕鬆", "開始遊玩", "遊玩", "AD", "Sponsored", "adjoe", "雙重")
+            excludeKeywords = listOf("輕鬆賺", "輕鬆", "開始遊玩", "遊玩", "AD", "Sponsored", "adjoe", "雙重", "簡單賺金幣")
         )
-        if (gameCoinOcr != null) {
+        if (gameCoinOcr != null && gameCoinOcr.bounds.centerY() >= screenBitmap.height * 0.45f) {
             val isGray = templateMatcher.isPopupButtonDisabledGray(screenBitmap, gameCoinOcr.bounds.centerY())
             val isActive = isButtonColorfulAndActive(screenBitmap, gameCoinOcr.bounds)
             if (!isGray && isActive) {
