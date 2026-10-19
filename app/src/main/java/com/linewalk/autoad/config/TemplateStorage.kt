@@ -9,6 +9,8 @@ import java.io.FileOutputStream
 
 /**
  * 定義手機端「即時框選取樣」支援的圖示分類，並紀錄建議搜尋的螢幕相對區域 (Normalized ROI)。
+ * 注意：《LINE 散步趣》主畫面下半部 (y > 0.46) 為內嵌橫幅廣告區 (如 Amazon 安裝廣告)，
+ * 因此主畫面任務的 ROI 嚴格限制在 y = 0.14 ~ 0.45 的上半部互動舞台區！
  */
 enum class TemplateCategory(
     val id: String,
@@ -18,39 +20,39 @@ enum class TemplateCategory(
 ) {
     STEP_BOTTLE(
         id = "step_bottle",
-        displayName = "1. 步數滿水瓶圖示 (優先)",
-        description = "框選遊戲主畫面中「已裝滿發亮的水瓶」圖示，用於自動點擊水瓶領取獎勵。",
-        defaultSearchRoi = RectF(0.05f, 0.25f, 0.95f, 0.90f)
+        displayName = "1. 步數『獲得票券』或水瓶 (優先)",
+        description = "已內建自動辨識粉紅色『獲得票券』按鈕；亦可框選自訂水瓶圖示。",
+        defaultSearchRoi = RectF(0.05f, 0.15f, 0.95f, 0.42f)
     ),
     AD_TRIGGER_BTN(
         id = "ad_trigger_btn",
-        displayName = "2. 看廣告領取按鈕圖示",
+        displayName = "2. 彈窗『看廣告』按鈕圖示",
         description = "框選彈窗中「觀看廣告 / 影片圖示」按鈕（搭配中文 OCR 雙重保障）。",
-        defaultSearchRoi = RectF(0.10f, 0.30f, 0.90f, 0.85f)
+        defaultSearchRoi = RectF(0.08f, 0.22f, 0.92f, 0.85f)
     ),
     AD_CLOSE_ICON(
         id = "ad_close_icon",
         displayName = "3. 廣告關閉 X / >> 圖示",
         description = "若遇到特殊造型的廣告『X』或『>>』關閉按鈕，可框選加入範本庫。",
-        defaultSearchRoi = RectF(0.0f, 0.0f, 1.0f, 0.22f)
+        defaultSearchRoi = RectF(0.0f, 0.02f, 1.0f, 0.25f)
     ),
     MOVE_GAUGE(
         id = "move_gauge",
-        displayName = "4. 移動距離獎勵圖示",
-        description = "框選移動頁面中「集滿的交通工具/火車車票」領獎圖示。",
-        defaultSearchRoi = RectF(0.05f, 0.20f, 0.95f, 0.88f)
+        displayName = "4. 首頁(移動)獎勵圖示",
+        description = "框選『首頁』分頁中集滿的交通工具/領獎圖示。",
+        defaultSearchRoi = RectF(0.05f, 0.15f, 0.95f, 0.44f)
     ),
     IDLE_REWARD(
         id = "idle_reward",
-        displayName = "5. 放置/時間獎勵圖示",
-        description = "框選角色定時產出的金幣/寶箱圖示。",
-        defaultSearchRoi = RectF(0.05f, 0.20f, 0.95f, 0.88f)
+        displayName = "5. 時間(放置)獎勵圖示",
+        description = "框選『時間』分頁中角色定時產出的領獎按鈕或圖示。",
+        defaultSearchRoi = RectF(0.05f, 0.15f, 0.95f, 0.44f)
     ),
     GACHA_BTN(
         id = "gacha_btn",
-        displayName = "6. 扭蛋 / 刮刮樂按鈕",
-        description = "框選扭蛋或刮刮樂的看廣告抽獎按鈕。",
-        defaultSearchRoi = RectF(0.10f, 0.30f, 0.90f, 0.90f)
+        displayName = "6. 抽抽樂 / 糖果 / 任務按鈕",
+        description = "框選抽抽樂或糖果的看廣告抽獎按鈕。",
+        defaultSearchRoi = RectF(0.05f, 0.15f, 0.95f, 0.85f)
     )
 }
 
@@ -60,9 +62,6 @@ data class SavedTemplate(
     val bitmap: Bitmap
 )
 
-/**
- * 管理使用者在手機懸浮窗直接框選儲存的圖示範本。
- */
 class TemplateStorage(context: Context) {
 
     private val rootDir = File(context.applicationContext.filesDir, "templates").apply {
@@ -72,9 +71,6 @@ class TemplateStorage(context: Context) {
     @Volatile
     private var memoryCache: Map<TemplateCategory, List<SavedTemplate>>? = null
 
-    /**
-     * 將框選裁切出的 Bitmap 存入對應分類資料夾，並刷新快取。
-     */
     @Synchronized
     fun saveTemplate(category: TemplateCategory, croppedBitmap: Bitmap): File {
         val categoryDir = File(rootDir, category.id).apply {
@@ -90,27 +86,18 @@ class TemplateStorage(context: Context) {
         return outFile
     }
 
-    /**
-     * 取得指定分類下已儲存的所有範本 (含記憶體快取)。
-     */
     @Synchronized
     fun getTemplates(category: TemplateCategory): List<SavedTemplate> {
         val cache = memoryCache ?: loadAllIntoCache()
         return cache[category].orEmpty()
     }
 
-    /**
-     * 取得各分類目前已儲存的範本數量，供主畫面顯示。
-     */
     @Synchronized
     fun getTemplateCounts(): Map<TemplateCategory, Int> {
         val cache = memoryCache ?: loadAllIntoCache()
         return TemplateCategory.entries.associateWith { cache[it]?.size ?: 0 }
     }
 
-    /**
-     * 清除指定分類的所有範本。
-     */
     @Synchronized
     fun clearCategory(category: TemplateCategory) {
         val categoryDir = File(rootDir, category.id)
@@ -120,9 +107,6 @@ class TemplateStorage(context: Context) {
         memoryCache = null
     }
 
-    /**
-     * 清除全部範本。
-     */
     @Synchronized
     fun clearAll() {
         TemplateCategory.entries.forEach { clearCategory(it) }

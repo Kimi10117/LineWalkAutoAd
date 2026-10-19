@@ -17,8 +17,6 @@ data class OcrItem(
 
 /**
  * 第二層辨識：Google ML Kit 離線中英文 OCR 辨識器 (OcrRecognizer)。
- * 自動過濾掉懸浮窗本身所在的螢幕區域 (FloatingOverlayService.isInsideOverlay)，
- * 避免辨識到懸浮窗自己的狀態文字。
  */
 class OcrRecognizer {
 
@@ -26,9 +24,6 @@ class OcrRecognizer {
         ChineseTextRecognizerOptions.Builder().build()
     )
 
-    /**
-     * 對全螢幕截圖執行離線中英文 OCR，並自動剔除位於懸浮控制窗範圍內的文字。
-     */
     suspend fun recognize(bitmap: Bitmap): List<OcrItem> {
         return try {
             val inputImage = InputImage.fromBitmap(bitmap, 0)
@@ -62,9 +57,6 @@ class OcrRecognizer {
         }
     }
 
-    /**
-     * 在 OCR 結果中搜尋符合關鍵字清單且位於指定相對區域 (Normalized ROI) 內的文字區塊。
-     */
     fun findMatch(
         items: List<OcrItem>,
         keywords: List<String>,
@@ -88,7 +80,7 @@ class OcrRecognizer {
                 val cy = item.bounds.centerY()
                 if (FloatingOverlayService.isInsideOverlay(cx, cy)) return@firstOrNull false
 
-                // 避開頂部中間 dynamicSpot 動態島區域 (y < 4.5% 且 x 在 28%~72%)
+                // 避開頂部中間 dynamicSpot 動態島區域
                 val inDynamicIsland = cy < screenHeight * 0.045f &&
                     cx in (screenWidth * 0.28f).toInt()..(screenWidth * 0.72f).toInt()
                 if (inDynamicIsland) return@firstOrNull false
@@ -105,8 +97,28 @@ class OcrRecognizer {
     }
 
     /**
-     * 檢查目前廣告畫面是否仍在倒數計時中（例如「還有 14 秒」「12秒後可獲得獎勵」）。
+     * 判斷目前畫面是否為《LINE 散步趣》的主畫面（即尚未彈出全螢幕廣告或遮罩彈窗）。
+     * 重要：在主畫面時，下半部 (y = 0.45 ~ 0.90) 是內嵌橫幅廣告（如 Amazon Shopping 安裝），絕對不可點擊！
      */
+    fun isLineWalkMainScreenVisible(
+        items: List<OcrItem>,
+        screenWidth: Int,
+        screenHeight: Int
+    ): Boolean {
+        var score = 0
+        for (item in items) {
+            val t = item.text
+            val cy = item.bounds.centerY().toFloat() / screenHeight
+            if (cy < 0.48f && (t.contains("距離下次累積") || t.contains("獲得票券") || t == "賓果" || t == "抽抽樂" || t == "糖果")) {
+                score += 2
+            }
+            if (cy > 0.88f && (t == "集點" || t == "好友" || t == "精選")) {
+                score += 1
+            }
+        }
+        return score >= 2
+    }
+
     fun detectAdCountdownSeconds(items: List<OcrItem>, screenHeight: Int): Int? {
         val topBarThreshold = (screenHeight * 0.22f).toInt()
         for (item in items) {
@@ -131,15 +143,18 @@ class OcrRecognizer {
             RegexOption.IGNORE_CASE
         )
 
-        /** 遊戲內觸發看廣告的常見按鈕文字（務必搭配 GAMES_AD_EXCLUDE_KEYWORDS 排除『不看廣告』） */
+        /** 彈窗中觸發看廣告的常見按鈕文字（包含散步趣『看廣告獲得 5 張 / 看影片 / 2倍』） */
         val GAME_AD_TRIGGER_KEYWORDS = listOf(
-            "看廣告領取",
+            "看廣告",
             "觀看廣告",
             "觀看影片",
-            "看廣告",
             "看影片",
             "廣告領取",
-            "2倍領取",
+            "看廣告獲得",
+            "獲得 5",
+            "獲得5",
+            "5張",
+            "5 張",
             "2倍",
             "加倍",
             "再抽一次",
@@ -153,7 +168,10 @@ class OcrRecognizer {
             "跳過廣告",
             "關閉廣告",
             "賺點數",
-            "免費參加"
+            "免費參加",
+            "雙重獎勵",
+            "安裝",
+            "Amazon"
         )
 
         /** 遊戲內彈窗關閉、活動推銷略過（如『玩遊戲賺點數 -> 跳過』）與領獎確認文字 */
@@ -164,7 +182,6 @@ class OcrRecognizer {
             "確定",
             "收下",
             "關閉",
-            "領取",
             "好",
             "OK",
             "暫不",
@@ -184,10 +201,14 @@ class OcrRecognizer {
             "隱私權",
             "條款",
             "玩遊戲",
-            "完成任務"
+            "完成任務",
+            "雙重獎勵",
+            "LINE POINTS",
+            "安裝",
+            "下載"
         )
 
-        /** 廣告播放完畢或推銷畫面的略過/跳過/關閉文字（支援畫面頂部與底部） */
+        /** 廣告播放完畢或推銷畫面的略過/跳過/關閉文字 */
         val AD_CLOSE_OCR_KEYWORDS = listOf(
             "略過廣告",
             "跳過廣告",
@@ -215,7 +236,6 @@ class OcrRecognizer {
             "條款"
         )
 
-        /** 廣告「已獲得獎勵」提示文字 */
         val AD_REWARD_GRANTED_KEYWORDS = listOf(
             "已獲得獎勵",
             "獎勵已發放",

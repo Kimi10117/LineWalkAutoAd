@@ -22,6 +22,17 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
+      - name: Ensure Persistent Signing Keystore
+        run: |
+          if [ ! -f app/persistent.jks ]; then
+            keytool -genkeypair -v -keystore app/persistent.jks -alias linewalk -keyalg RSA -keysize 2048 -validity 10000 -storepass linewalk123 -keypass linewalk123 -dname "CN=LineWalkAutoAd, OU=Dev, O=LineWalk, L=Taipei, S=TW, C=TW"
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add app/persistent.jks
+            git commit -m "Lock persistent APK signing keystore [skip ci]"
+            git push origin HEAD:main || true
+          fi
+
       - name: Accept Android SDK Licenses
         run: |
           yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
@@ -44,11 +55,16 @@ jobs:
           path: LineWalkAutoAd.apk
           if-no-files-found: error
 
+      - name: Update Tag and Publish APK to GitHub Releases
+        run: |
+          git tag -f latest-apk
+          git push -f origin latest-apk || true
+        
       - name: Publish APK to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest-apk
-          name: "散步趣自動看廣告助手 APK (自動建置)"
-          body: "直接點擊下方 `LineWalkAutoAd.apk` 即可下載安裝至 Android 11+ 手機。"
+          name: "散步趣助手 v1.2 (最新自動建置 - Run #${{ github.run_number }})"
+          body: "✅ 版本：v1.2 (Run #${{ github.run_number }})`n- 內建自動辨識步數頁粉紅色『獲得票券』按鈕（免手動框選即可自動點開看廣告！）`n- 鎖定主畫面下半部內嵌橫幅廣告防誤觸保護（不會再點到主畫面底下的 Amazon 等安裝廣告跳去 Play 商店）`n- 鎖定永久數位簽章（安裝此版後，未來更新可直接覆蓋安裝免刪舊版）"
           files: LineWalkAutoAd.apk
           prerelease: false

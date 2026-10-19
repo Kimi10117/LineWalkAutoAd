@@ -9,16 +9,31 @@ android {
 
     defaultConfig {
         applicationId = "com.linewalk.autoad"
-        // Android 11 (API 30) required for AccessibilityService.takeScreenshot()
         minSdk = 30
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 2
+        versionName = "1.2.0"
+    }
+
+    signingConfigs {
+        getByName("debug") {
+            val persistentKey = file("persistent.jks")
+            if (persistentKey.exists()) {
+                storeFile = persistentKey
+                storePassword = "linewalk123"
+                keyAlias = "linewalk"
+                keyPassword = "linewalk123"
+            }
+        }
     }
 
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("debug")
+        }
         release {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("debug")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
