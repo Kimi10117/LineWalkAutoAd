@@ -17,13 +17,22 @@ class BingoTask {
 
     fun isEnabled(config: AppConfig): Boolean = config.enableBingoTask
 
-    fun isBingoDialogOpen(ocrItems: List<OcrItem>): Boolean {
+    fun isBingoDialogOpen(ocrItems: List<OcrItem>, sh: Int = 10000): Boolean {
         return ocrItems.any { item ->
-            item.bounds.top < 400 && (
-                item.text.contains("每日賓果") ||
-                item.text.contains("賓果格") ||
-                (item.text.contains("賓果") && item.text.contains("BINGO"))
-            )
+            val cy = item.bounds.centerY()
+            val t = item.text.trim()
+            (cy < sh * 0.35f && (
+                t.contains("每日賓果") ||
+                t.contains("今日賓果") ||
+                t.contains("賓果") ||
+                t.contains("開啟1格") ||
+                t.contains("開啟 1 格")
+            )) || (cy in (sh * 0.40f).toInt()..(sh * 0.88f).toInt() && (
+                t.contains("BINGO") ||
+                t.contains("OPEN") ||
+                t.contains("今日上限") ||
+                t.contains("COMPLETE")
+            ))
         }
     }
 
@@ -53,7 +62,8 @@ class BingoTask {
     }
 
     /**
-     * 尋找連線獎勵按鈕 (例如 1 BINGO 下方的紅底白字 [▶ Get] 或 [領取])
+     * 尋找連線獎勵按鈕 (例如 1 BINGO 下方的紅底白字 [▶ Get] 或 [領取])：
+     * 支援 4 大連線直欄 (1 BINGO, 3 BINGO, 5 BINGO, 8 BINGO) 之紅色膠囊按鈕精準偵測！
      */
     fun findConnectionRewardButton(
         screenBitmap: Bitmap,
@@ -62,54 +72,54 @@ class BingoTask {
         val sh = screenBitmap.height
         val sw = screenBitmap.width
 
-        // 1. OCR 尋找「Get / get / GET / ▶Get / 領取」
+        // 1. 優先：依序檢查 4 大 BINGO 連線欄位 (1 BINGO: 18%, 3 BINGO: 39%, 5 BINGO: 61%, 8 BINGO: 82%) 之紅色膠囊按鈕
+        val colCenters = listOf(0.18f, 0.39f, 0.61f, 0.82f)
+        for (cx in colCenters) {
+            val x1 = (sw * (cx - 0.085f)).toInt().coerceIn(0, sw - 1)
+            val x2 = (sw * (cx + 0.085f)).toInt().coerceIn(x1 + 1, sw)
+            val y1 = (sh * 0.805f).toInt().coerceIn(0, sh - 1)
+            val y2 = (sh * 0.885f).toInt().coerceIn(y1 + 1, sh)
+
+            val redPoints = mutableListOf<android.graphics.Point>()
+            var y = y1
+            while (y < y2) {
+                var x = x1
+                while (x < x2) {
+                    val c = screenBitmap.getPixel(x, y)
+                    val r = (c shr 16) and 0xFF
+                    val g = (c shr 8) and 0xFF
+                    val b = c and 0xFF
+                    // 紅色/珊瑚紅判定：R 顯著高於 G 與 B
+                    if (r > 160 && r > g + 40 && r > b + 40) {
+                        redPoints.add(android.graphics.Point(x, y))
+                    }
+                    x += 2
+                }
+                y += 2
+            }
+
+            if (redPoints.size >= 20) {
+                val minX = redPoints.minOf { it.x }
+                val maxX = redPoints.maxOf { it.x }
+                val minY = redPoints.minOf { it.y }
+                val maxY = redPoints.maxOf { it.y }
+                return Rect(minX, minY, maxX, maxY)
+            }
+        }
+
+        // 2. OCR 尋找「Get / get / GET / ▶Get / 領取」
         val match = ocrItems.firstOrNull { item ->
             val cy = item.bounds.centerY()
-            cy in (sh * 0.72f).toInt()..(sh * 0.90f).toInt() && (
+            cy in (sh * 0.75f).toInt()..(sh * 0.90f).toInt() && (
                 item.text.contains("Get", ignoreCase = true) ||
                 item.text.contains("Cet", ignoreCase = true) ||
+                item.text.contains("Qet", ignoreCase = true) ||
                 item.text.contains("領取") ||
                 item.text.contains("▶")
             ) && !item.text.contains("今日上限") && !item.text.contains("開啟")
         }
         if (match != null) {
             return match.bounds
-        }
-
-        // 2. 精確連通區域色彩辨識：連線獎勵按鈕為珊瑚粉紅/紅色 (R > 215, G < 100, B < 120) 橢圓膠囊按鈕
-        val yStart = (sh * 0.78f).toInt()
-        val yEnd = (sh * 0.88f).toInt()
-        val xStart = (sw * 0.05f).toInt()
-        val xEnd = (sw * 0.95f).toInt()
-
-        val matchingPoints = mutableListOf<android.graphics.Point>()
-        var y = yStart
-        while (y <= yEnd) {
-            var x = xStart
-            while (x <= xEnd) {
-                val c = screenBitmap.getPixel(x, y)
-                val r = (c shr 16) and 0xFF
-                val g = (c shr 8) and 0xFF
-                val b = c and 0xFF
-                if (r > 215 && g < 100 && b < 120) {
-                    matchingPoints.add(android.graphics.Point(x, y))
-                }
-                x += 3
-            }
-            y += 2
-        }
-
-        if (matchingPoints.size >= 25) {
-            val firstClusterXs = matchingPoints.map { it.x }.sorted()
-            val minX = firstClusterXs.first()
-            val buttonXs = firstClusterXs.takeWhile { it - minX < (sw * 0.22f) }
-            val maxX = buttonXs.last()
-
-            val buttonPoints = matchingPoints.filter { it.x in minX..maxX }
-            val minY = buttonPoints.minOf { it.y }
-            val maxY = buttonPoints.maxOf { it.y }
-
-            return Rect(minX, minY, maxX, maxY)
         }
 
         return null

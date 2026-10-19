@@ -298,13 +298,17 @@ class AdCloserHandler(
         return ocrItems.any { item ->
             val cy = item.bounds.centerY()
             val t = item.text.trim()
-            (cy < sh * 0.28f && (
+            (cy < sh * 0.35f && (
                 t.contains("每日賓果") ||
+                t.contains("今日賓果") ||
+                t.contains("賓果") ||
                 t.contains("好友排行榜") ||
                 t.contains("排行榜") ||
                 ((t == "禮物" || t == "禮物盒") && !t.contains("卡") && !t.contains("券") && !t.contains("超商")) ||
                 t.contains("抽抽樂") ||
                 t.contains("任務")
+            )) || (cy in (sh * 0.40f).toInt()..(sh * 0.88f).toInt() && (
+                t.contains("BINGO") || t.contains("今日上限") || t.contains("COMPLETE")
             )) || (cy > sh * 0.88f && (
                 t == "集點" || t == "好友" || t == "使用" || t == "精選"
             ))

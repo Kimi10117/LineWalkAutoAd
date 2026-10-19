@@ -317,14 +317,7 @@ class AutomationEngine private constructor(context: Context) {
             return
         }
 
-        // A. 最優先檢查：下半部是否已經彈出領獎彈窗（優先點可用的『跳過廣告(糖果)』，其次點『紅利 15/60/x1 獲得』）！
-        val existingPopupAction = findPopupActionTarget(screenBitmap, ocrItems)
-        if (existingPopupAction != null) {
-            executePopupAction(service, existingPopupAction)
-            return
-        }
-
-        // B. 次優先檢查：是否停留在看完廣告後的『獲得15張票券！ / 獲得金幣！』中央彈窗（下方有白色 [ 關閉 ] 按鈕）！
+        // A. 最優先檢查：是否停留在看完廣告後的『獲得15張票券！ / 獲得金幣！』中央彈窗（下方有白色 [ 關閉 ] 按鈕）！
         val modalCloseBtn = ocrRecognizer.findCenterRewardModalCloseButton(screenBitmap, ocrItems)
         if (modalCloseBtn != null) {
             emptyTicksOnCurrentTab = 0
@@ -339,7 +332,37 @@ class AutomationEngine private constructor(context: Context) {
             return
         }
 
-        // B2. 檢查是否停留在下半部彈窗（如獲得票券 / 獲得金幣）：
+        // B1. 優先檢查是否正在「每日賓果」彈窗
+        if (bingoTask.isBingoDialogOpen(ocrItems, sh)) {
+            handleBingoDialog(service, screenBitmap, ocrItems, sw, sh)
+            return
+        }
+
+        // B2. 檢查是否正在「抽抽樂」彈窗
+        if (lotteryTask.isLotteryDialogOpen(ocrItems)) {
+            handleLotteryDialog(service, screenBitmap, ocrItems, sw, sh)
+            return
+        }
+
+        // B3. 檢查是否正在「任務」彈窗
+        if (missionTask.isMissionDialogOpen(ocrItems)) {
+            handleMissionDialog(service, screenBitmap, ocrItems, sw, sh)
+            return
+        }
+
+        // B4. 檢查是否正在「接收禮物」彈窗
+        if (receiveGiftTask.isReceiveGiftDialogOpen(ocrItems, sh)) {
+            handleReceiveGiftDialog(service, screenBitmap, ocrItems, sw, sh)
+            return
+        }
+
+        // B5. 檢查是否正在底部導覽列「好友」頁面
+        if (friendGiftTask.isFriendsPage(ocrItems)) {
+            handleFriendsPage(service, screenBitmap, ocrItems, sw, sh)
+            return
+        }
+
+        // C. 檢查四大分頁下半部是否彈出領獎彈窗（優先點可用的『跳過廣告(糖果)』，其次點『紅利 15/60/x1 獲得』）！
         val popupAction = findPopupActionTarget(screenBitmap, ocrItems)
         if (popupAction != null) {
             executePopupAction(service, popupAction)
@@ -348,36 +371,6 @@ class AutomationEngine private constructor(context: Context) {
         val cancelBtn = ocrRecognizer.findPopupCancelButton(screenBitmap, ocrItems)
         if (cancelBtn != null) {
             handlePopupCooldownCancel(service, cancelBtn, sw, sh)
-            return
-        }
-
-        // C1. 檢查是否正在「每日賓果」彈窗
-        if (bingoTask.isBingoDialogOpen(ocrItems)) {
-            handleBingoDialog(service, screenBitmap, ocrItems, sw, sh)
-            return
-        }
-
-        // C2. 檢查是否正在「抽抽樂」彈窗
-        if (lotteryTask.isLotteryDialogOpen(ocrItems)) {
-            handleLotteryDialog(service, screenBitmap, ocrItems, sw, sh)
-            return
-        }
-
-        // C3. 檢查是否正在「任務」彈窗
-        if (missionTask.isMissionDialogOpen(ocrItems)) {
-            handleMissionDialog(service, screenBitmap, ocrItems, sw, sh)
-            return
-        }
-
-        // C4. 檢查是否正在「接收禮物」彈窗
-        if (receiveGiftTask.isReceiveGiftDialogOpen(ocrItems, sh)) {
-            handleReceiveGiftDialog(service, screenBitmap, ocrItems, sw, sh)
-            return
-        }
-
-        // C5. 檢查是否正在底部導覽列「好友」頁面
-        if (friendGiftTask.isFriendsPage(ocrItems)) {
-            handleFriendsPage(service, screenBitmap, ocrItems, sw, sh)
             return
         }
 
@@ -1205,7 +1198,7 @@ class AutomationEngine private constructor(context: Context) {
             if (t.contains("10")) return 10
             if (t.contains("5")) return 5
             if (t.contains("2倍") || t.contains("加倍")) return 2
-            if (t.contains("x1") || t.contains("×1") || t.contains("1獲得") || t.contains("x 1") || t.contains("× 1")) return 1
+            if (t.contains("x1獲得") || t.contains("×1獲得") || t.contains("1獲得") || t.contains("x 1 獲得") || t.contains("× 1 獲得") || t.contains("1 獲得")) return 1
             return 0
         }
 
@@ -1219,7 +1212,7 @@ class AutomationEngine private constructor(context: Context) {
             val cy = item.bounds.centerY()
             if (cy in roiTop..roiBottom && item.text.length <= 16) {
                 val matchesKeyword = OcrRecognizer.GAME_AD_TRIGGER_KEYWORDS.any { kw -> item.text.contains(kw, ignoreCase = true) }
-                val hasRewardWord = item.text.contains("獲得") || item.text.contains("金幣") || item.text.contains("票券") || item.text.contains("x1") || item.text.contains("×1")
+                val hasRewardWord = item.text.contains("獲得") || item.text.contains("金幣") || item.text.contains("票券") || item.text.contains("看廣告")
                 if ((matchesKeyword || hasRewardWord) &&
                     OcrRecognizer.GAME_AD_EXCLUDE_KEYWORDS.none { ex -> item.text.contains(ex, ignoreCase = true) } &&
                     !ocrRecognizer.isAreaInCooldown(ocrItems, cy - 20, cy + 20) &&
