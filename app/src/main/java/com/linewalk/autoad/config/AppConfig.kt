@@ -31,6 +31,26 @@ class AppConfig(context: Context) {
         get() = prefs.getBoolean(KEY_ENABLE_GACHA, true)
         set(value) = prefs.edit().putBoolean(KEY_ENABLE_GACHA, value).apply()
 
+    /** 每日賓果（自動開啟賓果格與領取連線獎勵） */
+    var enableBingoTask: Boolean
+        get() = prefs.getBoolean(KEY_ENABLE_BINGO, true)
+        set(value) = prefs.edit().putBoolean(KEY_ENABLE_BINGO, value).apply()
+
+    /** 抽抽樂（優先50抽 / 次選免費抽，嚴禁點5張） */
+    var enableLotteryTask: Boolean
+        get() = prefs.getBoolean(KEY_ENABLE_LOTTERY, true)
+        set(value) = prefs.edit().putBoolean(KEY_ENABLE_LOTTERY, value).apply()
+
+    /** 任務（自動檢查特別/每日/每週任務並領取） */
+    var enableDailyMissionTask: Boolean
+        get() = prefs.getBoolean(KEY_ENABLE_DAILY_MISSION, true)
+        set(value) = prefs.edit().putBoolean(KEY_ENABLE_DAILY_MISSION, value).apply()
+
+    /** 好友排行榜送禮（自動送所有好友禮物，優先送禮也送自己） */
+    var enableFriendGiftTask: Boolean
+        get() = prefs.getBoolean(KEY_ENABLE_FRIEND_GIFT, true)
+        set(value) = prefs.edit().putBoolean(KEY_ENABLE_FRIEND_GIFT, value).apply()
+
     /** 當彈窗沒有「看廣告」按鈕（例如廣告次數用盡或僅有一般領取）時，是否自動點一般領取 */
     var claimNormalWhenNoAd: Boolean
         get() = prefs.getBoolean(KEY_CLAIM_NORMAL_NO_AD, true)
@@ -62,6 +82,10 @@ class AppConfig(context: Context) {
         private const val KEY_ENABLE_MOVE_GAUGE = "enable_move_gauge"
         private const val KEY_ENABLE_IDLE_REWARD = "enable_idle_reward"
         private const val KEY_ENABLE_GACHA = "enable_game_tab_v15"
+        private const val KEY_ENABLE_BINGO = "enable_bingo_v18"
+        private const val KEY_ENABLE_LOTTERY = "enable_lottery_v18"
+        private const val KEY_ENABLE_DAILY_MISSION = "enable_daily_mission_v18"
+        private const val KEY_ENABLE_FRIEND_GIFT = "enable_friend_gift_v18"
         private const val KEY_CLAIM_NORMAL_NO_AD = "claim_normal_no_ad"
         private const val KEY_LOOP_INTERVAL_MS = "loop_interval_ms"
         private const val KEY_MAX_AD_WAIT_SEC = "max_ad_wait_sec"

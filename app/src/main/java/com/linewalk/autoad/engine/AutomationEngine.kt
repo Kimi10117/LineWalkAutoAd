@@ -7,9 +7,13 @@ import com.linewalk.autoad.config.AppConfig
 import com.linewalk.autoad.config.TemplateCategory
 import com.linewalk.autoad.config.TemplateStorage
 import com.linewalk.autoad.service.AutoAdAccessibilityService
+import com.linewalk.autoad.tasks.BingoTask
+import com.linewalk.autoad.tasks.FriendGiftTask
 import com.linewalk.autoad.tasks.GachaTask
 import com.linewalk.autoad.tasks.GameTask
 import com.linewalk.autoad.tasks.IdleRewardTask
+import com.linewalk.autoad.tasks.LotteryTask
+import com.linewalk.autoad.tasks.MissionTask
 import com.linewalk.autoad.tasks.MoveGaugeTask
 import com.linewalk.autoad.tasks.StepBottleTask
 import com.linewalk.autoad.ui.FloatingOverlayService
@@ -78,6 +82,15 @@ enum class MainTab(
     }
 }
 
+enum class PatrolPhase(val title: String) {
+    MAIN_TABS("四大分頁巡邏"),
+    BINGO("每日賓果"),
+    LOTTERY("抽抽樂"),
+    MISSION("任務"),
+    FRIEND_GIFT("好友送禮"),
+    COMPLETED("全任務完成")
+}
+
 class AutomationEngine private constructor(context: Context) {
 
     val config = AppConfig(context)
@@ -98,6 +111,10 @@ class AutomationEngine private constructor(context: Context) {
     private val moveTask = MoveGaugeTask()
     private val timeTask = IdleRewardTask()
     private val gameTask = GachaTask()
+    private val bingoTask = BingoTask()
+    private val lotteryTask = LotteryTask()
+    private val missionTask = MissionTask()
+    private val friendGiftTask = FriendGiftTask()
 
     /**
      * 嚴格分頁巡邏優先順序：
@@ -115,6 +132,15 @@ class AutomationEngine private constructor(context: Context) {
     private var emptyTicksOnCurrentTab = 0
     private val confirmedEmptyTabs = mutableSetOf<MainTab>()
 
+    private var currentPhase: PatrolPhase = PatrolPhase.MAIN_TABS
+    private var isBingoCompleted = false
+    private var isLotteryCompleted = false
+    private var isMissionCompleted = false
+    private var isFriendGiftCompleted = false
+    private val checkedMissionTabs = mutableSetOf<String>()
+    private var friendGiftEmptyTicks = 0
+    private var currentPhaseEmptyTicks = 0
+
     private val _uiStatus = MutableStateFlow(EngineUiStatus())
     val uiStatus: StateFlow<EngineUiStatus> = _uiStatus.asStateFlow()
 
@@ -130,12 +156,36 @@ class AutomationEngine private constructor(context: Context) {
         rewardClaimRetryTicks = 0
         emptyTicksOnCurrentTab = 0
         confirmedEmptyTabs.clear()
+        isBingoCompleted = false
+        isLotteryCompleted = false
+        isMissionCompleted = false
+        isFriendGiftCompleted = false
+        checkedMissionTabs.clear()
+        friendGiftEmptyTicks = 0
+        friendGiftTask.resetSession()
+        currentPhaseEmptyTicks = 0
         currentTab = tabPriorityOrder.firstOrNull { it.isEnabled(config) } ?: MainTab.MOVE
         needsInitialTabSync = true
+
+        currentPhase = if (tabPriorityOrder.any { it.isEnabled(config) }) {
+            PatrolPhase.MAIN_TABS
+        } else {
+            getNextPhase(PatrolPhase.MAIN_TABS)
+        }
+
+        val phaseDesc = when (currentPhase) {
+            PatrolPhase.MAIN_TABS -> "移動 ➔ 時間 ➔ 遊戲 ➔ 步數"
+            PatrolPhase.BINGO -> "每日賓果"
+            PatrolPhase.LOTTERY -> "抽抽樂"
+            PatrolPhase.MISSION -> "任務"
+            PatrolPhase.FRIEND_GIFT -> "好友送禮"
+            PatrolPhase.COMPLETED -> "已完成"
+        }
+
         transitionTo(
             newState = EngineState.IN_GAME_SCAN,
-            detail = "自動巡邏已啟動，優先順序：移動 ➔ 時間 ➔ 遊戲 ➔ 步數...",
-            safeOverlayText = "🔍 巡邏[移動➔時間➔遊戲➔步數]..."
+            detail = "全自動巡邏已啟動，首發階段：【$phaseDesc】...",
+            safeOverlayText = "🔍 巡邏[$phaseDesc]..."
         )
         _uiStatus.value = _uiStatus.value.copy(isRunning = true)
 
@@ -215,6 +265,25 @@ class AutomationEngine private constructor(context: Context) {
         val sw = screenBitmap.width
         val sh = screenBitmap.height
 
+        // 0. 防誤觸 AdChoices『ⓘ ▷』彈出的『Hide Ad / Report Ad / Why am I seeing this ad?』選單檢查
+        if (ocrRecognizer.isAdChoicesMenuOpen(ocrItems)) {
+            val backdropRect = Rect(
+                (sw * 0.40f).toInt(),
+                (sh * 0.25f).toInt(),
+                (sw * 0.60f).toInt(),
+                (sh * 0.35f).toInt()
+            )
+            appendLog("🛡️ 偵測到『Hide Ad / Report Ad』選單，自動點擊上方背景關閉並繼續監控廣告")
+            service.clickRect(backdropRect)
+            adCloserHandler.onEnterAdMode()
+            transitionTo(
+                EngineState.AD_WATCHING,
+                "已關閉 Hide Ad 選單，繼續等待廣告結束...",
+                "📺 監控廣告中..."
+            )
+            return
+        }
+
         // A. 最優先檢查：下半部是否已經彈出領獎彈窗（優先點可用的『跳過廣告(糖果)』，其次點『紅利 15/60/x1 獲得』）！
         val existingPopupAction = findPopupActionTarget(screenBitmap, ocrItems)
         if (existingPopupAction != null) {
@@ -237,149 +306,34 @@ class AutomationEngine private constructor(context: Context) {
             return
         }
 
-        // C. 判斷目前是否在乾淨的《LINE 散步趣》主畫面（涵蓋『首頁(移動)』『時間』『遊戲』『步數』四大分頁）
-        val onMainScreen = ocrRecognizer.isLineWalkMainScreenVisible(screenBitmap, ocrItems, templateMatcher)
-        if (onMainScreen) {
-            val enabledTabs = tabPriorityOrder.filter { it.isEnabled(config) }.ifEmpty { tabPriorityOrder }
-            val remainingTabs = enabledTabs.filter { it !in confirmedEmptyTabs }
-
-            if (remainingTabs.isEmpty()) {
-                val tabListStr = enabledTabs.joinToString("➔") { it.shortLabel }
-                stop("🎉 所有分頁 ($tabListStr) 獎勵皆已領取完畢！(共完成 ${_uiStatus.value.adsCompletedCount} 次)")
-                return
-            }
-
-            // 依優先順序（1.移動 ➔ 2.時間 ➔ 3.遊戲 ➔ 4.步數）決定當前應檢查的最高優先分頁
-            val desiredTab = remainingTabs.first()
-
-            // 若頂部分頁列未被懸浮窗遮擋，同步目前畫面上實際選取的分頁標籤
-            templateMatcher.detectActiveMainTabIndex(screenBitmap)?.let { idx ->
-                MainTab.fromIndex(idx)?.let { detectedTab ->
-                    currentTab = detectedTab
-                    if (currentTab == desiredTab) {
-                        needsInitialTabSync = false
-                    }
-                }
-            }
-
-            // 若剛啟動尚未同步分頁、或目前所在分頁不是最高優先順序的待檢查分頁，立即切換至 desiredTab！
-            if (needsInitialTabSync || currentTab != desiredTab) {
-                needsInitialTabSync = false
-                currentTab = desiredTab
-                emptyTicksOnCurrentTab = 0
-                val tabRect = Rect(
-                    (sw * (desiredTab.xRatio - 0.05f)).toInt(),
-                    (sh * 0.103f).toInt(),
-                    (sw * (desiredTab.xRatio + 0.05f)).toInt(),
-                    (sh * 0.128f).toInt()
-                )
-                appendLog("🔄 依優先順序切換至【${desiredTab.tabName}】...")
-                FloatingOverlayService.clickWithOverlayPassthrough(tabRect) {
-                    service.clickRect(tabRect)
-                }
-                updateDetail(
-                    "🔄 已切換至【${desiredTab.tabName}】，正在檢查獎勵...",
-                    "🔄 切換至[${desiredTab.shortLabel}]檢查中..."
-                )
-                return
-            }
-
-            val currentTask: GameTask = when (currentTab) {
-                MainTab.MOVE -> moveTask
-                MainTab.TIME -> timeTask
-                MainTab.GAME -> gameTask
-                MainTab.STEP -> stepTask
-            }
-
-            val target = if (currentTask.isEnabled(config)) {
-                currentTask.findTargetOnScreen(
-                    screenBitmap = screenBitmap,
-                    ocrItems = ocrItems,
-                    config = config,
-                    templateStorage = templateStorage,
-                    templateMatcher = templateMatcher,
-                    ocrRecognizer = ocrRecognizer
-                )
-            } else {
-                null
-            }
-
-            if (target != null) {
-                emptyTicksOnCurrentTab = 0
-                confirmedEmptyTabs.remove(currentTab)
-                val newTaskCount = _uiStatus.value.tasksTriggeredCount + 1
-                _uiStatus.value = _uiStatus.value.copy(tasksTriggeredCount = newTaskCount)
-                appendLog("🎯【${currentTab.tabName}】點擊: ${target.targetLabel}")
-                FloatingOverlayService.clickWithOverlayPassthrough(target.bounds) {
-                    service.clickRect(target.bounds)
-                }
-                popupRetryTicks = 0
-                transitionTo(
-                    EngineState.TRIGGER_AD_POPUP,
-                    "已點擊 ${target.targetLabel}，等待『跳過廣告 / 紅利獲得』彈窗...",
-                    "⏳ 等待彈窗出現..."
-                )
-                return
-            }
-
-            // 本分頁目前沒有亮起的可領取獎勵按鈕
-            emptyTicksOnCurrentTab++
-            if (emptyTicksOnCurrentTab < 2) {
-                updateDetail(
-                    "🔍 正在檢查【${currentTab.tabName}】是否有可領取獎勵 ($emptyTicksOnCurrentTab/2)...",
-                    "🔍 檢查[${currentTab.shortLabel}] ($emptyTicksOnCurrentTab/2)..."
-                )
-                return
-            }
-
-            // 連續 2 次確認本分頁已無可領取項目 -> 標記本分頁已完成並依優先順序（移動➔時間➔遊戲➔步數）切換至下一分頁！
-            emptyTicksOnCurrentTab = 0
-            confirmedEmptyTabs.add(currentTab)
-
-            val nextRemainingTabs = enabledTabs.filter { it !in confirmedEmptyTabs }
-            if (nextRemainingTabs.isEmpty()) {
-                val tabListStr = enabledTabs.joinToString("➔") { it.shortLabel }
-                stop("🎉 所有分頁 ($tabListStr) 獎勵皆已領取完畢！(共完成 ${_uiStatus.value.adsCompletedCount} 次)")
-                return
-            }
-
-            val nextTab = nextRemainingTabs.first()
-            val remainOrderStr = nextRemainingTabs.joinToString("➔") { it.shortLabel }
-            val tabRect = Rect(
-                (sw * (nextTab.xRatio - 0.05f)).toInt(),
-                (sh * 0.103f).toInt(),
-                (sw * (nextTab.xRatio + 0.05f)).toInt(),
-                (sh * 0.128f).toInt()
-            )
-            appendLog("🔄【${currentTab.tabName}】已領完，依序切換至【${nextTab.tabName}】(待檢查:$remainOrderStr)")
-            currentTab = nextTab
-            FloatingOverlayService.clickWithOverlayPassthrough(tabRect) {
-                service.clickRect(tabRect)
-            }
-            updateDetail(
-                "🔄 已切換至【${nextTab.tabName}】，正在檢查獎勵...",
-                "🔄 切換至[${nextTab.shortLabel}]檢查中..."
-            )
+        // C1. 檢查是否正在「每日賓果」彈窗
+        if (bingoTask.isBingoDialogOpen(ocrItems)) {
+            handleBingoDialog(service, screenBitmap, ocrItems, sw, sh)
             return
         }
 
-        // D0. 若畫面正停留在誤觸 AdChoices『ⓘ ▷』彈出的『Hide Ad / Report Ad / Why am I seeing this ad?』選單，
-        // 立即點擊上方半透明遮罩關閉選單，並切回廣告監控狀態！
-        if (ocrRecognizer.isAdChoicesMenuOpen(ocrItems)) {
-            val backdropRect = Rect(
-                (sw * 0.40f).toInt(),
-                (sh * 0.25f).toInt(),
-                (sw * 0.60f).toInt(),
-                (sh * 0.35f).toInt()
-            )
-            appendLog("🛡️ 偵測到『Hide Ad / Report Ad』選單，自動點擊上方背景關閉並繼續監控廣告")
-            service.clickRect(backdropRect)
-            adCloserHandler.onEnterAdMode()
-            transitionTo(
-                EngineState.AD_WATCHING,
-                "已關閉 Hide Ad 選單，繼續等待廣告結束...",
-                "📺 監控廣告中..."
-            )
+        // C2. 檢查是否正在「抽抽樂」彈窗
+        if (lotteryTask.isLotteryDialogOpen(ocrItems)) {
+            handleLotteryDialog(service, screenBitmap, ocrItems, sw, sh)
+            return
+        }
+
+        // C3. 檢查是否正在「任務」彈窗
+        if (missionTask.isMissionDialogOpen(ocrItems)) {
+            handleMissionDialog(service, screenBitmap, ocrItems, sw, sh)
+            return
+        }
+
+        // C4. 檢查是否正在底部導覽列「好友」頁面
+        if (friendGiftTask.isFriendsPage(ocrItems)) {
+            handleFriendsPage(service, screenBitmap, ocrItems, sw, sh)
+            return
+        }
+
+        // C5. 判斷目前是否在乾淨的《LINE 散步趣》主畫面（涵蓋『首頁(移動)』『時間』『遊戲』『步數』四大分頁）
+        val onMainScreen = ocrRecognizer.isLineWalkMainScreenVisible(screenBitmap, ocrItems, templateMatcher)
+        if (onMainScreen) {
+            handleMainScreenPatrol(service, screenBitmap, ocrItems, sw, sh)
             return
         }
 
@@ -425,6 +379,415 @@ class AutomationEngine private constructor(context: Context) {
             "🔍 正在搜尋可領取目標或關閉按鈕... (已完成 ${_uiStatus.value.adsCompletedCount} 次)",
             "🔍 搜尋畫面目標中..."
         )
+    }
+
+    private suspend fun handleBingoDialog(
+        service: AutoAdAccessibilityService,
+        screenBitmap: android.graphics.Bitmap,
+        ocrItems: List<OcrItem>,
+        sw: Int,
+        sh: Int
+    ) {
+        // 1. 優先檢查是否有連線獎勵按鈕 (例如 1 BINGO 下方的紅底白字 [▶ Get] 或 [領取])
+        val rewardBtn = bingoTask.findConnectionRewardButton(screenBitmap, ocrItems)
+        if (rewardBtn != null) {
+            currentPhaseEmptyTicks = 0
+            appendLog("🎯【每日賓果】點擊領取連線獎勵！")
+            FloatingOverlayService.clickWithOverlayPassthrough(rewardBtn) {
+                service.clickRect(rewardBtn)
+            }
+            adCloserHandler.onEnterAdMode()
+            transitionTo(EngineState.AD_WATCHING, "已領取賓果連線獎勵，等待廣告/獎勵確認...", "📺 廣告監控中...")
+            return
+        }
+
+        // 2. 檢查是否有橘色「立即開啟賓果格」按鈕
+        val openCellBtn = bingoTask.findOpenCellButton(screenBitmap, ocrItems, templateMatcher)
+        if (openCellBtn != null) {
+            currentPhaseEmptyTicks = 0
+            appendLog("🎯【每日賓果】點擊「立即開啟賓果格」！")
+            FloatingOverlayService.clickWithOverlayPassthrough(openCellBtn) {
+                service.clickRect(openCellBtn)
+            }
+            transitionTo(EngineState.TRIGGER_AD_POPUP, "開啟賓果格中...", "⏳ 處理中...")
+            return
+        }
+
+        // 3. 連續 2 次未偵測到可執行項目 (冷卻中或無連線獎勵) -> 關閉賓果彈窗並前往下一階段
+        currentPhaseEmptyTicks++
+        if (currentPhaseEmptyTicks < 2) {
+            updateDetail("🔍 檢查每日賓果可開格/連線獎勵中 ($currentPhaseEmptyTicks/2)...", "🔍 檢查賓果中...")
+            return
+        }
+
+        currentPhaseEmptyTicks = 0
+        isBingoCompleted = true
+        appendLog("✅【每日賓果】檢查完畢，點擊右上角關閉視窗")
+        val closeBtn = bingoTask.getCloseButtonBounds(sw, sh)
+        FloatingOverlayService.clickWithOverlayPassthrough(closeBtn) {
+            service.clickRect(closeBtn)
+        }
+        currentPhase = getNextPhase(PatrolPhase.BINGO)
+        updateDetail("✅ 每日賓果已完成，準備進入下一項...", "✅ 賓果完成")
+    }
+
+    private suspend fun handleLotteryDialog(
+        service: AutoAdAccessibilityService,
+        screenBitmap: android.graphics.Bitmap,
+        ocrItems: List<OcrItem>,
+        sw: Int,
+        sh: Int
+    ) {
+        // 依使用者規則尋找：【優先50抽】➔【次選免費抽】➔【嚴禁點5張】
+        val drawTarget = lotteryTask.findTargetDrawButton(screenBitmap, ocrItems, templateMatcher)
+        if (drawTarget != null) {
+            currentPhaseEmptyTicks = 0
+            appendLog("🎰【抽抽樂】依規則點擊：${drawTarget.first}")
+            FloatingOverlayService.clickWithOverlayPassthrough(drawTarget.second) {
+                service.clickRect(drawTarget.second)
+            }
+            adCloserHandler.onEnterAdMode()
+            transitionTo(EngineState.AD_WATCHING, "已點擊 ${drawTarget.first}，觀看廣告/等待抽獎...", "🎰 抽獎中...")
+            return
+        }
+
+        // 兩次檢查確認 50 抽與免費抽皆不可點 (50 抽已無次數/票券不足，且免費抽已完成，且嚴格不點 5 抽)
+        currentPhaseEmptyTicks++
+        if (currentPhaseEmptyTicks < 2) {
+            updateDetail("🔍 檢查抽抽樂可抽項目 ($currentPhaseEmptyTicks/2)...", "🎰 檢查抽抽樂...")
+            return
+        }
+
+        currentPhaseEmptyTicks = 0
+        isLotteryCompleted = true
+        appendLog("✅【抽抽樂】已無可抽項目 (50抽已滿或票券不足，免費抽已完成，且絕不點5張)，關閉視窗")
+        val closeBtn = lotteryTask.getCloseButtonBounds(sw, sh)
+        FloatingOverlayService.clickWithOverlayPassthrough(closeBtn) {
+            service.clickRect(closeBtn)
+        }
+        currentPhase = getNextPhase(PatrolPhase.LOTTERY)
+        updateDetail("✅ 抽抽樂已完成，準備進入下一項...", "✅ 抽抽樂完成")
+    }
+
+    private suspend fun handleMissionDialog(
+        service: AutoAdAccessibilityService,
+        screenBitmap: android.graphics.Bitmap,
+        ocrItems: List<OcrItem>,
+        sw: Int,
+        sh: Int
+    ) {
+        // 1. 尋找清單中綠色「領取」按鈕 (排除「挑戰」)
+        val claimBtn = missionTask.findClaimableMissionButton(screenBitmap, ocrItems)
+        if (claimBtn != null) {
+            currentPhaseEmptyTicks = 0
+            appendLog("🎯【任務】點擊綠色「領取」按鈕！")
+            FloatingOverlayService.clickWithOverlayPassthrough(claimBtn) {
+                service.clickRect(claimBtn)
+            }
+            return
+        }
+
+        // 2. 當前分頁無可領取項目，依序切換檢查「每日」➔「每週」➔「特別」
+        if ("每日" !in checkedMissionTabs) {
+            checkedMissionTabs.add("每日")
+            appendLog("🔄【任務】切換至【每週】分頁檢查...")
+            val tabRect = missionTask.getTabRect("每週", sw, sh)
+            FloatingOverlayService.clickWithOverlayPassthrough(tabRect) {
+                service.clickRect(tabRect)
+            }
+            return
+        }
+
+        if ("每週" !in checkedMissionTabs) {
+            checkedMissionTabs.add("每週")
+            appendLog("🔄【任務】切換至【特別】分頁檢查...")
+            val tabRect = missionTask.getTabRect("特別", sw, sh)
+            FloatingOverlayService.clickWithOverlayPassthrough(tabRect) {
+                service.clickRect(tabRect)
+            }
+            return
+        }
+
+        // 3. 所有分頁皆已檢查完畢
+        isMissionCompleted = true
+        appendLog("✅【任務】所有分頁任務皆已檢查領取完畢，關閉視窗")
+        val closeBtn = missionTask.getCloseButtonBounds(sw, sh)
+        FloatingOverlayService.clickWithOverlayPassthrough(closeBtn) {
+            service.clickRect(closeBtn)
+        }
+        currentPhase = getNextPhase(PatrolPhase.MISSION)
+        updateDetail("✅ 任務已檢查完畢，準備進入下一項...", "✅ 任務完成")
+    }
+
+    private suspend fun handleFriendsPage(
+        service: AutoAdAccessibilityService,
+        screenBitmap: android.graphics.Bitmap,
+        ocrItems: List<OcrItem>,
+        sw: Int,
+        sh: Int
+    ) {
+        // 1. 最優先檢查：是否跳出送禮確認彈窗（使用者指定：【都以送禮物也送自己為主】！）
+        val selfGiftOption = friendGiftTask.findSelfGiftButton(ocrItems)
+        if (selfGiftOption != null) {
+            appendLog("🎁【好友送禮】點擊【${selfGiftOption.first}】(優先送禮物也送自己)！")
+            FloatingOverlayService.clickWithOverlayPassthrough(selfGiftOption.second) {
+                service.clickRect(selfGiftOption.second)
+            }
+            if (selfGiftOption.first.contains("看廣告") || selfGiftOption.first.contains("送自己")) {
+                adCloserHandler.onEnterAdMode()
+                transitionTo(EngineState.AD_WATCHING, "送禮物也送自己，觀看廣告中...", "📺 廣告監控中...")
+            }
+            return
+        }
+
+        // 2. 搜尋畫面上是否有未贈送的綠色「禮物」按鈕
+        val nextGiftBtn = friendGiftTask.findNextGiftButton(screenBitmap, ocrItems)
+        if (nextGiftBtn != null) {
+            friendGiftEmptyTicks = 0
+            friendGiftTask.markGifted(android.graphics.Point(nextGiftBtn.centerX(), nextGiftBtn.centerY()))
+            appendLog("🎁【好友送禮】點擊好友排行榜禮物按鈕！")
+            FloatingOverlayService.clickWithOverlayPassthrough(nextGiftBtn) {
+                service.clickRect(nextGiftBtn)
+            }
+            return
+        }
+
+        // 3. 畫面上沒有禮物按鈕了，向下滾動清單搜尋更多好友！
+        friendGiftEmptyTicks++
+        if (friendGiftEmptyTicks <= 2) {
+            appendLog("📜【好友送禮】向下滾動清單搜尋更多好友 ($friendGiftEmptyTicks/2)...")
+            service.performSwipe(
+                startX = sw * 0.50f,
+                startY = sh * 0.70f,
+                endX = sw * 0.50f,
+                endY = sh * 0.35f,
+                durationMs = 380L
+            )
+            return
+        }
+
+        // 4. 連續兩次滾動皆無新禮物按鈕 -> 代表所有好友皆已贈送完畢！
+        isFriendGiftCompleted = true
+        appendLog("🎉【好友送禮】所有好友禮物皆已贈送完畢！自動點擊底部「集點」返回首頁")
+        val mainTabBtn = friendGiftTask.getBottomMainTabRect(sw, sh)
+        FloatingOverlayService.clickWithOverlayPassthrough(mainTabBtn) {
+            service.clickRect(mainTabBtn)
+        }
+        currentPhase = getNextPhase(PatrolPhase.FRIEND_GIFT)
+        updateDetail("🎉 好友送禮全部完成，返回首頁中...", "🎉 好友送禮完成")
+    }
+
+    private suspend fun handleMainScreenPatrol(
+        service: AutoAdAccessibilityService,
+        screenBitmap: android.graphics.Bitmap,
+        ocrItems: List<OcrItem>,
+        sw: Int,
+        sh: Int
+    ) {
+        when (currentPhase) {
+            PatrolPhase.MAIN_TABS -> {
+                val enabledTabs = tabPriorityOrder.filter { it.isEnabled(config) }.ifEmpty { tabPriorityOrder }
+                val remainingTabs = enabledTabs.filter { it !in confirmedEmptyTabs }
+
+                if (remainingTabs.isEmpty()) {
+                    val tabListStr = enabledTabs.joinToString("➔") { it.shortLabel }
+                    appendLog("🎉 四大分頁 ($tabListStr) 常規獎勵皆已領取完畢！(共完成 ${_uiStatus.value.adsCompletedCount} 次)")
+                    currentPhase = getNextPhase(PatrolPhase.MAIN_TABS)
+                    return
+                }
+
+                // 依優先順序（1.移動 ➔ 2.時間 ➔ 3.遊戲 ➔ 4.步數）決定當前應檢查的最高優先分頁
+                val desiredTab = remainingTabs.first()
+
+                templateMatcher.detectActiveMainTabIndex(screenBitmap)?.let { idx ->
+                    MainTab.fromIndex(idx)?.let { detectedTab ->
+                        currentTab = detectedTab
+                        if (currentTab == desiredTab) {
+                            needsInitialTabSync = false
+                        }
+                    }
+                }
+
+                if (needsInitialTabSync || currentTab != desiredTab) {
+                    needsInitialTabSync = false
+                    currentTab = desiredTab
+                    emptyTicksOnCurrentTab = 0
+                    val tabRect = Rect(
+                        (sw * (desiredTab.xRatio - 0.05f)).toInt(),
+                        (sh * 0.103f).toInt(),
+                        (sw * (desiredTab.xRatio + 0.05f)).toInt(),
+                        (sh * 0.128f).toInt()
+                    )
+                    appendLog("🔄 依優先順序切換至【${desiredTab.tabName}】...")
+                    FloatingOverlayService.clickWithOverlayPassthrough(tabRect) {
+                        service.clickRect(tabRect)
+                    }
+                    updateDetail(
+                        "🔄 已切換至【${desiredTab.tabName}】，正在檢查獎勵...",
+                        "🔄 切換至[${desiredTab.shortLabel}]檢查中..."
+                    )
+                    return
+                }
+
+                val currentTask: GameTask = when (currentTab) {
+                    MainTab.MOVE -> moveTask
+                    MainTab.TIME -> timeTask
+                    MainTab.GAME -> gameTask
+                    MainTab.STEP -> stepTask
+                }
+
+                val target = if (currentTask.isEnabled(config)) {
+                    currentTask.findTargetOnScreen(
+                        screenBitmap = screenBitmap,
+                        ocrItems = ocrItems,
+                        config = config,
+                        templateStorage = templateStorage,
+                        templateMatcher = templateMatcher,
+                        ocrRecognizer = ocrRecognizer
+                    )
+                } else {
+                    null
+                }
+
+                if (target != null) {
+                    emptyTicksOnCurrentTab = 0
+                    confirmedEmptyTabs.remove(currentTab)
+                    val newTaskCount = _uiStatus.value.tasksTriggeredCount + 1
+                    _uiStatus.value = _uiStatus.value.copy(tasksTriggeredCount = newTaskCount)
+                    appendLog("🎯【${currentTab.tabName}】點擊: ${target.targetLabel}")
+                    FloatingOverlayService.clickWithOverlayPassthrough(target.bounds) {
+                        service.clickRect(target.bounds)
+                    }
+                    popupRetryTicks = 0
+                    transitionTo(
+                        EngineState.TRIGGER_AD_POPUP,
+                        "已點擊 ${target.targetLabel}，等待『跳過廣告 / 紅利獲得』彈窗...",
+                        "⏳ 等待彈窗出現..."
+                    )
+                    return
+                }
+
+                // 本分頁目前沒有亮起的可領取獎勵按鈕
+                emptyTicksOnCurrentTab++
+                if (emptyTicksOnCurrentTab < 2) {
+                    updateDetail(
+                        "🔍 正在檢查【${currentTab.tabName}】是否有可領取獎勵 ($emptyTicksOnCurrentTab/2)...",
+                        "🔍 檢查[${currentTab.shortLabel}] ($emptyTicksOnCurrentTab/2)..."
+                    )
+                    return
+                }
+
+                // 連續 2 次確認本分頁已無可領取項目
+                emptyTicksOnCurrentTab = 0
+                confirmedEmptyTabs.add(currentTab)
+
+                val nextRemainingTabs = enabledTabs.filter { it !in confirmedEmptyTabs }
+                if (nextRemainingTabs.isEmpty()) {
+                    val tabListStr = enabledTabs.joinToString("➔") { it.shortLabel }
+                    appendLog("🎉 四大分頁 ($tabListStr) 常規獎勵皆已領取完畢！")
+                    currentPhase = getNextPhase(PatrolPhase.MAIN_TABS)
+                    return
+                }
+
+                val nextTab = nextRemainingTabs.first()
+                val remainOrderStr = nextRemainingTabs.joinToString("➔") { it.shortLabel }
+                val tabRect = Rect(
+                    (sw * (nextTab.xRatio - 0.05f)).toInt(),
+                    (sh * 0.103f).toInt(),
+                    (sw * (nextTab.xRatio + 0.05f)).toInt(),
+                    (sh * 0.128f).toInt()
+                )
+                appendLog("🔄【${currentTab.tabName}】已領完，依序切換至【${nextTab.tabName}】(待檢查:$remainOrderStr)")
+                currentTab = nextTab
+                FloatingOverlayService.clickWithOverlayPassthrough(tabRect) {
+                    service.clickRect(tabRect)
+                }
+                updateDetail(
+                    "🔄 已切換至【${nextTab.tabName}】，正在檢查獎勵...",
+                    "🔄 切換至[${nextTab.shortLabel}]檢查中..."
+                )
+            }
+
+            PatrolPhase.BINGO -> {
+                if (!config.enableBingoTask || isBingoCompleted) {
+                    currentPhase = getNextPhase(PatrolPhase.BINGO)
+                    return
+                }
+                appendLog("🎯 點擊主畫面【每日賓果】圖示按鈕...")
+                val iconRect = bingoTask.getMainScreenBingoIconRect(sw, sh, ocrItems)
+                FloatingOverlayService.clickWithOverlayPassthrough(iconRect) {
+                    service.clickRect(iconRect)
+                }
+                updateDetail("🎯 開啟【每日賓果】視窗中...", "🎯 開啟每日賓果...")
+            }
+
+            PatrolPhase.LOTTERY -> {
+                if (!config.enableLotteryTask || isLotteryCompleted) {
+                    currentPhase = getNextPhase(PatrolPhase.LOTTERY)
+                    return
+                }
+                appendLog("🎰 點擊主畫面【抽抽樂】圖示按鈕...")
+                val iconRect = lotteryTask.getMainScreenLotteryIconRect(sw, sh, ocrItems)
+                FloatingOverlayService.clickWithOverlayPassthrough(iconRect) {
+                    service.clickRect(iconRect)
+                }
+                updateDetail("🎰 開啟【抽抽樂】視窗中...", "🎰 開啟抽抽樂...")
+            }
+
+            PatrolPhase.MISSION -> {
+                if (!config.enableDailyMissionTask || isMissionCompleted) {
+                    currentPhase = getNextPhase(PatrolPhase.MISSION)
+                    return
+                }
+                appendLog("🎯 點擊主畫面【任務】圖示按鈕...")
+                val iconRect = missionTask.getMainScreenMissionIconRect(sw, sh, ocrItems)
+                FloatingOverlayService.clickWithOverlayPassthrough(iconRect) {
+                    service.clickRect(iconRect)
+                }
+                updateDetail("🎯 開啟【任務】視窗中...", "🎯 開啟任務...")
+            }
+
+            PatrolPhase.FRIEND_GIFT -> {
+                if (!config.enableFriendGiftTask || isFriendGiftCompleted) {
+                    currentPhase = getNextPhase(PatrolPhase.FRIEND_GIFT)
+                    return
+                }
+                appendLog("🎁 點擊底部導覽列【好友】按鈕...")
+                val friendsTab = friendGiftTask.getBottomFriendsTabRect(sw, sh)
+                FloatingOverlayService.clickWithOverlayPassthrough(friendsTab) {
+                    service.clickRect(friendsTab)
+                }
+                updateDetail("🎁 進入【好友排行榜】送禮中...", "🎁 進入好友...")
+            }
+
+            PatrolPhase.COMPLETED -> {
+                stop("🎉 全日任務與巡邏獎勵皆已領取完畢！（四大分頁/每日賓果/抽抽樂/任務/好友送禮）")
+            }
+        }
+    }
+
+    private fun getNextPhase(after: PatrolPhase): PatrolPhase {
+        val phaseList = listOf(
+            PatrolPhase.MAIN_TABS,
+            PatrolPhase.BINGO,
+            PatrolPhase.LOTTERY,
+            PatrolPhase.MISSION,
+            PatrolPhase.FRIEND_GIFT
+        )
+        val startIdx = phaseList.indexOf(after) + 1
+        for (i in startIdx until phaseList.size) {
+            val p = phaseList[i]
+            val isEnabled = when (p) {
+                PatrolPhase.MAIN_TABS -> tabPriorityOrder.any { it.isEnabled(config) }
+                PatrolPhase.BINGO -> config.enableBingoTask && !isBingoCompleted
+                PatrolPhase.LOTTERY -> config.enableLotteryTask && !isLotteryCompleted
+                PatrolPhase.MISSION -> config.enableDailyMissionTask && !isMissionCompleted
+                PatrolPhase.FRIEND_GIFT -> config.enableFriendGiftTask && !isFriendGiftCompleted
+                PatrolPhase.COMPLETED -> false
+            }
+            if (isEnabled) return p
+        }
+        return PatrolPhase.COMPLETED
     }
 
     private suspend fun handleTriggerAdPopup(

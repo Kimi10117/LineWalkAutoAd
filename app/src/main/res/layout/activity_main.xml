@@ -22,7 +22,7 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="散步趣助手 v1.7 (LINE 散步趣專用)"
+                android:text="散步趣助手 v1.8 (LINE 散步趣專用)"
                 android:textColor="@color/card_white"
                 android:textSize="20sp"
                 android:textStyle="bold" />
@@ -183,6 +183,49 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:text="4.【步數】集滿水瓶領取票券獎勵（第四順位）"
+                android:textColor="@color/text_primary" />
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:layout_marginVertical="8dp"
+                android:background="#E2E8F0" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="▼ 獲得金幣下方功能與好友任務"
+                android:textColor="@color/line_green"
+                android:textSize="14sp"
+                android:textStyle="bold" />
+
+            <CheckBox
+                android:id="@+id/cbBingoTask"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="5.【每日賓果】開啟賓果格與領取連線獎勵（第五順位）"
+                android:textColor="@color/text_primary" />
+
+            <CheckBox
+                android:id="@+id/cbLotteryTask"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="6.【抽抽樂】優先50抽 / 次選免費抽（嚴禁點5張）"
+                android:textColor="@color/text_primary" />
+
+            <CheckBox
+                android:id="@+id/cbDailyMissionTask"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="7.【任務】檢查特別/每日/每週任務並領取獎勵（第七順位）"
+                android:textColor="@color/text_primary" />
+
+            <CheckBox
+                android:id="@+id/cbFriendGiftTask"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="8.【好友送禮】好友排行榜逐一送禮（優先送禮也送自己）"
                 android:textColor="@color/text_primary" />
 
             <View

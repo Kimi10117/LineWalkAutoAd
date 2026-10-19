@@ -178,6 +178,41 @@ class AutoAdAccessibilityService : AccessibilityService() {
         }
 
     /**
+     * 在螢幕上派發平滑滑動手勢 (例如在好友排行榜向下滾動清單)。
+     */
+    suspend fun performSwipe(
+        startX: Float,
+        startY: Float,
+        endX: Float,
+        endY: Float,
+        durationMs: Long = 320L
+    ): Boolean = suspendCancellableCoroutine { cont ->
+        val path = Path().apply {
+            moveTo(startX, startY)
+            lineTo(endX, endY)
+        }
+        val stroke = GestureDescription.StrokeDescription(path, 0L, durationMs)
+        val gesture = GestureDescription.Builder().addStroke(stroke).build()
+
+        val dispatched = dispatchGesture(
+            gesture,
+            object : GestureResultCallback() {
+                override fun onCompleted(gestureDescription: GestureDescription?) {
+                    if (cont.isActive) cont.resume(true)
+                }
+
+                override fun onCancelled(gestureDescription: GestureDescription?) {
+                    if (cont.isActive) cont.resume(false)
+                }
+            },
+            null
+        )
+        if (!dispatched && cont.isActive) {
+            cont.resume(false)
+        }
+    }
+
+    /**
      * 觸發系統返回鍵 (用於從 Google Play 商店、外部瀏覽器或卡死廣告退回遊戲)。
      */
     fun navigateBack(): Boolean {

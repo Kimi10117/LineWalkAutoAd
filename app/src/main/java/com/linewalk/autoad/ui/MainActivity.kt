@@ -51,6 +51,10 @@ class MainActivity : AppCompatActivity() {
         binding.cbMoveGauge.isChecked = cfg.enableMoveGaugeTask
         binding.cbIdleReward.isChecked = cfg.enableIdleRewardTask
         binding.cbGachaTask.isChecked = cfg.enableGachaTask
+        binding.cbBingoTask.isChecked = cfg.enableBingoTask
+        binding.cbLotteryTask.isChecked = cfg.enableLotteryTask
+        binding.cbDailyMissionTask.isChecked = cfg.enableDailyMissionTask
+        binding.cbFriendGiftTask.isChecked = cfg.enableFriendGiftTask
         binding.cbClaimNormalWhenNoAd.isChecked = cfg.claimNormalWhenNoAd
 
         binding.cbStepBottle.setOnCheckedChangeListener { _, isChecked ->
@@ -64,6 +68,18 @@ class MainActivity : AppCompatActivity() {
         }
         binding.cbGachaTask.setOnCheckedChangeListener { _, isChecked ->
             cfg.enableGachaTask = isChecked
+        }
+        binding.cbBingoTask.setOnCheckedChangeListener { _, isChecked ->
+            cfg.enableBingoTask = isChecked
+        }
+        binding.cbLotteryTask.setOnCheckedChangeListener { _, isChecked ->
+            cfg.enableLotteryTask = isChecked
+        }
+        binding.cbDailyMissionTask.setOnCheckedChangeListener { _, isChecked ->
+            cfg.enableDailyMissionTask = isChecked
+        }
+        binding.cbFriendGiftTask.setOnCheckedChangeListener { _, isChecked ->
+            cfg.enableFriendGiftTask = isChecked
         }
         binding.cbClaimNormalWhenNoAd.setOnCheckedChangeListener { _, isChecked ->
             cfg.claimNormalWhenNoAd = isChecked
