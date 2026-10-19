@@ -15,9 +15,6 @@ data class OcrItem(
     val bounds: Rect
 )
 
-/**
- * 第二層辨識：Google ML Kit 離線中英文 OCR 辨識器 (OcrRecognizer)。
- */
 class OcrRecognizer {
 
     private val recognizer = TextRecognition.getClient(
@@ -63,7 +60,8 @@ class OcrRecognizer {
         screenWidth: Int,
         screenHeight: Int,
         roiNormalized: RectF? = null,
-        excludeKeywords: List<String> = emptyList()
+        excludeKeywords: List<String> = emptyList(),
+        maxTextLength: Int = 20
     ): OcrItem? {
         val roiRect = roiNormalized?.let {
             Rect(
@@ -79,6 +77,7 @@ class OcrRecognizer {
                 val cx = item.bounds.centerX()
                 val cy = item.bounds.centerY()
                 if (FloatingOverlayService.isInsideOverlay(cx, cy)) return@firstOrNull false
+                if (item.text.length > maxTextLength) return@firstOrNull false
 
                 val inDynamicIsland = cy < screenHeight * 0.045f &&
                     cx in (screenWidth * 0.28f).toInt()..(screenWidth * 0.72f).toInt()
@@ -96,14 +95,13 @@ class OcrRecognizer {
     }
 
     /**
-     * 判斷目前畫面是否為《LINE 散步趣》的主畫面（且下半部沒有被『獲得票券！/ 紅利 / 15 獲得』等彈窗蓋住）。
+     * 判斷目前畫面是否為《LINE 散步趣》的主畫面（且下半部沒有被彈窗或全螢幕廣告蓋住）。
      */
     fun isLineWalkMainScreenVisible(
         screenBitmap: Bitmap,
         items: List<OcrItem>,
         templateMatcher: TemplateMatcher
     ): Boolean {
-        val sw = screenBitmap.width
         val sh = screenBitmap.height
 
         // 1. 若下半部 (y = 0.68 ~ 0.83) 出現了『紅利 [▶] 15 獲得』的珊瑚粉紅按鈕，代表目前正開著領獎彈窗！
@@ -111,15 +109,16 @@ class OcrRecognizer {
             return false
         }
 
-        // 2. 若下半部 (y > 0.50) 出現了彈窗專屬字眼（如『跳過廣告』『紅利』『15 獲得』『取消』『同意並繼續』），代表開著彈窗！
-        val hasBottomPopupText = items.any { item ->
+        // 2. 若畫面出現了彈窗或內部宣傳頁專屬字眼（如『跳過廣告』『紅利』『15 獲得』『邀請好友』『10000』），代表不在主畫面！
+        val hasPopupOrPromoText = items.any { item ->
             val cy = item.bounds.centerY().toFloat() / sh
             val t = item.text
-            cy > 0.50f && (t.contains("跳過廣告") || t.contains("紅利") || t.contains("15 獲得") ||
-                t.contains("15獲得") || t.contains("5 獲得") || t.contains("5獲得") ||
-                t == "取消" || t.contains("同意並繼續"))
+            t.contains("邀請好友") || t.contains("10000") ||
+                (cy > 0.50f && (t.contains("跳過廣告") || t.contains("紅利") || t.contains("15 獲得") ||
+                    t.contains("15獲得") || t.contains("5 獲得") || t.contains("5獲得") ||
+                    t == "取消" || t.contains("同意並繼續")))
         }
-        if (hasBottomPopupText) return false
+        if (hasPopupOrPromoText) return false
 
         // 3. 檢查是否有主畫面的底部導覽列 (集點/好友/使用/精選) 與上半部舞台元素
         var hasBottomNav = false
@@ -161,7 +160,6 @@ class OcrRecognizer {
             RegexOption.IGNORE_CASE
         )
 
-        /** 彈窗中觸發看廣告的常見按鈕文字（包含散步趣『15 獲得 / 紅利 / 看廣告』） */
         val GAME_AD_TRIGGER_KEYWORDS = listOf(
             "15 獲得",
             "15獲得",
@@ -187,10 +185,12 @@ class OcrRecognizer {
             "免費參加",
             "雙重獎勵",
             "安裝",
-            "Amazon"
+            "Amazon",
+            "邀請",
+            "好友"
         )
 
-        /** 遊戲內彈窗關閉、活動推銷略過（如『玩遊戲賺點數 -> 跳過』）與領獎確認文字 */
+        /** 遊戲內彈窗關閉、活動推銷略過與領獎確認文字（移除單字『好』以避免誤配『邀請好友』！） */
         val GAME_CLAIM_CONFIRM_KEYWORDS = listOf(
             "跳過",
             "略過",
@@ -198,7 +198,6 @@ class OcrRecognizer {
             "確定",
             "收下",
             "關閉",
-            "好",
             "OK",
             "5 獲得",
             "5獲得",
@@ -217,6 +216,7 @@ class OcrRecognizer {
             "步數",
             "移動",
             "好友",
+            "邀請",
             "設定",
             "商店",
             "隱私權",
@@ -226,7 +226,8 @@ class OcrRecognizer {
             "雙重獎勵",
             "LINE POINTS",
             "安裝",
-            "下載"
+            "下載",
+            "雙方"
         )
 
         val AD_CLOSE_OCR_KEYWORDS = listOf(
@@ -253,7 +254,9 @@ class OcrRecognizer {
             "下載",
             "安裝",
             "隱私權",
-            "條款"
+            "條款",
+            "邀請",
+            "好友"
         )
 
         val AD_REWARD_GRANTED_KEYWORDS = listOf(

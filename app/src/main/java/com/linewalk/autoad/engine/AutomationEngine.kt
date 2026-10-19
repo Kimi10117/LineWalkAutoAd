@@ -223,14 +223,16 @@ class AutomationEngine private constructor(context: Context) {
             return
         }
 
-        // C. 若不在主畫面（代表有推銷視窗『玩遊戲賺點數 -> 跳過』、領獎完成確認窗或全螢幕廣告）：
+        // C. 若不在主畫面（代表有宣傳視窗如『邀請好友』、『玩遊戲賺點數 -> 跳過』、領獎確認窗或全螢幕廣告）：
+        // C1. 短字按鈕 OCR（跳過 / 略過 / 確認 / 確定 / 關閉，字數 <= 6）
         val dismissOrSkipOcr = ocrRecognizer.findMatch(
             items = ocrItems,
             keywords = OcrRecognizer.GAME_CLAIM_CONFIRM_KEYWORDS,
             screenWidth = sw,
             screenHeight = sh,
             roiNormalized = RectF(0.05f, 0.04f, 0.95f, 0.96f),
-            excludeKeywords = OcrRecognizer.GAME_CLAIM_EXCLUDE_KEYWORDS
+            excludeKeywords = OcrRecognizer.GAME_CLAIM_EXCLUDE_KEYWORDS,
+            maxTextLength = 6
         )
         if (dismissOrSkipOcr != null) {
             appendLog("✨ 自動點擊彈窗 [${dismissOrSkipOcr.text}]")
@@ -238,6 +240,7 @@ class AutomationEngine private constructor(context: Context) {
             return
         }
 
+        // C2. 無障礙節點樹關閉按鈕
         val closeNode = nodeInspector.findAdCloseNode(service.getSafeRootNode(), sw, sh)
         if (closeNode != null) {
             appendLog("✨ 自動點擊關閉節點: ${closeNode.label}")
@@ -245,15 +248,23 @@ class AutomationEngine private constructor(context: Context) {
             return
         }
 
+        // C3. 幾何角落 X 偵測器（如『邀請好友』右上角的圓底白 X！）
+        val geoX = templateMatcher.detectCornerGeometricX(
+            screenBitmap = screenBitmap,
+            blacklistedCoord = FloatingOverlayService::isInsideOverlay
+        )
+        if (geoX != null) {
+            appendLog("👆 偵測到宣傳頁/廣告角落關閉鈕: ${geoX.label}")
+            service.clickRect(geoX.bounds)
+            return
+        }
+
         updateDetail(
-            "🔍 正在搜尋可領取目標... (已完成 ${_uiStatus.value.adsCompletedCount} 次)",
+            "🔍 正在搜尋可領取目標或關閉按鈕... (已完成 ${_uiStatus.value.adsCompletedCount} 次)",
             "🔍 搜尋畫面目標中..."
         )
     }
 
-    /**
-     * 狀態 2：點擊『獲得票券』後，等待並點擊下半部彈出的粉紅色『紅利 [▶] 15 獲得』按鈕。
-     */
     private suspend fun handleTriggerAdPopup(
         service: AutoAdAccessibilityService,
         screenBitmap: android.graphics.Bitmap,
@@ -263,7 +274,6 @@ class AutomationEngine private constructor(context: Context) {
         val sw = screenBitmap.width
         val sh = screenBitmap.height
 
-        // 1. 第一優先尋找彈窗中的粉紅色『紅利 [▶] 15 獲得』或看廣告按鈕
         val adBtn = findAdTriggerButton(service, screenBitmap, ocrItems)
         if (adBtn != null) {
             appendLog("🎬 點擊彈窗看廣告按鈕: ${adBtn.first}")
@@ -277,7 +287,6 @@ class AutomationEngine private constructor(context: Context) {
             return
         }
 
-        // 2. 若彈窗中沒有粉紅看廣告按鈕（例如今日廣告次數用完，只剩白色『5 獲得』或『確認/跳過』）
         if (popupRetryTicks >= 2 && config.claimNormalWhenNoAd) {
             val normalOrSkip = ocrRecognizer.findMatch(
                 items = ocrItems,
@@ -285,7 +294,8 @@ class AutomationEngine private constructor(context: Context) {
                 screenWidth = sw,
                 screenHeight = sh,
                 roiNormalized = RectF(0.08f, 0.15f, 0.92f, 0.95f),
-                excludeKeywords = OcrRecognizer.GAME_CLAIM_EXCLUDE_KEYWORDS
+                excludeKeywords = OcrRecognizer.GAME_CLAIM_EXCLUDE_KEYWORDS,
+                maxTextLength = 6
             )
             if (normalOrSkip != null) {
                 appendLog("ℹ️ 點擊彈窗一般按鈕: [${normalOrSkip.text}]")
@@ -340,12 +350,11 @@ class AutomationEngine private constructor(context: Context) {
             is AdStepResult.ReturnedToGame -> {
                 val newAdsCount = _uiStatus.value.adsCompletedCount + 1
                 _uiStatus.value = _uiStatus.value.copy(adsCompletedCount = newAdsCount)
-                appendLog("🎉 成功關閉廣告回到遊戲！(累計完成 $newAdsCount 支)")
+                appendLog("🎉 成功關閉廣告回到散步趣主畫面！(累計完成 $newAdsCount 支)")
                 if (res.confirmBounds != null) {
                     service.clickRect(res.confirmBounds)
                 }
-                rewardClaimRetryTicks = 0
-                transitionTo(EngineState.REWARD_CLAIM, "正在確認獎勵彈窗...", "✨ 完成確認中...")
+                transitionTo(EngineState.IN_GAME_SCAN, "完成一輪！繼續點下一張『獲得票券』...", "🔍 繼續下一輪...")
             }
 
             is AdStepResult.WatchdogBackTriggered -> {
@@ -356,15 +365,6 @@ class AutomationEngine private constructor(context: Context) {
             }
 
             is AdStepResult.ScanningAd -> {
-                if (adCloserHandler.getElapsedSeconds() >= 8 &&
-                    ocrRecognizer.isLineWalkMainScreenVisible(screenBitmap, ocrItems, templateMatcher)
-                ) {
-                    val newAdsCount = _uiStatus.value.adsCompletedCount + 1
-                    _uiStatus.value = _uiStatus.value.copy(adsCompletedCount = newAdsCount)
-                    appendLog("🎉 偵測到已回到散步趣主畫面！(累計完成 $newAdsCount 支)")
-                    transitionTo(EngineState.IN_GAME_SCAN, "已回到主畫面，繼續下一輪！", "🔍 繼續下一輪...")
-                    return
-                }
                 updateDetail(
                     "🔍 搜尋關閉 X 或略過按鈕 (已播 ${res.elapsedSec}s)...",
                     "🔍 搜尋關閉鈕 (${res.elapsedSec}s)..."
@@ -393,7 +393,8 @@ class AutomationEngine private constructor(context: Context) {
             screenWidth = sw,
             screenHeight = sh,
             roiNormalized = RectF(0.08f, 0.15f, 0.92f, 0.95f),
-            excludeKeywords = OcrRecognizer.GAME_CLAIM_EXCLUDE_KEYWORDS
+            excludeKeywords = OcrRecognizer.GAME_CLAIM_EXCLUDE_KEYWORDS,
+            maxTextLength = 6
         )
         if (confirmMatch != null) {
             appendLog("✅ 點擊完成確認按鈕: [${confirmMatch.text}]")
@@ -409,12 +410,6 @@ class AutomationEngine private constructor(context: Context) {
         }
     }
 
-    /**
-     * 尋找《LINE 散步趣》彈窗中的「看廣告」按鈕：
-     * 1. 最優先：直接掃描下半部彈窗區 (y = 0.68 ~ 0.83) 的珊瑚粉紅長條按鈕『紅利 [▶] 15 獲得』！
-     * 2. 次優先：OCR 辨識『紅利』(點擊其正下方按鈕區) 或『15 獲得 / 看廣告 / 觀看影片』。
-     * 3. 備援：使用者自訂框選的『看廣告按鈕』圖示範本。
-     */
     private suspend fun findAdTriggerButton(
         service: AutoAdAccessibilityService,
         screenBitmap: android.graphics.Bitmap,
@@ -440,7 +435,8 @@ class AutomationEngine private constructor(context: Context) {
             keywords = listOf("紅利"),
             screenWidth = sw,
             screenHeight = sh,
-            roiNormalized = RectF(0.05f, 0.64f, 0.50f, 0.78f)
+            roiNormalized = RectF(0.05f, 0.64f, 0.50f, 0.78f),
+            maxTextLength = 4
         )
         if (bonusTag != null) {
             val targetY = (bonusTag.bounds.bottom + (sh * 0.032f).toInt()).coerceAtMost((sh * 0.82f).toInt())
@@ -448,14 +444,15 @@ class AutomationEngine private constructor(context: Context) {
             return "OCR[紅利下方看廣告鈕]" to btnRect
         }
 
-        // 3. ML Kit 中文 OCR 搜尋彈窗區 (y = 0.22 ~ 0.83) 的關鍵字 (排除 y < 0.70 的灰色『跳過廣告 15 獲得』)
+        // 3. ML Kit 中文 OCR 搜尋彈窗區 (y = 0.71 ~ 0.83) 的關鍵字
         val ocrMatch = ocrRecognizer.findMatch(
             items = ocrItems,
             keywords = OcrRecognizer.GAME_AD_TRIGGER_KEYWORDS,
             screenWidth = sw,
             screenHeight = sh,
             roiNormalized = RectF(0.08f, 0.71f, 0.92f, 0.83f),
-            excludeKeywords = OcrRecognizer.GAME_AD_EXCLUDE_KEYWORDS
+            excludeKeywords = OcrRecognizer.GAME_AD_EXCLUDE_KEYWORDS,
+            maxTextLength = 10
         )
         if (ocrMatch != null) {
             return "OCR[${ocrMatch.text}]" to ocrMatch.bounds

@@ -16,13 +16,6 @@ data class TemplateMatchResult(
     val label: String
 )
 
-/**
- * 第三層辨識：
- * 1. 內建《LINE 散步趣》專屬珊瑚粉紅按鈕偵測器 (findCoralPinkButton)，
- *    可在 1 毫秒內精準定位主畫面的『獲得票券』(y=25%~37%) 與彈窗中的『紅利 [▶] 15 獲得』(y=68%~83%)。
- * 2. 雙階段粗精搜 ZNCC + RGB 局部模板匹配器。
- * 3. 免樣本幾何角落 X 偵測器。
- */
 class TemplateMatcher {
 
     /**
@@ -57,7 +50,6 @@ class TemplateMatcher {
                 val r = (c shr 16) and 0xFF
                 val g = (c shr 8) and 0xFF
                 val b = c and 0xFF
-                // LINE 散步趣粉紅按鈕色彩特徵: R > 215, G 介於 35~125, B 介於 45~135, 且 R-G > 110
                 if (r > 215 && g in 35..125 && b in 45..135 && (r - g) > 110) {
                     pinkPixels++
                 }
@@ -72,7 +64,6 @@ class TemplateMatcher {
             y += 4
         }
 
-        // 確認粉紅區塊具有足夠的按鈕高度 (至少 3 個取樣列)
         if (matchedRowCount >= 3 && maxPinkY > minPinkY) {
             val rect = Rect(
                 (w * 0.25f).toInt(),
@@ -281,26 +272,36 @@ class TemplateMatcher {
         )
     }
 
+    /**
+     * 高精度免樣本幾何角落「X」偵測器：
+     * 支援細線條 X（含 3x3 鄰域容錯）與深色圓底白 X / 淺色圓底黑 X，
+     * 掃描畫面右上角 (x=83%~97%, y=3.5%~14.5%) 與左上角 (x=3%~17%, y=3.5%~14.5%)。
+     */
     suspend fun detectCornerGeometricX(
         screenBitmap: Bitmap,
         blacklistedCoord: ((Int, Int) -> Boolean)? = null
     ): TemplateMatchResult? = withContext(Dispatchers.Default) {
         val sw = screenBitmap.width
         val sh = screenBitmap.height
-        val boxSize = (min(sw, sh) * 0.048f).toInt().coerceIn(36, 72)
-        val half = boxSize / 2
+        val r = max(5, (sw * 0.018f).toInt())
+        val rHalf = max(3, (r * 0.65f).toInt())
+        val step = max(2, sw / 240)
+        val tol = max(1, sw / 360)
 
         val searchZones = listOf(
-            Rect((sw * 0.82f).toInt(), (sh * 0.025f).toInt(), (sw * 0.985f).toInt(), (sh * 0.14f).toInt()),
-            Rect((sw * 0.015f).toInt(), (sh * 0.025f).toInt(), (sw * 0.18f).toInt(), (sh * 0.14f).toInt())
+            // 右上角 (最常見，如『邀請好友』右上角灰底圓形 X)
+            Rect((sw * 0.83f).toInt(), (sh * 0.035f).toInt(), (sw * 0.97f).toInt(), (sh * 0.145f).toInt()),
+            // 左上角
+            Rect((sw * 0.03f).toInt(), (sh * 0.035f).toInt(), (sw * 0.17f).toInt(), (sh * 0.145f).toInt())
         )
 
         var bestCandidate: TemplateMatchResult? = null
+        var bestRawScore = 82f
 
         for ((zoneIdx, zone) in searchZones.withIndex()) {
             val zw = zone.width()
             val zh = zone.height()
-            if (zw <= boxSize || zh <= boxSize) continue
+            if (zw <= r * 2 + 4 || zh <= r * 2 + 4) continue
 
             val pixels = IntArray(zw * zh)
             screenBitmap.getPixels(pixels, 0, zw, zone.left, zone.top, zw, zh)
@@ -312,42 +313,68 @@ class TemplateMatcher {
                     0.114f * (c and 0xFF)
             }
 
-            var cy = half
-            while (cy < zh - half) {
-                var cx = half
-                while (cx < zw - half) {
+            fun armLum(px: Int, py: Int, brightX: Boolean): Float {
+                var best = if (brightX) 0f else 255f
+                for (dy in -tol..tol) {
+                    val ny = (py + dy).coerceIn(0, zh - 1)
+                    for (dx in -tol..tol) {
+                        val nx = (px + dx).coerceIn(0, zw - 1)
+                        val l = lum(nx, ny)
+                        if (brightX && l > best) best = l
+                        if (!brightX && l < best) best = l
+                    }
+                }
+                return best
+            }
+
+            var cy = r + tol
+            while (cy < zh - r - tol) {
+                var cx = r + tol
+                while (cx < zw - r - tol) {
                     val absX = zone.left + cx
                     val absY = zone.top + cy
                     if (blacklistedCoord?.invoke(absX, absY) != true) {
-                        val centerLum = lum(cx, cy)
-                        val r = (half * 0.55f).toInt().coerceAtLeast(6)
+                        // 上下左右四個非對角扇區（圓形按鈕底色）必須亮度一致
+                        val lTop = lum(cx, cy - r)
+                        val lBot = lum(cx, cy + r)
+                        val lLeft = lum(cx - r, cy)
+                        val lRight = lum(cx + r, cy)
+                        val cardMean = (lTop + lBot + lLeft + lRight) * 0.25f
+                        val cardDiff = abs(lTop - cardMean) + abs(lBot - cardMean) +
+                            abs(lLeft - cardMean) + abs(lRight - cardMean)
 
-                        val diag1 = (lum(cx - r, cy - r) + lum(cx + r, cy + r) +
-                            lum(cx - r / 2, cy - r / 2) + lum(cx + r / 2, cy + r / 2)) / 4f
-                        val diag2 = (lum(cx + r, cy - r) + lum(cx - r, cy + r) +
-                            lum(cx + r / 2, cy - r / 2) + lum(cx - r / 2, cy + r / 2)) / 4f
-                        val cardinal = (lum(cx, cy - r) + lum(cx, cy + r) +
-                            lum(cx - r, cy) + lum(cx + r, cy)) / 4f
+                        if (cardDiff <= 58f) {
+                            val isBrightX = cardMean < 150f
+                            val cLum = armLum(cx, cy, isBrightX)
+                            val d1 = armLum(cx - rHalf, cy - rHalf, isBrightX)
+                            val d2 = armLum(cx + rHalf, cy + rHalf, isBrightX)
+                            val d3 = armLum(cx + rHalf, cy - rHalf, isBrightX)
+                            val d4 = armLum(cx - rHalf, cy + rHalf, isBrightX)
 
-                        val diagSymmetry = 1f - (abs(diag1 - diag2) / 255f)
-                        val centerConsistency = 1f - (abs(centerLum - (diag1 + diag2) * 0.5f) / 255f)
-                        val contrast = abs((diag1 + diag2) * 0.5f - cardinal)
+                            val diagMean = (cLum + d1 + d2 + d3 + d4) * 0.2f
+                            val contrast = if (isBrightX) diagMean - cardMean else cardMean - diagMean
+                            val minArmContrast = if (isBrightX) {
+                                min(cLum, min(min(d1, d2), min(d3, d4))) - cardMean
+                            } else {
+                                cardMean - max(cLum, max(max(d1, d2), max(d3, d4)))
+                            }
 
-                        if (contrast > 48f && diagSymmetry > 0.88f && centerConsistency > 0.84f) {
-                            val score = (0.4f * (contrast / 160f).coerceAtMost(1f)) +
-                                0.3f * diagSymmetry + 0.3f * centerConsistency
-                            if (score >= 0.78f && (bestCandidate == null || score > bestCandidate.score)) {
-                                bestCandidate = TemplateMatchResult(
-                                    score = score,
-                                    bounds = Rect(absX - half, absY - half, absX + half, absY + half),
-                                    label = if (zoneIdx == 0) "右上角幾何X" else "左上角幾何X"
-                                )
+                            if (contrast > 55f && minArmContrast > 35f) {
+                                val rawScore = contrast - (cardDiff * 0.5f)
+                                if (rawScore > bestRawScore) {
+                                    bestRawScore = rawScore
+                                    bestCandidate = TemplateMatchResult(
+                                        score = (rawScore / 150f).coerceIn(0.80f, 0.99f),
+                                        bounds = Rect(absX - r, absY - r, absX + r, absY + r),
+                                        label = if (zoneIdx == 0) "右上角幾何X" else "左上角幾何X"
+                                    )
+                                }
                             }
                         }
                     }
-                    cx += 4
+                    cx += step
                 }
-                cy += 4
+                cy += step
             }
         }
         bestCandidate

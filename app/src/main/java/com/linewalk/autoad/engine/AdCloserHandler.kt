@@ -27,8 +27,9 @@ sealed class AdStepResult {
 
 /**
  * 通用多階段廣告關閉處理器 (AdCloserHandler)：
- * 同時掃描畫面頂部 (0~25%) 與底部 (70~96%) 的「跳過 / 略過 / 關閉 / Skip / X / >>」，
- * 並避開懸浮窗本身與手機頂部中央 dynamicSpot 動態島。
+ * - 只有當真正偵測到《LINE 散步趣》主畫面 (isLineWalkMainScreenVisible) 時才判定廣告結束，
+ *   不會因為廣告畫面內出現「邀請好友」「雙方都能獲得幣」而提早跳出廣告監控！
+ * - 內建升級版幾何角落 X 偵測器，支援深色圓底白 X 與細線 X。
  */
 class AdCloserHandler(
     private val config: AppConfig,
@@ -82,52 +83,17 @@ class AdCloserHandler(
             return AdStepResult.RedirectRecovered(fgPkg)
         }
 
-        // 2. 檢查是否已回到《LINE 散步趣》領獎完成彈窗
-        if (elapsedSec >= 5 && closeClickCount >= 1) {
-            val confirmMatch = ocrRecognizer.findMatch(
-                items = ocrItems,
-                keywords = listOf("確認", "確定", "收下", "獲得", "好", "OK"),
-                screenWidth = sw,
-                screenHeight = sh,
-                roiNormalized = RectF(0.15f, 0.35f, 0.85f, 0.90f),
-                excludeKeywords = listOf("秒", "廣告", "商店", "下載", "安裝", "同意並繼續")
-            )
-            if (confirmMatch != null) {
-                return AdStepResult.ReturnedToGame(confirmMatch.bounds, "OCR[${confirmMatch.text}]")
-            }
+        // 2. 只有當真正回到《LINE 散步趣》主畫面時，才判定已完成這支廣告！
+        if (elapsedSec >= 5 && ocrRecognizer.isLineWalkMainScreenVisible(screenBitmap, ocrItems, templateMatcher)) {
+            return AdStepResult.ReturnedToGame(null, "已回到散步趣主畫面")
         }
 
-        // 3. 第一層辨識：檢查無障礙節點樹是否有明確的「跳過 / 略過 / 關閉 / X」節點
-        val rootNode = service.getSafeRootNode()
-        val closeNode = nodeInspector.findAdCloseNode(rootNode, sw, sh, ::isInvalidOrBlacklisted)
-        if (closeNode != null && (elapsedSec >= 3 || closeNode.text == "跳過" || closeNode.text == "略過")) {
-            recordAndClick(service, closeNode.bounds)
-            return AdStepResult.ClickedCloseOrSkip(closeNode.label, closeNode.bounds)
-        }
-
-        // 4. 第二層辨識 A：優先檢查全畫面 (含頂部與底部 0.03~0.96) 是否有明確的「跳過 / 略過 / 關閉廣告 / Skip」文字
-        // (例如「玩遊戲賺點數」底部的『跳過』按鈕，即使剛進來也能直接點掉！)
-        val fullScreenSkipOcr = ocrRecognizer.findMatch(
-            items = ocrItems,
-            keywords = OcrRecognizer.AD_CLOSE_OCR_KEYWORDS,
-            screenWidth = sw,
-            screenHeight = sh,
-            roiNormalized = RectF(0.02f, 0.03f, 0.98f, 0.96f),
-            excludeKeywords = OcrRecognizer.AD_CLOSE_EXCLUDE_KEYWORDS
-        )
-        if (fullScreenSkipOcr != null &&
-            !isInvalidOrBlacklisted(fullScreenSkipOcr.bounds.centerX(), fullScreenSkipOcr.bounds.centerY())
-        ) {
-            recordAndClick(service, fullScreenSkipOcr.bounds)
-            return AdStepResult.ClickedCloseOrSkip("OCR[${fullScreenSkipOcr.text}]", fullScreenSkipOcr.bounds)
-        }
-
-        // 5. 廣告前 4 秒保護期：若無明確「跳過/略過」文字，前 4 秒靜候播放
+        // 3. 廣告前 4 秒保護期：靜候播放
         if (elapsedSec < 4) {
             return AdStepResult.WaitingGracePeriod(elapsedSec)
         }
 
-        // 6. 檢查畫面頂部是否有倒數計時（如「還有 15 秒」）
+        // 4. 檢查畫面頂部是否有明確的倒數計時（如「還有 15 秒」）
         val remainingSec = ocrRecognizer.detectAdCountdownSeconds(ocrItems, sh)
         val rewardGrantedOcr = ocrRecognizer.findMatch(
             items = ocrItems,
@@ -138,6 +104,31 @@ class AdCloserHandler(
         )
         if (remainingSec != null && remainingSec > 1 && rewardGrantedOcr == null) {
             return AdStepResult.StillCountingDown(remainingSec, elapsedSec)
+        }
+
+        // 5. 第一層辨識：檢查無障礙節點樹是否有「跳過 / 略過 / 關閉 / X」節點
+        val rootNode = service.getSafeRootNode()
+        val closeNode = nodeInspector.findAdCloseNode(rootNode, sw, sh, ::isInvalidOrBlacklisted)
+        if (closeNode != null) {
+            recordAndClick(service, closeNode.bounds)
+            return AdStepResult.ClickedCloseOrSkip(closeNode.label, closeNode.bounds)
+        }
+
+        // 6. 第二層辨識：全畫面搜尋短字「跳過 / 略過 / 關閉 / 確認 / 確定 / Skip / Close」(字數 <= 6)
+        val fullScreenSkipOcr = ocrRecognizer.findMatch(
+            items = ocrItems,
+            keywords = OcrRecognizer.AD_CLOSE_OCR_KEYWORDS + listOf("確認", "確定"),
+            screenWidth = sw,
+            screenHeight = sh,
+            roiNormalized = RectF(0.02f, 0.03f, 0.98f, 0.96f),
+            excludeKeywords = OcrRecognizer.AD_CLOSE_EXCLUDE_KEYWORDS,
+            maxTextLength = 6
+        )
+        if (fullScreenSkipOcr != null &&
+            !isInvalidOrBlacklisted(fullScreenSkipOcr.bounds.centerX(), fullScreenSkipOcr.bounds.centerY())
+        ) {
+            recordAndClick(service, fullScreenSkipOcr.bounds)
+            return AdStepResult.ClickedCloseOrSkip("OCR[${fullScreenSkipOcr.text}]", fullScreenSkipOcr.bounds)
         }
 
         // 7. 第三層辨識 A：比對使用者在懸浮窗框選儲存的「廣告 X / >> 範本 (AD_CLOSE_ICON)」
@@ -157,8 +148,8 @@ class AdCloserHandler(
             }
         }
 
-        // 8. 第三層辨識 B：若廣告已播放超過 12 秒（或已顯示獲得獎勵），啟動「免樣本幾何角落 X 偵測器」
-        if (elapsedSec >= 12 || rewardGrantedOcr != null) {
+        // 8. 第三層辨識 B：啟動「高精度免樣本幾何角落 X 偵測器」（支援右上角/左上角圓底白 X 與細線 X）
+        if (elapsedSec >= 5 || rewardGrantedOcr != null) {
             val geoMatch = templateMatcher.detectCornerGeometricX(
                 screenBitmap = screenBitmap,
                 blacklistedCoord = ::isInvalidOrBlacklisted
@@ -176,9 +167,9 @@ class AdCloserHandler(
             } else {
                 val fallbackRect = Rect(
                     (sw * 0.90f).toInt(),
-                    (sh * 0.05f).toInt(),
-                    (sw * 0.95f).toInt(),
-                    (sh * 0.085f).toInt()
+                    (sh * 0.08f).toInt(),
+                    (sw * 0.94f).toInt(),
+                    (sh * 0.11f).toInt()
                 )
                 recordAndClick(service, fallbackRect)
             }
