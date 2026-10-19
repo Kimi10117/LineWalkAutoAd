@@ -95,7 +95,136 @@ class OcrRecognizer {
     }
 
     /**
-     * 判斷目前畫面是否為《LINE 散步趣》的主畫面（且下半部沒有被彈窗或全螢幕廣告蓋住）。
+     * 偵測看完廣告後的中央領獎完成彈窗（如『獲得15張票券！』『獲得60枚金幣！』下方附帶白色 [ 關閉 ] 按鈕）。
+     * 當此彈窗開啟時，背景的頂部與底部導覽列會被半透明黑幕壓暗 (nav_mean < 160)，且中央上下皆有純白底框。
+     */
+    fun isDimmedCenterModalOpen(screenBitmap: Bitmap): Boolean {
+        val sw = screenBitmap.width
+        val sh = screenBitmap.height
+        if (sw < 100 || sh < 100) return false
+
+        // 1. 檢查底部導覽列 (y = 0.91..0.95, x = 0.15..0.85) 是否被半透明黑幕壓暗
+        var navLumSum = 0f
+        var navSamples = 0
+        val navYStart = (sh * 0.91f).toInt()
+        val navYEnd = (sh * 0.95f).toInt()
+        val navXStart = (sw * 0.15f).toInt()
+        val navXEnd = (sw * 0.85f).toInt()
+        var y = navYStart
+        while (y <= navYEnd) {
+            var x = navXStart
+            while (x <= navXEnd) {
+                val c = screenBitmap.getPixel(x, y)
+                val r = (c shr 16) and 0xFF
+                val g = (c shr 8) and 0xFF
+                val b = c and 0xFF
+                navLumSum += (0.299f * r + 0.587f * g + 0.114f * b)
+                navSamples++
+                x += 12
+            }
+            y += 6
+        }
+        val navMean = if (navSamples > 0) navLumSum / navSamples else 255f
+        if (navMean >= 165f) return false
+
+        // 2. 檢查彈窗下半部『[ 關閉 ]』按鈕所在的純白底框 (y = 0.66..0.73, x = 0.25..0.75)
+        var footerWhiteCount = 0
+        var footerSamples = 0
+        val fYStart = (sh * 0.66f).toInt()
+        val fYEnd = (sh * 0.73f).toInt()
+        val fXStart = (sw * 0.25f).toInt()
+        val fXEnd = (sw * 0.75f).toInt()
+        y = fYStart
+        while (y <= fYEnd) {
+            var x = fXStart
+            while (x <= fXEnd) {
+                val c = screenBitmap.getPixel(x, y)
+                val r = (c shr 16) and 0xFF
+                val g = (c shr 8) and 0xFF
+                val b = c and 0xFF
+                if (r > 225 && g > 225 && b > 225) footerWhiteCount++
+                footerSamples++
+                x += 10
+            }
+            y += 5
+        }
+        val footerWhiteRatio = if (footerSamples > 0) footerWhiteCount.toFloat() / footerSamples else 0f
+
+        // 3. 檢查彈窗上半部『獲得15張票券！』所在的純白底框 (y = 0.26..0.31, x = 0.25..0.75)
+        var headerWhiteCount = 0
+        var headerSamples = 0
+        val hYStart = (sh * 0.26f).toInt()
+        val hYEnd = (sh * 0.31f).toInt()
+        y = hYStart
+        while (y <= hYEnd) {
+            var x = fXStart
+            while (x <= fXEnd) {
+                val c = screenBitmap.getPixel(x, y)
+                val r = (c shr 16) and 0xFF
+                val g = (c shr 8) and 0xFF
+                val b = c and 0xFF
+                if (r > 225 && g > 225 && b > 225) headerWhiteCount++
+                headerSamples++
+                x += 10
+            }
+            y += 5
+        }
+        val headerWhiteRatio = if (headerSamples > 0) headerWhiteCount.toFloat() / headerSamples else 0f
+
+        return footerWhiteRatio > 0.65f && headerWhiteRatio > 0.60f
+    }
+
+    /**
+     * 尋找看完廣告後的『獲得15張票券！ / 獲得金幣！』中央彈窗的 [ 關閉 ] 按鈕：
+     * - 優先使用 OCR 定位彈窗下半部 (y = 0.52..0.82) 的『關閉 / 確認 / 確定 / 收下 / OK』按鈕。
+     * - 若 OCR 因字體較細未抓到『關閉』，但看到標題『張票券 / 枚金幣 / 獲得...！』或像素級偵測到中央白底彈窗開啟，
+     *   直接回傳標準 [ 關閉 ] 按鈕座標 (x = 35%~65%, y = 66.8%~70.6%)！
+     */
+    fun findCenterRewardModalCloseButton(
+        screenBitmap: Bitmap,
+        items: List<OcrItem>
+    ): Pair<String, Rect>? {
+        val sw = screenBitmap.width
+        val sh = screenBitmap.height
+
+        // 1. OCR 搜尋彈窗下半部 (y = 0.52..0.82) 的『關閉 / 確認 / 確定 / 收下 / OK』
+        val closeOcr = findMatch(
+            items = items,
+            keywords = listOf("關閉", "確認", "確定", "收下", "OK"),
+            screenWidth = sw,
+            screenHeight = sh,
+            roiNormalized = RectF(0.18f, 0.52f, 0.82f, 0.82f),
+            excludeKeywords = AD_CLOSE_EXCLUDE_KEYWORDS + listOf("關閉廣告"),
+            maxTextLength = 6
+        )
+        if (closeOcr != null) {
+            return "OCR[${closeOcr.text}]" to closeOcr.bounds
+        }
+
+        // 2. 檢查是否有『獲得15張票券！』『獲得60枚金幣！』標題文字，或像素級中央彈窗特徵
+        val hasRewardTitleOcr = items.any { item ->
+            val cy = item.bounds.centerY().toFloat() / sh
+            val t = item.text
+            cy in 0.20f..0.42f && (
+                t.contains("張票券") || t.contains("枚金幣") ||
+                    (t.contains("獲得") && (t.contains("！") || t.contains("!")))
+                )
+        }
+        if (hasRewardTitleOcr || isDimmedCenterModalOpen(screenBitmap)) {
+            val fallbackCloseRect = Rect(
+                (sw * 0.35f).toInt(),
+                (sh * 0.668f).toInt(),
+                (sw * 0.65f).toInt(),
+                (sh * 0.706f).toInt()
+            )
+            return "領獎彈窗[關閉]鈕" to fallbackCloseRect
+        }
+
+        return null
+    }
+
+    /**
+     * 判斷目前畫面是否為《LINE 散步趣》的主畫面（涵蓋『首頁』『步數』『時間』『遊戲』四大分頁，且未開啟彈窗）。
      */
     fun isLineWalkMainScreenVisible(
         screenBitmap: Bitmap,
@@ -104,23 +233,32 @@ class OcrRecognizer {
     ): Boolean {
         val sh = screenBitmap.height
 
-        // 1. 若下半部 (y = 0.68 ~ 0.83) 出現了『紅利 [▶] 15 獲得』的珊瑚粉紅按鈕，代表目前正開著領獎彈窗！
+        // 1. 若下半部 (y = 0.68 ~ 0.83) 出現了『紅利 [▶] 15/60 獲得』的珊瑚粉紅按鈕，代表目前正開著領獎彈窗！
         if (templateMatcher.findCoralPinkButton(screenBitmap, 0.68f, 0.83f, "彈窗粉紅鈕") != null) {
             return false
         }
 
-        // 2. 若畫面出現了彈窗或內部宣傳頁專屬字眼（如『跳過廣告』『紅利』『15 獲得』『邀請好友』『10000』），代表不在主畫面！
+        // 2. 若看完廣告後的中央領獎彈窗 (『獲得15張票券！ [關閉]』) 正開啟中，代表不在主畫面！
+        if (findCenterRewardModalCloseButton(screenBitmap, items) != null) {
+            return false
+        }
+
+        // 3. 若畫面出現了彈窗或內部宣傳頁專屬字眼，代表不在乾淨主畫面！
         val hasPopupOrPromoText = items.any { item ->
             val cy = item.bounds.centerY().toFloat() / sh
             val t = item.text
             t.contains("邀請好友") || t.contains("10000") ||
-                (cy > 0.50f && (t.contains("跳過廣告") || t.contains("紅利") || t.contains("15 獲得") ||
-                    t.contains("15獲得") || t.contains("5 獲得") || t.contains("5獲得") ||
+                t.contains("張票券") || t.contains("枚金幣") ||
+                (cy > 0.50f && (t.contains("跳過廣告") || t.contains("紅利") ||
+                    t.contains("15 獲得") || t.contains("15獲得") ||
+                    t.contains("60 獲得") || t.contains("60獲得") ||
+                    t.contains("5 獲得") || t.contains("5獲得") ||
+                    t == "關閉" || t == "確認" || t == "確定" ||
                     t == "取消" || t.contains("同意並繼續")))
         }
         if (hasPopupOrPromoText) return false
 
-        // 3. 檢查是否有主畫面的底部導覽列 (集點/好友/使用/精選) 與上半部舞台元素
+        // 4. 檢查是否有主畫面的底部導覽列 (集點/好友/使用/精選) 與四大分頁 (首頁/步數/時間/遊戲) 元素
         var hasBottomNav = false
         var hasUpperStage = false
         for (item in items) {
@@ -129,7 +267,14 @@ class OcrRecognizer {
             if (cy > 0.88f && (t == "集點" || t == "好友" || t == "使用" || t == "精選")) {
                 hasBottomNav = true
             }
-            if (cy < 0.48f && (t.contains("距離下次累積") || t.contains("獲得票券") || t == "賓果" || t == "抽抽樂" || t == "糖果")) {
+            if (cy < 0.56f && (
+                    t == "首頁" || t == "步數" || t == "時間" || t == "遊戲" ||
+                        t.contains("距離下次累積") || t.contains("今天的步數") ||
+                        t.contains("獲得票券") || t.contains("獲得金幣") ||
+                        t.contains("玩遊戲賺點數") || t.contains("達成條件") ||
+                        t == "賓果" || t == "抽抽樂" || t == "糖果"
+                    )
+            ) {
                 hasUpperStage = true
             }
         }
@@ -163,6 +308,10 @@ class OcrRecognizer {
         val GAME_AD_TRIGGER_KEYWORDS = listOf(
             "15 獲得",
             "15獲得",
+            "60 獲得",
+            "60獲得",
+            "100 獲得",
+            "100獲得",
             "看廣告",
             "觀看廣告",
             "觀看影片",

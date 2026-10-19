@@ -52,6 +52,7 @@ class FloatingOverlayService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        activeInstance = this
         windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
         engine = AutomationEngine.getInstance(this)
         startForegroundNotification()
@@ -70,6 +71,9 @@ class FloatingOverlayService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        if (activeInstance === this) {
+            activeInstance = null
+        }
         serviceScope.cancel()
         overlayScreenBounds.setEmpty()
         rootView?.let {
@@ -228,6 +232,7 @@ class FloatingOverlayService : Service() {
             container.post { updateOverlayBoundsOnScreen() }
         }
 
+        val defaultY = (resources.displayMetrics.heightPixels * 0.165f).toInt().coerceAtLeast(280)
         val wmParams = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -238,7 +243,7 @@ class FloatingOverlayService : Service() {
         ).apply {
             gravity = Gravity.TOP or Gravity.START
             x = 16
-            y = 320
+            y = defaultY
         }
 
         var initialX = 0
@@ -368,11 +373,34 @@ class FloatingOverlayService : Service() {
         private const val NOTIFICATION_ID = 1001
         const val ACTION_STOP_OVERLAY = "com.linewalk.autoad.ACTION_STOP_OVERLAY"
 
+        @Volatile
+        private var activeInstance: FloatingOverlayService? = null
+
         /** 紀錄懸浮窗目前在螢幕上的絕對區域，讓 OCR 與圖像比對自動避開懸浮窗本身 */
         val overlayScreenBounds = Rect()
 
         fun isInsideOverlay(x: Int, y: Int): Boolean {
             return !overlayScreenBounds.isEmpty && overlayScreenBounds.contains(x, y)
+        }
+
+        /** 若目標點擊座標剛好被使用者拖曳的懸浮窗蓋住，暫時隱藏懸浮窗 120ms 再執行點擊，確保手勢直達底層遊戲 */
+        suspend fun clickWithOverlayPassthrough(targetRect: Rect, clickBlock: suspend () -> Unit) {
+            val inst = activeInstance
+            val v = inst?.rootView
+            val overlaps = !overlayScreenBounds.isEmpty && Rect.intersects(overlayScreenBounds, targetRect)
+            if (overlaps && v != null && v.visibility == View.VISIBLE) {
+                v.visibility = View.INVISIBLE
+                delay(90L)
+                try {
+                    clickBlock()
+                    delay(90L)
+                } finally {
+                    v.visibility = View.VISIBLE
+                    v.post { inst.updateOverlayBoundsOnScreen() }
+                }
+            } else {
+                clickBlock()
+            }
         }
     }
 }

@@ -160,7 +160,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="6dp"
-                android:text="【第一優先】步數獎勵（水瓶集滿自動點開看廣告領金幣）"
+                android:text="【步數分頁】步數獎勵（自動領取所有『獲得票券』）"
                 android:textColor="@color/text_primary"
                 android:textStyle="bold" />
 
@@ -168,21 +168,21 @@
                 android:id="@+id/cbMoveGauge"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="移動距離獎勵（交通工具/火車集滿看廣告領金幣）"
+                android:text="【首頁分頁】移動距離獎勵（自動領取所有『獲得金幣』）"
                 android:textColor="@color/text_primary" />
 
             <CheckBox
                 android:id="@+id/cbIdleReward"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="放置/時間獎勵（角色定時產出看廣告領金幣）"
+                android:text="【時間分頁】放置蘋果獎勵（自動領取所有『獲得票券』）"
                 android:textColor="@color/text_primary" />
 
             <CheckBox
                 android:id="@+id/cbGachaTask"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="幸運扭蛋 / 刮刮樂（自動點擊免費看廣告抽獎）"
+                android:text="【遊戲分頁】遊戲達成獎勵（自動檢查『獲得金幣』）"
                 android:textColor="@color/text_primary" />
 
             <View

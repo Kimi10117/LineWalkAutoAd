@@ -49,6 +49,30 @@ data class EngineUiStatus(
     val recentLogs: List<String> = emptyList()
 )
 
+enum class MainTab(
+    val tabIndex: Int,
+    val tabName: String,
+    val shortLabel: String,
+    val xRatio: Float,
+    val yRatio: Float = 0.115f
+) {
+    MOVE(0, "首頁(移動)", "首頁", 0.125f),
+    STEP(1, "步數", "步數", 0.375f),
+    TIME(2, "時間(放置)", "時間", 0.625f),
+    GAME(3, "遊戲", "遊戲", 0.875f);
+
+    fun isEnabled(config: AppConfig): Boolean = when (this) {
+        MOVE -> config.enableMoveGaugeTask
+        STEP -> config.enableStepBottleTask
+        TIME -> config.enableIdleRewardTask
+        GAME -> config.enableGachaTask
+    }
+
+    companion object {
+        fun fromIndex(idx: Int): MainTab? = entries.firstOrNull { it.tabIndex == idx }
+    }
+}
+
 class AutomationEngine private constructor(context: Context) {
 
     val config = AppConfig(context)
@@ -65,18 +89,19 @@ class AutomationEngine private constructor(context: Context) {
         templateMatcher = templateMatcher
     )
 
-    private val tasks: List<GameTask> = listOf(
-        StepBottleTask(),
-        MoveGaugeTask(),
-        IdleRewardTask(),
-        GachaTask()
-    )
+    private val stepTask = StepBottleTask()
+    private val moveTask = MoveGaugeTask()
+    private val timeTask = IdleRewardTask()
+    private val gameTask = GachaTask()
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var loopJob: Job? = null
 
     private var popupRetryTicks = 0
     private var rewardClaimRetryTicks = 0
+    private var currentTab: MainTab = MainTab.STEP
+    private var emptyTicksOnCurrentTab = 0
+    private val confirmedEmptyTabs = mutableSetOf<MainTab>()
 
     private val _uiStatus = MutableStateFlow(EngineUiStatus())
     val uiStatus: StateFlow<EngineUiStatus> = _uiStatus.asStateFlow()
@@ -91,10 +116,12 @@ class AutomationEngine private constructor(context: Context) {
 
         popupRetryTicks = 0
         rewardClaimRetryTicks = 0
+        emptyTicksOnCurrentTab = 0
+        confirmedEmptyTabs.clear()
         transitionTo(
             newState = EngineState.IN_GAME_SCAN,
-            detail = "自動巡邏已啟動，正在掃描『獲得票券』與彈窗...",
-            safeOverlayText = "🔍 巡邏任務目標中..."
+            detail = "自動巡邏已啟動，將依序檢查『步數/首頁/時間/遊戲』所有分頁...",
+            safeOverlayText = "🔍 巡邏各分頁獎勵中..."
         )
         _uiStatus.value = _uiStatus.value.copy(isRunning = true)
 
@@ -174,11 +201,15 @@ class AutomationEngine private constructor(context: Context) {
         val sw = screenBitmap.width
         val sh = screenBitmap.height
 
-        // A. 最優先檢查：下半部是否已經彈出『紅利 [▶] 15 獲得』等看廣告彈窗按鈕！
+        // A. 最優先檢查：下半部是否已經彈出『紅利 [▶] 15/60 獲得』等看廣告彈窗按鈕！
         val existingAdBtn = findAdTriggerButton(service, screenBitmap, ocrItems)
         if (existingAdBtn != null) {
+            emptyTicksOnCurrentTab = 0
+            confirmedEmptyTabs.remove(currentTab)
             appendLog("🎬 偵測到看廣告按鈕 (${existingAdBtn.first})，立即點擊！")
-            service.clickRect(existingAdBtn.second)
+            FloatingOverlayService.clickWithOverlayPassthrough(existingAdBtn.second) {
+                service.clickRect(existingAdBtn.second)
+            }
             adCloserHandler.onEnterAdMode()
             transitionTo(
                 EngineState.AD_WATCHING,
@@ -188,12 +219,40 @@ class AutomationEngine private constructor(context: Context) {
             return
         }
 
-        // B. 判斷目前是否在乾淨的《LINE 散步趣》主畫面（未開彈窗）
+        // B. 次優先檢查：是否停留在看完廣告後的『獲得15張票券！ / 獲得金幣！』中央彈窗（下方有白色 [ 關閉 ] 按鈕）！
+        val modalCloseBtn = ocrRecognizer.findCenterRewardModalCloseButton(screenBitmap, ocrItems)
+        if (modalCloseBtn != null) {
+            emptyTicksOnCurrentTab = 0
+            appendLog("✨ 點擊領獎完成彈窗: ${modalCloseBtn.first}")
+            FloatingOverlayService.clickWithOverlayPassthrough(modalCloseBtn.second) {
+                service.clickRect(modalCloseBtn.second)
+            }
+            updateDetail(
+                "✨ 已點掉領獎完成 [關閉] 按鈕，準備檢查下一項...",
+                "✨ 已點關閉，繼續檢查..."
+            )
+            return
+        }
+
+        // C. 判斷目前是否在乾淨的《LINE 散步趣》主畫面（涵蓋『首頁』『步數』『時間』『遊戲』四大分頁）
         val onMainScreen = ocrRecognizer.isLineWalkMainScreenVisible(screenBitmap, ocrItems, templateMatcher)
         if (onMainScreen) {
-            val enabledTasks = tasks.filter { it.isEnabled(config) }
-            for (task in enabledTasks) {
-                val target = task.findTargetOnScreen(
+            // 同步目前畫面上實際選取的分頁標籤
+            templateMatcher.detectActiveMainTabIndex(screenBitmap)?.let { idx ->
+                MainTab.fromIndex(idx)?.let { detectedTab ->
+                    currentTab = detectedTab
+                }
+            }
+
+            val currentTask: GameTask = when (currentTab) {
+                MainTab.STEP -> stepTask
+                MainTab.MOVE -> moveTask
+                MainTab.TIME -> timeTask
+                MainTab.GAME -> gameTask
+            }
+
+            val target = if (currentTask.isEnabled(config)) {
+                currentTask.findTargetOnScreen(
                     screenBitmap = screenBitmap,
                     ocrItems = ocrItems,
                     config = config,
@@ -201,30 +260,77 @@ class AutomationEngine private constructor(context: Context) {
                     templateMatcher = templateMatcher,
                     ocrRecognizer = ocrRecognizer
                 )
-                if (target != null && !FloatingOverlayService.isInsideOverlay(target.bounds.centerX(), target.bounds.centerY())) {
-                    val newTaskCount = _uiStatus.value.tasksTriggeredCount + 1
-                    _uiStatus.value = _uiStatus.value.copy(tasksTriggeredCount = newTaskCount)
-                    appendLog("🎯 點擊【${target.taskName}】: ${target.targetLabel}")
-                    service.clickRect(target.bounds)
-                    popupRetryTicks = 0
-                    transitionTo(
-                        EngineState.TRIGGER_AD_POPUP,
-                        "已點擊 ${target.targetLabel}，等待『紅利 15 獲得』彈窗...",
-                        "⏳ 等待彈窗出現..."
-                    )
-                    return
-                }
+            } else {
+                null
             }
 
+            if (target != null) {
+                emptyTicksOnCurrentTab = 0
+                confirmedEmptyTabs.remove(currentTab)
+                val newTaskCount = _uiStatus.value.tasksTriggeredCount + 1
+                _uiStatus.value = _uiStatus.value.copy(tasksTriggeredCount = newTaskCount)
+                appendLog("🎯【${currentTab.tabName}】點擊: ${target.targetLabel}")
+                FloatingOverlayService.clickWithOverlayPassthrough(target.bounds) {
+                    service.clickRect(target.bounds)
+                }
+                popupRetryTicks = 0
+                transitionTo(
+                    EngineState.TRIGGER_AD_POPUP,
+                    "已點擊 ${target.targetLabel}，等待『紅利 獲得』彈窗...",
+                    "⏳ 等待彈窗出現..."
+                )
+                return
+            }
+
+            // 本分頁目前沒有亮起的粉紅『獲得票券 / 獲得金幣』按鈕
+            emptyTicksOnCurrentTab++
+            if (emptyTicksOnCurrentTab < 2) {
+                updateDetail(
+                    "🔍 正在檢查【${currentTab.tabName}】是否有可領取獎勵 ($emptyTicksOnCurrentTab/2)...",
+                    "🔍 檢查[${currentTab.shortLabel}] ($emptyTicksOnCurrentTab/2)..."
+                )
+                return
+            }
+
+            // 連續 2 次確認本分頁已無可領取項目 -> 標記本分頁已完成並自動切換至下一個分頁！
+            emptyTicksOnCurrentTab = 0
+            confirmedEmptyTabs.add(currentTab)
+
+            val enabledTabs = MainTab.entries.filter { it.isEnabled(config) }.ifEmpty { MainTab.entries }
+            val remainingTabs = enabledTabs.filter { it !in confirmedEmptyTabs }
+
+            if (remainingTabs.isEmpty()) {
+                val tabListStr = enabledTabs.joinToString("/") { it.shortLabel }
+                stop("🎉 所有分頁 ($tabListStr) 獎勵皆已領取完畢！(共完成 ${_uiStatus.value.adsCompletedCount} 支廣告)")
+                return
+            }
+
+            val orderedCycle = listOf(MainTab.STEP, MainTab.MOVE, MainTab.TIME, MainTab.GAME)
+            val startIdx = orderedCycle.indexOf(currentTab).coerceAtLeast(0)
+            val nextTab = (1..orderedCycle.size)
+                .map { offset -> orderedCycle[(startIdx + offset) % orderedCycle.size] }
+                .firstOrNull { it in remainingTabs } ?: remainingTabs.first()
+
+            val tabRect = Rect(
+                (sw * (nextTab.xRatio - 0.05f)).toInt(),
+                (sh * 0.103f).toInt(),
+                (sw * (nextTab.xRatio + 0.05f)).toInt(),
+                (sh * 0.128f).toInt()
+            )
+            appendLog("🔄【${currentTab.tabName}】已領完，自動切換至【${nextTab.tabName}】(待檢查:${remainingTabs.size}頁)")
+            currentTab = nextTab
+            FloatingOverlayService.clickWithOverlayPassthrough(tabRect) {
+                service.clickRect(tabRect)
+            }
             updateDetail(
-                "🔍 主畫面巡邏中：等待粉紅色『獲得票券』亮起...",
-                "🔍 巡邏主畫面目標中..."
+                "🔄 已切換至【${nextTab.tabName}】，正在檢查獎勵...",
+                "🔄 切換至[${nextTab.shortLabel}]檢查中..."
             )
             return
         }
 
-        // C. 若不在主畫面（代表有宣傳視窗如『邀請好友』、『玩遊戲賺點數 -> 跳過』、領獎確認窗或全螢幕廣告）：
-        // C1. 短字按鈕 OCR（跳過 / 略過 / 確認 / 確定 / 關閉，字數 <= 6）
+        // D. 若不在主畫面（代表有宣傳視窗如『邀請好友』、『玩遊戲賺點數 -> 跳過』、領獎確認窗或全螢幕廣告）：
+        // D1. 短字按鈕 OCR（跳過 / 略過 / 確認 / 確定 / 關閉，字數 <= 6）
         val dismissOrSkipOcr = ocrRecognizer.findMatch(
             items = ocrItems,
             keywords = OcrRecognizer.GAME_CLAIM_CONFIRM_KEYWORDS,
@@ -236,11 +342,13 @@ class AutomationEngine private constructor(context: Context) {
         )
         if (dismissOrSkipOcr != null) {
             appendLog("✨ 自動點擊彈窗 [${dismissOrSkipOcr.text}]")
-            service.clickRect(dismissOrSkipOcr.bounds)
+            FloatingOverlayService.clickWithOverlayPassthrough(dismissOrSkipOcr.bounds) {
+                service.clickRect(dismissOrSkipOcr.bounds)
+            }
             return
         }
 
-        // C2. 無障礙節點樹關閉按鈕
+        // D2. 無障礙節點樹關閉按鈕
         val closeNode = nodeInspector.findAdCloseNode(service.getSafeRootNode(), sw, sh)
         if (closeNode != null) {
             appendLog("✨ 自動點擊關閉節點: ${closeNode.label}")
@@ -248,7 +356,7 @@ class AutomationEngine private constructor(context: Context) {
             return
         }
 
-        // C3. 幾何角落 X 偵測器（如『邀請好友』右上角的圓底白 X！）
+        // D3. 幾何角落 X 偵測器（如『邀請好友』右上角的圓底白 X！）
         val geoX = templateMatcher.detectCornerGeometricX(
             screenBitmap = screenBitmap,
             blacklistedCoord = FloatingOverlayService::isInsideOverlay
@@ -277,7 +385,9 @@ class AutomationEngine private constructor(context: Context) {
         val adBtn = findAdTriggerButton(service, screenBitmap, ocrItems)
         if (adBtn != null) {
             appendLog("🎬 點擊彈窗看廣告按鈕: ${adBtn.first}")
-            service.clickRect(adBtn.second)
+            FloatingOverlayService.clickWithOverlayPassthrough(adBtn.second) {
+                service.clickRect(adBtn.second)
+            }
             adCloserHandler.onEnterAdMode()
             transitionTo(
                 EngineState.AD_WATCHING,
@@ -299,7 +409,9 @@ class AutomationEngine private constructor(context: Context) {
             )
             if (normalOrSkip != null) {
                 appendLog("ℹ️ 點擊彈窗一般按鈕: [${normalOrSkip.text}]")
-                service.clickRect(normalOrSkip.bounds)
+                FloatingOverlayService.clickWithOverlayPassthrough(normalOrSkip.bounds) {
+                    service.clickRect(normalOrSkip.bounds)
+                }
                 rewardClaimRetryTicks = 0
                 transitionTo(
                     EngineState.REWARD_CLAIM,
@@ -350,11 +462,16 @@ class AutomationEngine private constructor(context: Context) {
             is AdStepResult.ReturnedToGame -> {
                 val newAdsCount = _uiStatus.value.adsCompletedCount + 1
                 _uiStatus.value = _uiStatus.value.copy(adsCompletedCount = newAdsCount)
-                appendLog("🎉 成功關閉廣告回到散步趣主畫面！(累計完成 $newAdsCount 支)")
+                emptyTicksOnCurrentTab = 0
                 if (res.confirmBounds != null) {
-                    service.clickRect(res.confirmBounds)
+                    appendLog("🎉 廣告已關閉，自動點擊領獎彈窗 [關閉]！(累計完成 $newAdsCount 支)")
+                    FloatingOverlayService.clickWithOverlayPassthrough(res.confirmBounds) {
+                        service.clickRect(res.confirmBounds)
+                    }
+                } else {
+                    appendLog("🎉 成功關閉廣告回到散步趣主畫面！(累計完成 $newAdsCount 支)")
                 }
-                transitionTo(EngineState.IN_GAME_SCAN, "完成一輪！繼續點下一張『獲得票券』...", "🔍 繼續下一輪...")
+                transitionTo(EngineState.IN_GAME_SCAN, "完成一輪！繼續檢查本頁與其他分頁獎勵...", "🔍 繼續下一輪...")
             }
 
             is AdStepResult.WatchdogBackTriggered -> {
@@ -382,8 +499,20 @@ class AutomationEngine private constructor(context: Context) {
         val sw = screenBitmap.width
         val sh = screenBitmap.height
 
+        val modalClose = ocrRecognizer.findCenterRewardModalCloseButton(screenBitmap, ocrItems)
+        if (modalClose != null) {
+            appendLog("✅ 點擊領獎完成彈窗: ${modalClose.first}")
+            FloatingOverlayService.clickWithOverlayPassthrough(modalClose.second) {
+                service.clickRect(modalClose.second)
+            }
+            emptyTicksOnCurrentTab = 0
+            transitionTo(EngineState.IN_GAME_SCAN, "已關閉領獎彈窗，繼續下一輪！", "🔍 巡邏目標中...")
+            return
+        }
+
         if (ocrRecognizer.isLineWalkMainScreenVisible(screenBitmap, ocrItems, templateMatcher)) {
-            transitionTo(EngineState.IN_GAME_SCAN, "已回到主畫面，繼續點下一張票券！", "🔍 巡邏目標中...")
+            emptyTicksOnCurrentTab = 0
+            transitionTo(EngineState.IN_GAME_SCAN, "已回到主畫面，繼續檢查下一項！", "🔍 巡邏目標中...")
             return
         }
 

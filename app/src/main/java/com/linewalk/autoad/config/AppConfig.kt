@@ -26,9 +26,9 @@ class AppConfig(context: Context) {
         get() = prefs.getBoolean(KEY_ENABLE_IDLE_REWARD, true)
         set(value) = prefs.edit().putBoolean(KEY_ENABLE_IDLE_REWARD, value).apply()
 
-    /** 幸運扭蛋 / 刮刮樂 / 任務翻倍 */
+    /** 遊戲分頁獎勵 / 幸運扭蛋 / 刮刮樂 */
     var enableGachaTask: Boolean
-        get() = prefs.getBoolean(KEY_ENABLE_GACHA, false)
+        get() = prefs.getBoolean(KEY_ENABLE_GACHA, true)
         set(value) = prefs.edit().putBoolean(KEY_ENABLE_GACHA, value).apply()
 
     /** 當彈窗沒有「看廣告」按鈕（例如廣告次數用盡或僅有一般領取）時，是否自動點一般領取 */
@@ -61,7 +61,7 @@ class AppConfig(context: Context) {
         private const val KEY_ENABLE_STEP_BOTTLE = "enable_step_bottle"
         private const val KEY_ENABLE_MOVE_GAUGE = "enable_move_gauge"
         private const val KEY_ENABLE_IDLE_REWARD = "enable_idle_reward"
-        private const val KEY_ENABLE_GACHA = "enable_gacha"
+        private const val KEY_ENABLE_GACHA = "enable_game_tab_v15"
         private const val KEY_CLAIM_NORMAL_NO_AD = "claim_normal_no_ad"
         private const val KEY_LOOP_INTERVAL_MS = "loop_interval_ms"
         private const val KEY_MAX_AD_WAIT_SEC = "max_ad_wait_sec"

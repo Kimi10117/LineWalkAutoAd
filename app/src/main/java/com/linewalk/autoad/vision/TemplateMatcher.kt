@@ -80,6 +80,56 @@ class TemplateMatcher {
         return null
     }
 
+    /**
+     * 偵測《LINE 散步趣》頂部分頁列 (y = 0.115f..0.123f) 目前停留在哪一個分頁：
+     * - 0: 首頁 (移動, xRatio = 0.125f)
+     * - 1: 步數 (xRatio = 0.375f)
+     * - 2: 時間 (放置, xRatio = 0.625f)
+     * - 3: 遊戲 (xRatio = 0.875f)
+     * 選取中的分頁在該區段具有實心深色圖示與粗體字 (darkRatio >= 0.08f)，未選取分頁則為 0.0f。
+     */
+    fun detectActiveMainTabIndex(screenBitmap: Bitmap): Int? {
+        val w = screenBitmap.width
+        val h = screenBitmap.height
+        val yStart = (h * 0.115f).toInt().coerceIn(0, h - 1)
+        val yEnd = (h * 0.123f).toInt().coerceIn(yStart + 1, h - 1)
+        val tabCenters = floatArrayOf(0.125f, 0.375f, 0.625f, 0.875f)
+
+        var bestIndex = -1
+        var bestRatio = 0f
+
+        for (idx in tabCenters.indices) {
+            val cx = tabCenters[idx]
+            val xStart = (w * (cx - 0.045f)).toInt().coerceIn(0, w - 1)
+            val xEnd = (w * (cx + 0.045f)).toInt().coerceIn(xStart + 1, w - 1)
+            var darkCount = 0
+            var total = 0
+            var y = yStart
+            while (y <= yEnd) {
+                var x = xStart
+                while (x <= xEnd) {
+                    val c = screenBitmap.getPixel(x, y)
+                    val r = (c shr 16) and 0xFF
+                    val g = (c shr 8) and 0xFF
+                    val b = c and 0xFF
+                    if (r < 85 && g < 85 && b < 85) {
+                        darkCount++
+                    }
+                    total++
+                    x += 3
+                }
+                y += 2
+            }
+            val ratio = if (total > 0) darkCount.toFloat() / total else 0f
+            if (ratio > bestRatio) {
+                bestRatio = ratio
+                bestIndex = idx
+            }
+        }
+
+        return if (bestIndex >= 0 && bestRatio >= 0.08f) bestIndex else null
+    }
+
     suspend fun findBestTemplateMatch(
         screenBitmap: Bitmap,
         templates: List<Bitmap>,

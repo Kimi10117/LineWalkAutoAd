@@ -37,12 +37,12 @@ interface GameTask {
 private fun isButtonColorfulAndActive(bitmap: Bitmap, bounds: Rect): Boolean {
     val sw = bitmap.width
     val sh = bitmap.height
-    val left = (bounds.left - 20).coerceIn(0, sw - 1)
-    val top = (bounds.top - 10).coerceIn(0, sh - 1)
-    val right = (bounds.right + 20).coerceIn(left + 1, sw)
-    val bottom = (bounds.bottom + 10).coerceIn(top + 1, sh)
+    val left = (bounds.left - 15).coerceIn(0, sw - 1)
+    val top = (bounds.top - 8).coerceIn(0, sh - 1)
+    val right = (bounds.right + 15).coerceIn(left + 1, sw)
+    val bottom = (bounds.bottom + 8).coerceIn(top + 1, sh)
 
-    var colorfulPixels = 0
+    var coralPinkPixels = 0
     var totalSampled = 0
     val stepX = max(1, (right - left) / 10)
     val stepY = max(1, (bottom - top) / 6)
@@ -55,23 +55,19 @@ private fun isButtonColorfulAndActive(bitmap: Bitmap, bounds: Rect): Boolean {
             val r = (c shr 16) and 0xFF
             val g = (c shr 8) and 0xFF
             val b = c and 0xFF
-            val maxC = max(r, max(g, b))
-            val minC = min(r, min(g, b))
-            if (maxC - minC > 45 && maxC > 120) {
-                colorfulPixels++
+            if (r > 205 && g in 30..135 && b in 40..145 && (r - g) > 100) {
+                coralPinkPixels++
             }
             totalSampled++
             x += stepX
         }
         y += stepY
     }
-    return totalSampled > 0 && (colorfulPixels.toFloat() / totalSampled) >= 0.20f
+    return totalSampled > 0 && (coralPinkPixels.toFloat() / totalSampled) >= 0.25f
 }
 
 /**
- * 【第一優先任務】步數獎勵任務 (StepBottleTask)：
- * 1. 直接使用珊瑚粉紅按鈕偵測器 (findCoralPinkButton y=0.25~0.37) + OCR 辨識『獲得票券』（即使熊大對話框擋住部分文字也能毫秒級定位！）。
- * 2. 亦支援比對使用者自訂框選的範本 (STEP_BOTTLE)。
+ * 【步數分頁任務】步數獎勵任務 (StepBottleTask)
  */
 class StepBottleTask : GameTask {
     override val id: String = "step_bottle"
@@ -87,11 +83,11 @@ class StepBottleTask : GameTask {
         templateMatcher: TemplateMatcher,
         ocrRecognizer: OcrRecognizer
     ): TaskTriggerTarget? {
-        // 1. 優先透過珊瑚粉紅長條按鈕偵測器尋找主畫面 y=25%~37% 的『獲得票券』按鈕
+        // 1. 優先透過珊瑚粉紅長條按鈕偵測器尋找主畫面 y=25%~38% 的『獲得票券 / 獲得金幣』按鈕
         val pinkBtn = templateMatcher.findCoralPinkButton(
             screenBitmap = screenBitmap,
             yStartRatio = 0.25f,
-            yEndRatio = 0.37f,
+            yEndRatio = 0.38f,
             label = "粉紅[獲得票券]鈕"
         )
         if (pinkBtn != null) {
@@ -102,7 +98,7 @@ class StepBottleTask : GameTask {
             )
         }
 
-        // 2. OCR 尋找『獲得票券 / 領取票券 / 獲得金幣』
+        // 2. OCR 尋找彩色的『獲得票券 / 領取票券 / 獲得金幣』
         val ticketBtnOcr = ocrRecognizer.findMatch(
             items = ocrItems,
             keywords = listOf("獲得票券", "領取票券", "獲得金幣"),
@@ -142,9 +138,12 @@ class StepBottleTask : GameTask {
     }
 }
 
+/**
+ * 【首頁(移動)分頁任務】移動距離獎勵 (MoveGaugeTask)
+ */
 class MoveGaugeTask : GameTask {
     override val id: String = "move_gauge"
-    override val displayName: String = "移動距離獎勵"
+    override val displayName: String = "移動獎勵(獲得金幣)"
 
     override fun isEnabled(config: AppConfig): Boolean = config.enableMoveGaugeTask
 
@@ -156,6 +155,36 @@ class MoveGaugeTask : GameTask {
         templateMatcher: TemplateMatcher,
         ocrRecognizer: OcrRecognizer
     ): TaskTriggerTarget? {
+        val pinkBtn = templateMatcher.findCoralPinkButton(
+            screenBitmap = screenBitmap,
+            yStartRatio = 0.25f,
+            yEndRatio = 0.38f,
+            label = "粉紅[獲得金幣]鈕"
+        )
+        if (pinkBtn != null) {
+            return TaskTriggerTarget(
+                taskName = displayName,
+                targetLabel = pinkBtn.label,
+                bounds = pinkBtn.bounds
+            )
+        }
+
+        val coinBtnOcr = ocrRecognizer.findMatch(
+            items = ocrItems,
+            keywords = listOf("獲得金幣", "獲得票券"),
+            screenWidth = screenBitmap.width,
+            screenHeight = screenBitmap.height,
+            roiNormalized = RectF(0.15f, 0.20f, 0.85f, 0.40f),
+            excludeKeywords = listOf("雙重", "LINE POINTS")
+        )
+        if (coinBtnOcr != null && isButtonColorfulAndActive(screenBitmap, coinBtnOcr.bounds)) {
+            return TaskTriggerTarget(
+                taskName = displayName,
+                targetLabel = "按鈕[${coinBtnOcr.text}]",
+                bounds = coinBtnOcr.bounds
+            )
+        }
+
         val templates = templateStorage.getTemplates(TemplateCategory.MOVE_GAUGE).map { it.bitmap }
         if (templates.isNotEmpty()) {
             val match = templateMatcher.findBestTemplateMatch(
@@ -174,27 +203,16 @@ class MoveGaugeTask : GameTask {
                 )
             }
         }
-
-        val pinkBtn = templateMatcher.findCoralPinkButton(
-            screenBitmap = screenBitmap,
-            yStartRatio = 0.25f,
-            yEndRatio = 0.38f,
-            label = "粉紅獎勵鈕"
-        )
-        if (pinkBtn != null) {
-            return TaskTriggerTarget(
-                taskName = displayName,
-                targetLabel = pinkBtn.label,
-                bounds = pinkBtn.bounds
-            )
-        }
         return null
     }
 }
 
+/**
+ * 【時間(放置)分頁任務】時間放置蘋果獎勵 (IdleRewardTask)
+ */
 class IdleRewardTask : GameTask {
     override val id: String = "idle_reward"
-    override val displayName: String = "時間放置獎勵"
+    override val displayName: String = "時間獎勵(獲得票券)"
 
     override fun isEnabled(config: AppConfig): Boolean = config.enableIdleRewardTask
 
@@ -206,6 +224,36 @@ class IdleRewardTask : GameTask {
         templateMatcher: TemplateMatcher,
         ocrRecognizer: OcrRecognizer
     ): TaskTriggerTarget? {
+        val pinkBtn = templateMatcher.findCoralPinkButton(
+            screenBitmap = screenBitmap,
+            yStartRatio = 0.25f,
+            yEndRatio = 0.38f,
+            label = "粉紅[獲得票券]鈕"
+        )
+        if (pinkBtn != null) {
+            return TaskTriggerTarget(
+                taskName = displayName,
+                targetLabel = pinkBtn.label,
+                bounds = pinkBtn.bounds
+            )
+        }
+
+        val ticketBtnOcr = ocrRecognizer.findMatch(
+            items = ocrItems,
+            keywords = listOf("獲得票券", "獲得金幣"),
+            screenWidth = screenBitmap.width,
+            screenHeight = screenBitmap.height,
+            roiNormalized = RectF(0.15f, 0.20f, 0.85f, 0.40f),
+            excludeKeywords = listOf("雙重", "LINE POINTS")
+        )
+        if (ticketBtnOcr != null && isButtonColorfulAndActive(screenBitmap, ticketBtnOcr.bounds)) {
+            return TaskTriggerTarget(
+                taskName = displayName,
+                targetLabel = "按鈕[${ticketBtnOcr.text}]",
+                bounds = ticketBtnOcr.bounds
+            )
+        }
+
         val templates = templateStorage.getTemplates(TemplateCategory.IDLE_REWARD).map { it.bitmap }
         if (templates.isNotEmpty()) {
             val match = templateMatcher.findBestTemplateMatch(
@@ -228,9 +276,12 @@ class IdleRewardTask : GameTask {
     }
 }
 
+/**
+ * 【遊戲分頁任務】LINE POINTS GAME 獲得金幣與抽獎 (GachaTask)
+ */
 class GachaTask : GameTask {
     override val id: String = "gacha_task"
-    override val displayName: String = "抽抽樂與糖果"
+    override val displayName: String = "遊戲獎勵(獲得金幣)"
 
     override fun isEnabled(config: AppConfig): Boolean = config.enableGachaTask
 
@@ -242,6 +293,38 @@ class GachaTask : GameTask {
         templateMatcher: TemplateMatcher,
         ocrRecognizer: OcrRecognizer
     ): TaskTriggerTarget? {
+        // 1. 遊戲分頁的『獲得金幣』按鈕位於 y = 0.44f..0.58f（未達成條件時為灰色，達成時為珊瑚粉紅）
+        val pinkGameBtn = templateMatcher.findCoralPinkButton(
+            screenBitmap = screenBitmap,
+            yStartRatio = 0.44f,
+            yEndRatio = 0.58f,
+            label = "遊戲[獲得金幣]粉紅鈕"
+        )
+        if (pinkGameBtn != null) {
+            return TaskTriggerTarget(
+                taskName = displayName,
+                targetLabel = pinkGameBtn.label,
+                bounds = pinkGameBtn.bounds
+            )
+        }
+
+        // 2. OCR 檢查 y = 0.44f..0.58f 的『獲得金幣』是否為亮起狀態
+        val gameCoinOcr = ocrRecognizer.findMatch(
+            items = ocrItems,
+            keywords = listOf("獲得金幣", "獲得票券"),
+            screenWidth = screenBitmap.width,
+            screenHeight = screenBitmap.height,
+            roiNormalized = RectF(0.15f, 0.44f, 0.85f, 0.58f)
+        )
+        if (gameCoinOcr != null && isButtonColorfulAndActive(screenBitmap, gameCoinOcr.bounds)) {
+            return TaskTriggerTarget(
+                taskName = displayName,
+                targetLabel = "按鈕[${gameCoinOcr.text}]",
+                bounds = gameCoinOcr.bounds
+            )
+        }
+
+        // 3. 使用者自訂框選範本
         val templates = templateStorage.getTemplates(TemplateCategory.GACHA_BTN).map { it.bitmap }
         if (templates.isNotEmpty()) {
             val match = templateMatcher.findBestTemplateMatch(

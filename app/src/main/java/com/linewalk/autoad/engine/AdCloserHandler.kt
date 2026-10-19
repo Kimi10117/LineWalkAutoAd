@@ -83,7 +83,15 @@ class AdCloserHandler(
             return AdStepResult.RedirectRecovered(fgPkg)
         }
 
-        // 2. 只有當真正回到《LINE 散步趣》主畫面時，才判定已完成這支廣告！
+        // 2A. 若已關閉全螢幕廣告並跳出『獲得15張票券！ / 獲得金幣！』中央領獎彈窗，直接回傳並點擊 [ 關閉 ]！
+        if (elapsedSec >= 4) {
+            val modalClose = ocrRecognizer.findCenterRewardModalCloseButton(screenBitmap, ocrItems)
+            if (modalClose != null) {
+                return AdStepResult.ReturnedToGame(modalClose.second, "已關閉領獎彈窗 (${modalClose.first})")
+            }
+        }
+
+        // 2B. 若已回到乾淨的《LINE 散步趣》主畫面，判定已完成這支廣告！
         if (elapsedSec >= 5 && ocrRecognizer.isLineWalkMainScreenVisible(screenBitmap, ocrItems, templateMatcher)) {
             return AdStepResult.ReturnedToGame(null, "已回到散步趣主畫面")
         }
