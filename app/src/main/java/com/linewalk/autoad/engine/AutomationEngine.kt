@@ -280,7 +280,7 @@ class AutomationEngine private constructor(context: Context) {
     ): Rect? {
         val hasPromoContent = ocrItems.any { item ->
             val t = item.text
-            t.contains("玩遊戲") || t.contains("賺點數") || t.contains("挑選喜歡的遊戲") || t.contains("同意並繼續")
+            t.contains("挑選喜歡的遊戲") || t.contains("同意並繼續")
         }
         if (!hasPromoContent) return null
 
@@ -533,7 +533,8 @@ class AutomationEngine private constructor(context: Context) {
             FloatingOverlayService.clickWithOverlayPassthrough(openCellBtn) {
                 service.clickRect(openCellBtn)
             }
-            transitionTo(EngineState.TRIGGER_AD_POPUP, "開啟賓果格中...", "⏳ 處理中...")
+            adCloserHandler.onEnterAdMode()
+            transitionTo(EngineState.AD_WATCHING, "已點擊「立即開啟賓果格」，觀看廣告開格中...", "📺 廣告開格中...")
             return
         }
 
@@ -570,8 +571,14 @@ class AutomationEngine private constructor(context: Context) {
             FloatingOverlayService.clickWithOverlayPassthrough(drawTarget.second) {
                 service.clickRect(drawTarget.second)
             }
-            adCloserHandler.onEnterAdMode()
-            transitionTo(EngineState.AD_WATCHING, "已點擊 ${drawTarget.first}，觀看廣告/等待抽獎...", "🎰 抽獎中...")
+            if (drawTarget.first.contains("免費")) {
+                adCloserHandler.onEnterAdMode()
+                transitionTo(EngineState.AD_WATCHING, "已點擊 ${drawTarget.first}，觀看廣告抽獎...", "🎰 廣告抽獎中...")
+            } else {
+                delay(600)
+                popupRetryTicks = 0
+                transitionTo(EngineState.TRIGGER_AD_POPUP, "已點擊 ${drawTarget.first}，等待抽獎結果彈窗...", "🎰 抽獎中...")
+            }
             return
         }
 

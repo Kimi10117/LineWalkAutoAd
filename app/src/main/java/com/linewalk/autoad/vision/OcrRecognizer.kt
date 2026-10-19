@@ -377,6 +377,12 @@ class OcrRecognizer {
         for (item in items) {
             if (item.bounds.centerY() > topBarThreshold) continue
             val t = item.text
+            // 嚴格排除包含「分」、「分鐘」、「距離」、「下次」、「重置」、時間冒號「:」等長週期倒數計時（如賓果冷卻）！
+            if (t.contains("分") || t.contains("距離") || t.contains("下次") ||
+                t.contains("重置") || t.contains("：") || t.contains(":")
+            ) {
+                continue
+            }
             val regexMatch = COUNTDOWN_REGEX.find(t)
             if (regexMatch != null) {
                 val sec = regexMatch.groupValues.drop(1).firstOrNull { it.isNotEmpty() }?.toIntOrNull()

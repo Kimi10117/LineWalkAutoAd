@@ -45,19 +45,54 @@ class BingoTask {
         templateMatcher: TemplateMatcher
     ): Rect? {
         val sh = screenBitmap.height
+        val sw = screenBitmap.width
 
+        // 1. OCR 搜尋「立即開啟」/「開啟賓果格」/「開啟賓果」
         val match = ocrItems.firstOrNull { item ->
             val cy = item.bounds.centerY()
+            val t = item.text.replace(" ", "")
             cy in (sh * 0.58f).toInt()..(sh * 0.70f).toInt() &&
-            (item.text.contains("立即開啟") || item.text.contains("開啟賓果格") || item.text.contains("開啟賓果"))
+            (t.contains("立即開啟") || t.contains("開啟賓果格") || t.contains("開啟賓果") || t.contains("立即開"))
         }
         if (match != null) {
             val cy = match.bounds.centerY()
-            // 若為反灰按鈕則代表尚在冷卻中
             if (!templateMatcher.isPopupButtonDisabledGray(screenBitmap, cy)) {
                 return match.bounds
             }
         }
+
+        // 2. 2D 亮橘色長條按鈕區塊聚類偵測 (#FF8C00 ~ #FFA500: r > 190 && g in 100..195 && b < 70)
+        // 搜尋 y in 0.58f..0.70f, x in 0.18f..0.82f
+        val orangePts = mutableListOf<android.graphics.Point>()
+        val yStart = (sh * 0.58f).toInt()
+        val yEnd = (sh * 0.70f).toInt()
+        val xStart = (sw * 0.18f).toInt()
+        val xEnd = (sw * 0.82f).toInt()
+
+        for (y in yStart..yEnd step 3) {
+            for (x in xStart..xEnd step 3) {
+                val c = screenBitmap.getPixel(x, y)
+                val r = (c shr 16) and 0xFF
+                val g = (c shr 8) and 0xFF
+                val b = c and 0xFF
+                if (r > 190 && g in 100..195 && b < 70) {
+                    orangePts.add(android.graphics.Point(x, y))
+                }
+            }
+        }
+
+        if (orangePts.size >= 80) {
+            val minX = orangePts.minOf { it.x }
+            val maxX = orangePts.maxOf { it.x }
+            val minY = orangePts.minOf { it.y }
+            val maxY = orangePts.maxOf { it.y }
+            val btnW = maxX - minX
+            val btnH = maxY - minY
+            if (btnW > sw * 0.35f && btnH in 15..(sh * 0.10f).toInt()) {
+                return Rect(minX, minY, maxX, maxY)
+            }
+        }
+
         return null
     }
 
