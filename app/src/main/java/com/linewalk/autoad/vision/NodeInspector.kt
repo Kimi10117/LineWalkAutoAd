@@ -2,6 +2,7 @@ package com.linewalk.autoad.vision
 
 import android.graphics.Rect
 import android.view.accessibility.AccessibilityNodeInfo
+import com.linewalk.autoad.ui.FloatingOverlayService
 import java.util.ArrayDeque
 
 data class MatchedNode(
@@ -14,13 +15,12 @@ data class MatchedNode(
 
 /**
  * 第一層辨識：無障礙 UI 節點樹掃描器 (NodeInspector)。
- * 零耗電、毫秒級反應，專門抓取原生廣告 SDK (AdMob, AppLovin, Unity, Mintegral, Vungle 等)
- * 暴露在節點樹上的關閉按鈕或遊戲內原生按鈕。
+ * 自動避開懸浮窗本身與手機頂部中央動態島 (dynamicSpot) 區域。
  */
 class NodeInspector {
 
     /**
-     * 在無障礙節點樹中搜尋廣告的「關閉 / 略過 / X」按鈕。
+     * 在無障礙節點樹中搜尋廣告或推銷彈窗的「關閉 / 略過 / 跳過 / X」按鈕。
      */
     fun findAdCloseNode(
         root: AccessibilityNodeInfo?,
@@ -40,12 +40,18 @@ class NodeInspector {
                 if (node.isVisibleToUser) {
                     val rect = Rect()
                     node.getBoundsInScreen(rect)
+                    val cx = rect.centerX()
+                    val cy = rect.centerY()
 
-                    // 過濾掉無效尺寸或佔據超過畫面 35% 寬高的全螢幕廣告背景節點
-                    val validSize = rect.width() in 16..(screenWidth * 0.35f).toInt() &&
-                        rect.height() in 16..(screenHeight * 0.18f).toInt()
+                    // 排除懸浮窗本身與頂部中間 dynamicSpot 動態島
+                    val inOverlay = FloatingOverlayService.isInsideOverlay(cx, cy)
+                    val inDynamicIsland = cy < screenHeight * 0.045f &&
+                        cx in (screenWidth * 0.28f).toInt()..(screenWidth * 0.72f).toInt()
 
-                    if (validSize) {
+                    val validSize = rect.width() in 16..(screenWidth * 0.45f).toInt() &&
+                        rect.height() in 16..(screenHeight * 0.14f).toInt()
+
+                    if (!inOverlay && !inDynamicIsland && validSize) {
                         val viewId = node.viewIdResourceName?.lowercase().orEmpty()
                         val text = node.text?.toString()?.trim().orEmpty()
                         val desc = node.contentDescription?.toString()?.trim().orEmpty()
@@ -53,16 +59,19 @@ class NodeInspector {
                         val idMatch = AD_CLOSE_VIEW_IDS.any { viewId.contains(it) }
                         val exactSymbolMatch = text in EXACT_CLOSE_SYMBOLS || desc in EXACT_CLOSE_SYMBOLS
                         val keywordMatch = AD_CLOSE_TEXT_KEYWORDS.any {
-                            text.contains(it, ignoreCase = true) || desc.contains(it, ignoreCase = true)
+                            text.equals(it, ignoreCase = true) ||
+                                desc.equals(it, ignoreCase = true) ||
+                                text.contains(it, ignoreCase = true) ||
+                                desc.contains(it, ignoreCase = true)
                         }
-                        // 若文字顯示「12秒後可略過」代表還在倒數，不可點擊
                         val isCountingDown = COUNTDOWN_HINTS.any {
                             text.contains(it) || desc.contains(it)
                         }
+                        val isExcluded = EXCLUDE_TEXTS.any {
+                            text.contains(it) || desc.contains(it)
+                        }
 
-                        if (!isCountingDown && (idMatch || exactSymbolMatch || keywordMatch)) {
-                            val cx = rect.centerX()
-                            val cy = rect.centerY()
+                        if (!isCountingDown && !isExcluded && (idMatch || exactSymbolMatch || keywordMatch)) {
                             if (blacklistedCoord?.invoke(cx, cy) != true) {
                                 candidates.add(
                                     MatchedNode(
@@ -83,26 +92,33 @@ class NodeInspector {
                     node.getChild(i)?.let { queue.add(it) }
                 }
             } catch (_: Exception) {
-                // 忽略回收或跨程序節點例外
             }
         }
 
-        // 優先選擇位於畫面頂部 25% 區域 (左上或右上角) 的關閉按鈕
+        // 優先選擇頂部角落 (X) 或底部明確的「跳過/略過」按鈕
         return candidates.sortedBy { node ->
-            val inTopCorner = node.bounds.centerY() < screenHeight * 0.25f &&
-                (node.bounds.centerX() > screenWidth * 0.72f || node.bounds.centerX() < screenWidth * 0.28f)
-            if (inTopCorner) 0 else 1
+            val cy = node.bounds.centerY()
+            val cx = node.bounds.centerX()
+            val inTopCorner = cy < screenHeight * 0.25f &&
+                (cx > screenWidth * 0.72f || cx < screenWidth * 0.28f)
+            val isExplicitSkip = node.text == "跳過" || node.text == "略過" || node.contentDesc == "跳過"
+            when {
+                inTopCorner -> 0
+                isExplicitSkip -> 1
+                else -> 2
+            }
         }.firstOrNull()
     }
 
     /**
-     * 在無障礙節點樹中尋找包含特定關鍵字的按鈕（如「看廣告」、「領取」、「確認」）。
+     * 在無障礙節點樹中尋找包含特定關鍵字的按鈕（如「看廣告」、「領取」、「跳過」）。
      */
     fun findNodeByKeywords(
         root: AccessibilityNodeInfo?,
         keywords: List<String>,
         screenWidth: Int,
-        screenHeight: Int
+        screenHeight: Int,
+        excludeKeywords: List<String> = emptyList()
     ): MatchedNode? {
         if (root == null) return null
         val queue = ArrayDeque<AccessibilityNodeInfo>()
@@ -114,23 +130,31 @@ class NodeInspector {
                 if (node.isVisibleToUser) {
                     val rect = Rect()
                     node.getBoundsInScreen(rect)
-                    val validSize = rect.width() in 24..(screenWidth * 0.9f).toInt() &&
-                        rect.height() in 20..(screenHeight * 0.25f).toInt()
+                    val cx = rect.centerX()
+                    val cy = rect.centerY()
 
-                    if (validSize) {
+                    val validSize = rect.width() in 24..(screenWidth * 0.9f).toInt() &&
+                        rect.height() in 20..(screenHeight * 0.16f).toInt()
+
+                    if (!FloatingOverlayService.isInsideOverlay(cx, cy) && validSize) {
                         val text = node.text?.toString()?.trim().orEmpty()
                         val desc = node.contentDescription?.toString()?.trim().orEmpty()
-                        val matchedKw = keywords.firstOrNull { kw ->
-                            text.contains(kw, ignoreCase = true) || desc.contains(kw, ignoreCase = true)
+                        val isExcluded = excludeKeywords.any { ex ->
+                            text.contains(ex, ignoreCase = true) || desc.contains(ex, ignoreCase = true)
                         }
-                        if (matchedKw != null) {
-                            return MatchedNode(
-                                label = "NodeKw[$matchedKw]",
-                                bounds = rect,
-                                viewId = node.viewIdResourceName,
-                                text = text,
-                                contentDesc = desc
-                            )
+                        if (!isExcluded) {
+                            val matchedKw = keywords.firstOrNull { kw ->
+                                text.contains(kw, ignoreCase = true) || desc.contains(kw, ignoreCase = true)
+                            }
+                            if (matchedKw != null) {
+                                return MatchedNode(
+                                    label = "NodeKw[$matchedKw]",
+                                    bounds = rect,
+                                    viewId = node.viewIdResourceName,
+                                    text = text,
+                                    contentDesc = desc
+                                )
+                            }
                         }
                     }
                 }
@@ -166,11 +190,15 @@ class NodeInspector {
         )
 
         private val AD_CLOSE_TEXT_KEYWORDS = listOf(
-            "關閉廣告", "略過廣告", "跳過廣告", "關閉", "略過", "跳過", "Skip", "Close", "Dismiss"
+            "關閉廣告", "略過廣告", "跳過廣告", "跳過", "略過", "關閉", "Skip", "Close", "Dismiss"
         )
 
         private val COUNTDOWN_HINTS = listOf(
             "秒後", "還有", "seconds", "sec remaining"
+        )
+
+        private val EXCLUDE_TEXTS = listOf(
+            "同意並繼續", "隱私權", "條款", "不看廣告"
         )
     }
 }

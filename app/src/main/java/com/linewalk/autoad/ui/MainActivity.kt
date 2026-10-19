@@ -5,6 +5,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.view.View
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.Lifecycle
@@ -19,8 +20,8 @@ import kotlinx.coroutines.launch
 
 /**
  * 主設定與狀態監控畫面 (MainActivity)：
- * - 檢查並引導開啟「無障礙服務」與「懸浮窗權限」
- * - 勾選要啟用的《LINE 散步趣》自動化任務（步數水瓶優先、移動距離、放置獎勵、扭蛋）
+ * - 內建 Android 13+「受限制的設定」防呆教學與一鍵跳轉應用程式資訊按鈕
+ * - 勾選要啟用的《LINE 散步趣》自動化任務
  * - 檢視與管理手機端即時框選的圖示範本庫
  */
 class MainActivity : AppCompatActivity() {
@@ -70,12 +71,25 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupClickListeners() {
+        binding.btnUnlockRestricted.setOnClickListener {
+            val intent = Intent(
+                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.parse("package:$packageName")
+            )
+            startActivity(intent)
+            Toast.makeText(
+                this,
+                "👉 請點選畫面最右上角的「⋮」選單 ➔ 點擊「允許受限制的設定」",
+                Toast.LENGTH_LONG
+            ).show()
+        }
+
         binding.btnEnableAccessibility.setOnClickListener {
             val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
             startActivity(intent)
             Toast.makeText(
                 this,
-                "請在無障礙設定中找到「散步趣自動看廣告無障礙服務」並開啟",
+                "請在『已安裝的應用程式』中找到「散步趣助手」並開啟",
                 Toast.LENGTH_LONG
             ).show()
         }
@@ -98,7 +112,6 @@ class MainActivity : AppCompatActivity() {
                 return@setOnClickListener
             }
 
-            // 啟動懸浮控制窗服務
             val overlayIntent = Intent(this, FloatingOverlayService::class.java)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 startForegroundService(overlayIntent)
@@ -106,14 +119,13 @@ class MainActivity : AppCompatActivity() {
                 startService(overlayIntent)
             }
 
-            // 嘗試自動拉起《LINE 散步趣》(com.linecorp.LGWALK)
             val launchGameIntent = packageManager.getLaunchIntentForPackage("com.linecorp.LGWALK")
             if (launchGameIntent != null) {
                 startActivity(launchGameIntent)
             } else {
                 Toast.makeText(
                     this,
-                    "懸浮控制窗已啟動！請手動切換至《LINE 散步趣》畫面",
+                    "懸浮窗已啟動！請手動切換至《LINE 散步趣》畫面",
                     Toast.LENGTH_LONG
                 ).show()
             }
@@ -135,6 +147,9 @@ class MainActivity : AppCompatActivity() {
     private fun refreshPermissionAndTemplateStatus() {
         val accConnected = AutoAdAccessibilityService.instance.value != null
         val overlayGranted = Settings.canDrawOverlays(this)
+
+        // 若無障礙已經成功開啟，自動隱藏受限制設定教學盒讓畫面更清爽；若尚未開啟則顯示提醒
+        binding.layoutRestrictedHint.visibility = if (accConnected) View.GONE else View.VISIBLE
 
         val accText = if (accConnected) "✅ 無障礙服務：已啟用連線" else "❌ 無障礙服務：尚未啟用（必開）"
         val overlayText = if (overlayGranted) "✅ 懸浮窗權限：已授權" else "❌ 懸浮窗權限：尚未授權（必開）"
@@ -159,10 +174,10 @@ class MainActivity : AppCompatActivity() {
                 }
                 launch {
                     engine.uiStatus.collectLatest { status ->
-                        val header = "目前狀態：${status.state.title} | 累計完成廣告：${status.adsCompletedCount} 支 | 觸發任務：${status.tasksTriggeredCount} 次\n" +
+                        val header = "目前狀態：${status.state.title} | 累計完成：${status.adsCompletedCount} 次 | 觸發任務：${status.tasksTriggeredCount} 次\n" +
                             "--------------------------------------------\n"
                         val body = if (status.recentLogs.isEmpty()) {
-                            "尚無執行紀錄，請啟動懸浮控制窗並按 [▶ 開始]"
+                            "尚無執行紀錄，請啟動懸浮窗並按 [▶ 開始]"
                         } else {
                             status.recentLogs.reversed().joinToString("\n")
                         }

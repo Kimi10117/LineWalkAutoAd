@@ -11,6 +11,7 @@ import com.linewalk.autoad.tasks.GameTask
 import com.linewalk.autoad.tasks.IdleRewardTask
 import com.linewalk.autoad.tasks.MoveGaugeTask
 import com.linewalk.autoad.tasks.StepBottleTask
+import com.linewalk.autoad.ui.FloatingOverlayService
 import com.linewalk.autoad.vision.NodeInspector
 import com.linewalk.autoad.vision.OcrItem
 import com.linewalk.autoad.vision.OcrRecognizer
@@ -29,18 +30,20 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-enum class EngineState(val title: String) {
-    IDLE("已暫停待命"),
-    IN_GAME_SCAN("1. 掃描遊戲任務中"),
-    TRIGGER_AD_POPUP("2. 尋找看廣告按鈕"),
-    AD_WATCHING("3. 觀看廣告與關閉偵測"),
-    REWARD_CLAIM("4. 確認領取獎勵")
+enum class EngineState(val title: String, val shortTitle: String) {
+    IDLE("已暫停待命", "待命"),
+    IN_GAME_SCAN("1. 掃描遊戲任務中", "1.巡邏中"),
+    TRIGGER_AD_POPUP("2. 尋找看廣告按鈕", "2.點彈窗"),
+    AD_WATCHING("3. 觀看廣告與關閉偵測", "3.廣告監控"),
+    REWARD_CLAIM("4. 確認領取獎勵", "4.完成確認")
 }
 
 data class EngineUiStatus(
     val isRunning: Boolean = false,
     val state: EngineState = EngineState.IDLE,
     val statusDetail: String = "點擊懸浮窗 [▶ 開始] 啟動自動看廣告",
+    /** 專供懸浮窗顯示的簡短狀態（不含『水瓶/領取/跳過』等會被 OCR 誤認的字眼） */
+    val overlaySafeDetail: String = "點擊 ▶ 啟動自動巡邏",
     val adsCompletedCount: Int = 0,
     val tasksTriggeredCount: Int = 0,
     val recentLogs: List<String> = emptyList()
@@ -48,10 +51,6 @@ data class EngineUiStatus(
 
 /**
  * 《LINE 散步趣》自動看廣告核心狀態機引擎 (AutomationEngine)。
- * 整合：
- * - 優先任務：步數獎勵（水瓶）及可選的移動、放置、扭蛋任務
- * - 三層混合辨識（UI 節點樹 + ML Kit 離線中文 OCR + 局部圖像模板匹配）
- * - 多階段廣告倒數與防迷路保護
  */
 class AutomationEngine private constructor(context: Context) {
 
@@ -69,7 +68,6 @@ class AutomationEngine private constructor(context: Context) {
         templateMatcher = templateMatcher
     )
 
-    /** 註冊所有任務模組，將「步數水瓶 (StepBottleTask)」排在第一優先 */
     private val tasks: List<GameTask> = listOf(
         StepBottleTask(),
         MoveGaugeTask(),
@@ -96,7 +94,11 @@ class AutomationEngine private constructor(context: Context) {
 
         popupRetryTicks = 0
         rewardClaimRetryTicks = 0
-        transitionTo(EngineState.IN_GAME_SCAN, "自動看廣告已啟動，正在掃描畫面...")
+        transitionTo(
+            newState = EngineState.IN_GAME_SCAN,
+            detail = "自動巡邏已啟動，正在掃描畫面...",
+            safeOverlayText = "🔍 正在巡邏畫面目標..."
+        )
         _uiStatus.value = _uiStatus.value.copy(isRunning = true)
 
         loopJob = scope.launch {
@@ -117,7 +119,8 @@ class AutomationEngine private constructor(context: Context) {
         _uiStatus.value = _uiStatus.value.copy(
             isRunning = false,
             state = EngineState.IDLE,
-            statusDetail = reason
+            statusDetail = reason,
+            overlaySafeDetail = "⏸ $reason"
         )
         appendLog("⏸ $reason")
     }
@@ -137,10 +140,18 @@ class AutomationEngine private constructor(context: Context) {
             return
         }
 
+        // 若任何狀態下誤跳轉到 Google Play 商店或外部瀏覽器，第一時間按返回鍵退回
+        val fgPkg = service.getForegroundPackageName()
+        if (fgPkg != null && fgPkg in AppConfig.EXTERNAL_REDIRECT_PACKAGES) {
+            appendLog("🛡️ 偵測到外部套件 ($fgPkg)，自動按返回鍵退回遊戲")
+            service.navigateBack()
+            return
+        }
+
         val currentState = _uiStatus.value.state
         val screenBitmap = service.captureScreenBitmap()
         if (screenBitmap == null) {
-            updateDetail("⚠️ 無法擷取螢幕畫面，等待下一次重試...")
+            updateDetail("⚠️ 無法擷取螢幕畫面，等待重試...", "⚠️ 等待畫面擷取...")
             return
         }
 
@@ -149,22 +160,10 @@ class AutomationEngine private constructor(context: Context) {
 
             when (currentState) {
                 EngineState.IDLE -> Unit
-
-                EngineState.IN_GAME_SCAN -> {
-                    handleInGameScan(service, screenBitmap, ocrItems)
-                }
-
-                EngineState.TRIGGER_AD_POPUP -> {
-                    handleTriggerAdPopup(service, screenBitmap, ocrItems)
-                }
-
-                EngineState.AD_WATCHING -> {
-                    handleAdWatching(service, screenBitmap, ocrItems)
-                }
-
-                EngineState.REWARD_CLAIM -> {
-                    handleRewardClaim(service, screenBitmap, ocrItems)
-                }
+                EngineState.IN_GAME_SCAN -> handleInGameScan(service, screenBitmap, ocrItems)
+                EngineState.TRIGGER_AD_POPUP -> handleTriggerAdPopup(service, screenBitmap, ocrItems)
+                EngineState.AD_WATCHING -> handleAdWatching(service, screenBitmap, ocrItems)
+                EngineState.REWARD_CLAIM -> handleRewardClaim(service, screenBitmap, ocrItems)
             }
         } finally {
             screenBitmap.recycle()
@@ -172,7 +171,11 @@ class AutomationEngine private constructor(context: Context) {
     }
 
     /**
-     * 狀態 1：在《LINE 散步趣》主畫面掃描任務目標（優先掃描滿水瓶，或是畫面上已經打開的看廣告彈窗）。
+     * 狀態 1：在《LINE 散步趣》主畫面巡邏：
+     * 優先順序：
+     * A. 畫面上若已有「看廣告 / 觀看影片」按鈕 -> 直接點開進入廣告！
+     * B. 畫面上若有推銷彈窗或廣告殘留的「跳過 / 略過 / 確認 / 關閉」（如『玩遊戲賺點數 -> 跳過』） -> 自動點掉！
+     * C. 掃描已勾選任務圖示（優先找滿水瓶）。
      */
     private suspend fun handleInGameScan(
         service: AutoAdAccessibilityService,
@@ -182,28 +185,40 @@ class AutomationEngine private constructor(context: Context) {
         val sw = screenBitmap.width
         val sh = screenBitmap.height
 
-        // A. 若畫面上已經有「看廣告 / 觀看影片」彈窗按鈕，直接點擊進入廣告！
+        // A. 若畫面上已經有「看廣告 / 觀看影片」彈窗按鈕，第一優先點擊進入廣告！
         val existingAdBtn = findAdTriggerButton(service, screenBitmap, ocrItems)
         if (existingAdBtn != null) {
             appendLog("🎬 偵測到看廣告按鈕 (${existingAdBtn.first})，立即點擊")
             service.clickRect(existingAdBtn.second)
             adCloserHandler.onEnterAdMode()
-            transitionTo(EngineState.AD_WATCHING, "已點擊看廣告，進入廣告倒數監控")
+            transitionTo(
+                EngineState.AD_WATCHING,
+                "已點擊看廣告，進入倒數監控",
+                "📺 監控播放中..."
+            )
             return
         }
 
-        // B. 若畫面上有尚未關閉的「確認 / 獲得」獎勵彈窗，先順手點掉
-        val leftoverConfirm = ocrRecognizer.findMatch(
+        // B1. 若畫面沒有「看廣告」按鈕，但出現「跳過 / 略過 / 確認 / 關閉」（包含底部 y=0.90 的『玩遊戲賺點數 -> 跳過』或廣告畫面）
+        val dismissOrSkipOcr = ocrRecognizer.findMatch(
             items = ocrItems,
             keywords = OcrRecognizer.GAME_CLAIM_CONFIRM_KEYWORDS,
             screenWidth = sw,
             screenHeight = sh,
-            roiNormalized = RectF(0.20f, 0.40f, 0.80f, 0.88f),
-            excludeKeywords = listOf("步數", "移動", "好友", "設定", "商店")
+            roiNormalized = RectF(0.05f, 0.04f, 0.95f, 0.96f),
+            excludeKeywords = OcrRecognizer.GAME_CLAIM_EXCLUDE_KEYWORDS
         )
-        if (leftoverConfirm != null) {
-            appendLog("✨ 關閉殘留確認彈窗: ${leftoverConfirm.text}")
-            service.clickRect(leftoverConfirm.bounds)
+        if (dismissOrSkipOcr != null) {
+            appendLog("✨ 自動點擊彈窗 [${dismissOrSkipOcr.text}]")
+            service.clickRect(dismissOrSkipOcr.bounds)
+            return
+        }
+
+        // B2. 檢查無障礙節點樹是否有「跳過 / 略過 / 關閉 / X」節點
+        val closeNode = nodeInspector.findAdCloseNode(service.getSafeRootNode(), sw, sh)
+        if (closeNode != null) {
+            appendLog("✨ 自動點擊關閉節點: ${closeNode.label}")
+            service.clickRect(closeNode.bounds)
             return
         }
 
@@ -218,7 +233,7 @@ class AutomationEngine private constructor(context: Context) {
                 templateMatcher = templateMatcher,
                 ocrRecognizer = ocrRecognizer
             )
-            if (target != null) {
+            if (target != null && !FloatingOverlayService.isInsideOverlay(target.bounds.centerX(), target.bounds.centerY())) {
                 val newTaskCount = _uiStatus.value.tasksTriggeredCount + 1
                 _uiStatus.value = _uiStatus.value.copy(tasksTriggeredCount = newTaskCount)
                 appendLog("🎯 觸發【${target.taskName}】: ${target.targetLabel}")
@@ -226,18 +241,24 @@ class AutomationEngine private constructor(context: Context) {
                 popupRetryTicks = 0
                 transitionTo(
                     EngineState.TRIGGER_AD_POPUP,
-                    "已點擊${target.taskName}，等待看廣告彈窗..."
+                    "已點擊${target.taskName}，等待彈窗...",
+                    "⏳ 等待彈窗出現..."
                 )
                 return
             }
         }
 
-        // 若使用者開啟了「步數水瓶」但尚未框選任何水瓶範本，提供貼心提示
         val bottleTplCount = templateStorage.getTemplates(TemplateCategory.STEP_BOTTLE).size
         if (config.enableStepBottleTask && bottleTplCount == 0) {
-            updateDetail("💡 尚未取樣『滿水瓶』圖示！請點懸浮窗 [✂️取樣] 框選一次滿水瓶")
+            updateDetail(
+                "💡 尚未取樣『滿水瓶』圖示！請點懸浮窗 [✂️取樣] 框選一次滿水瓶",
+                "💡 請點 [✂️取樣] 框選目標圖示"
+            )
         } else {
-            updateDetail("🔍 正在掃描滿水瓶與可領取獎勵... (已看 ${_uiStatus.value.adsCompletedCount} 支廣告)")
+            updateDetail(
+                "🔍 正在巡邏任務目標... (已完成 ${_uiStatus.value.adsCompletedCount} 次)",
+                "🔍 巡邏畫面目標中..."
+            )
         }
     }
 
@@ -253,45 +274,53 @@ class AutomationEngine private constructor(context: Context) {
         val sw = screenBitmap.width
         val sh = screenBitmap.height
 
-        // 1. 尋找「觀看廣告 / 看影片 / 免費領取」按鈕 (結合 OCR + 節點樹 + 自訂按鈕範本)
+        // 1. 第一優先尋找「觀看廣告 / 看影片 / 2倍」按鈕
         val adBtn = findAdTriggerButton(service, screenBitmap, ocrItems)
         if (adBtn != null) {
             appendLog("🎬 點擊彈窗看廣告按鈕: ${adBtn.first}")
             service.clickRect(adBtn.second)
             adCloserHandler.onEnterAdMode()
-            transitionTo(EngineState.AD_WATCHING, "廣告開始播放，等待倒數結束...")
+            transitionTo(
+                EngineState.AD_WATCHING,
+                "廣告開始播放，等待倒數結束...",
+                "📺 等待倒數結束..."
+            )
             return
         }
 
-        // 2. 若等待超過 2 個 Tick 仍沒看到廣告按鈕，檢查是否只有「一般領取 / 確認」按鈕（例如廣告上限或純金幣）
+        // 2. 若出現推銷視窗或無廣告時的一般按鈕（包含『跳過 / 略過 / 確認 / 領取』）
         if (popupRetryTicks >= 2 && config.claimNormalWhenNoAd) {
-            val normalClaim = ocrRecognizer.findMatch(
+            val normalOrSkip = ocrRecognizer.findMatch(
                 items = ocrItems,
                 keywords = OcrRecognizer.GAME_CLAIM_CONFIRM_KEYWORDS,
                 screenWidth = sw,
                 screenHeight = sh,
-                roiNormalized = RectF(0.15f, 0.35f, 0.85f, 0.88f)
+                roiNormalized = RectF(0.05f, 0.15f, 0.95f, 0.96f),
+                excludeKeywords = OcrRecognizer.GAME_CLAIM_EXCLUDE_KEYWORDS
             )
-            if (normalClaim != null) {
-                appendLog("ℹ️ 彈窗無廣告按鈕，點擊一般領取/確認: [${normalClaim.text}]")
-                service.clickRect(normalClaim.bounds)
+            if (normalOrSkip != null) {
+                appendLog("ℹ️ 點擊彈窗按鈕: [${normalOrSkip.text}]")
+                service.clickRect(normalOrSkip.bounds)
                 rewardClaimRetryTicks = 0
-                transitionTo(EngineState.REWARD_CLAIM, "已點擊一般領取，確認彈窗關閉中")
+                transitionTo(
+                    EngineState.REWARD_CLAIM,
+                    "已點擊 [${normalOrSkip.text}]，確認狀態中",
+                    "✨ 確認完成狀態中..."
+                )
                 return
             }
         }
 
-        // 3. 若等了 4 個 Tick 都沒有任何彈窗，代表剛剛可能沒點準或水瓶尚未集滿，退回主畫面重新掃描
         if (popupRetryTicks >= 4) {
-            appendLog("↩️ 未偵測到獎勵彈窗，返回主畫面繼續掃描")
-            transitionTo(EngineState.IN_GAME_SCAN, "重新掃描遊戲畫面...")
+            appendLog("↩️ 未偵測到目標彈窗，返回主畫面繼續巡邏")
+            transitionTo(EngineState.IN_GAME_SCAN, "重新掃描遊戲畫面...", "🔍 巡邏畫面目標中...")
         } else {
-            updateDetail("⏳ 等待看廣告彈窗出現 ($popupRetryTicks/4)...")
+            updateDetail("⏳ 等待彈窗出現 ($popupRetryTicks/4)...", "⏳ 等待彈窗 ($popupRetryTicks/4)...")
         }
     }
 
     /**
-     * 狀態 3：廣告播放中，交由 AdCloserHandler 處理倒數、多階段 >> 與 X 關閉、以及防跳轉 Play 商店。
+     * 狀態 3：廣告播放中，交由 AdCloserHandler 處理倒數、多階段 >> 與 X 關閉、以及底部「跳過/略過」。
      */
     private suspend fun handleAdWatching(
         service: AutoAdAccessibilityService,
@@ -300,48 +329,57 @@ class AutomationEngine private constructor(context: Context) {
     ) {
         when (val res = adCloserHandler.processAdTick(service, screenBitmap, ocrItems)) {
             is AdStepResult.RedirectRecovered -> {
-                appendLog("🛡️ 偵測到誤跳轉外部套件 (${res.externalPkg})，已自動按返回鍵並封鎖假 X 座標！")
+                appendLog("🛡️ 誤跳轉外部套件 (${res.externalPkg})，已自動按返回鍵並封鎖假 X 座標！")
             }
 
             is AdStepResult.WaitingGracePeriod -> {
-                updateDetail("📺 廣告播放保護期 (${res.elapsedSec}s)...")
+                updateDetail("📺 廣告播放保護期 (${res.elapsedSec}s)...", "📺 播放中 (${res.elapsedSec}s)...")
             }
 
             is AdStepResult.StillCountingDown -> {
-                updateDetail("⏱️ 廣告倒數中：剩餘約 ${res.remainingSec} 秒 (已播 ${res.elapsedSec}s)")
+                updateDetail(
+                    "⏱️ 廣告倒數中：剩餘約 ${res.remainingSec} 秒 (已播 ${res.elapsedSec}s)",
+                    "⏱️ 倒數約 ${res.remainingSec}s (已播 ${res.elapsedSec}s)"
+                )
             }
 
             is AdStepResult.ClickedCloseOrSkip -> {
-                appendLog("👆 點擊關閉/快轉按鈕: ${res.sourceLabel}")
-                updateDetail("👆 已點擊 ${res.sourceLabel}，確認是否回到遊戲或進入二階段...")
+                appendLog("👆 點擊關閉/略過按鈕: ${res.sourceLabel}")
+                updateDetail(
+                    "👆 已點擊 ${res.sourceLabel}，確認是否回到遊戲...",
+                    "👆 已點關閉，確認中..."
+                )
             }
 
             is AdStepResult.ReturnedToGame -> {
                 val newAdsCount = _uiStatus.value.adsCompletedCount + 1
                 _uiStatus.value = _uiStatus.value.copy(adsCompletedCount = newAdsCount)
-                appendLog("🎉 成功關閉廣告回到遊戲！(累計完成 $newAdsCount 支廣告)")
+                appendLog("🎉 成功關閉廣告回到遊戲！(累計完成 $newAdsCount 支)")
                 if (res.confirmBounds != null) {
                     service.clickRect(res.confirmBounds)
                 }
                 rewardClaimRetryTicks = 0
-                transitionTo(EngineState.REWARD_CLAIM, "正在確認領取獎勵...")
+                transitionTo(EngineState.REWARD_CLAIM, "正在確認獎勵彈窗...", "✨ 完成確認中...")
             }
 
             is AdStepResult.WatchdogBackTriggered -> {
-                appendLog("⚠️ 廣告等待逾時 (${res.elapsedSec}s)，觸發防卡死返回/右上角關閉")
+                appendLog("⚠️ 等待逾時 (${res.elapsedSec}s)，觸發防卡死返回/右上角關閉")
                 if (res.elapsedSec >= config.maxAdWaitSeconds + 15) {
-                    transitionTo(EngineState.IN_GAME_SCAN, "逾時重置回遊戲掃描狀態")
+                    transitionTo(EngineState.IN_GAME_SCAN, "逾時重置回巡邏狀態", "🔍 重新巡邏中...")
                 }
             }
 
             is AdStepResult.ScanningAd -> {
-                updateDetail("🔍 正在搜尋廣告關閉 X / 略過按鈕 (已播 ${res.elapsedSec}s)...")
+                updateDetail(
+                    "🔍 搜尋關閉 X 或略過按鈕 (已播 ${res.elapsedSec}s)...",
+                    "🔍 搜尋關閉鈕 (${res.elapsedSec}s)..."
+                )
             }
         }
     }
 
     /**
-     * 狀態 4：關閉廣告回到《LINE 散步趣》後，點擊「確認 / 獲得」完成本輪領獎，並立即檢查下一瓶水瓶。
+     * 狀態 4：回到《LINE 散步趣》後，點擊「確認 / 收下 / 跳過」完成本輪循環。
      */
     private suspend fun handleRewardClaim(
         service: AutoAdAccessibilityService,
@@ -357,26 +395,23 @@ class AutomationEngine private constructor(context: Context) {
             keywords = OcrRecognizer.GAME_CLAIM_CONFIRM_KEYWORDS,
             screenWidth = sw,
             screenHeight = sh,
-            roiNormalized = RectF(0.15f, 0.30f, 0.85f, 0.90f),
-            excludeKeywords = listOf("步數", "移動", "好友")
+            roiNormalized = RectF(0.08f, 0.15f, 0.92f, 0.96f),
+            excludeKeywords = OcrRecognizer.GAME_CLAIM_EXCLUDE_KEYWORDS
         )
         if (confirmMatch != null) {
-            appendLog("✅ 點擊獎勵確認按鈕: [${confirmMatch.text}]")
+            appendLog("✅ 點擊完成確認按鈕: [${confirmMatch.text}]")
             service.clickRect(confirmMatch.bounds)
-            transitionTo(EngineState.IN_GAME_SCAN, "領獎完成！繼續掃描下一個滿水瓶...")
+            transitionTo(EngineState.IN_GAME_SCAN, "完成！繼續巡邏下一個目標...", "🔍 巡邏畫面目標中...")
             return
         }
 
         if (rewardClaimRetryTicks >= 2) {
-            transitionTo(EngineState.IN_GAME_SCAN, "已回到主畫面，繼續下一輪掃描")
+            transitionTo(EngineState.IN_GAME_SCAN, "已回到主畫面，繼續下一輪巡邏", "🔍 巡邏畫面目標中...")
         } else {
-            updateDetail("✨ 確認領取獎勵狀態中...")
+            updateDetail("✨ 確認畫面狀態中...", "✨ 確認狀態中...")
         }
     }
 
-    /**
-     * 結合「無障礙節點樹」、「ML Kit 中文 OCR」與「自訂按鈕圖示範本」尋找遊戲內的『看廣告』按鈕。
-     */
     private suspend fun findAdTriggerButton(
         service: AutoAdAccessibilityService,
         screenBitmap: android.graphics.Bitmap,
@@ -385,13 +420,14 @@ class AutomationEngine private constructor(context: Context) {
         val sw = screenBitmap.width
         val sh = screenBitmap.height
 
-        // 1. ML Kit 中文 OCR 搜尋「看廣告 / 觀看影片 / 免費領取 / 2倍」
+        // 1. ML Kit 中文 OCR 搜尋「看廣告 / 觀看影片 / 2倍」（排除『不看廣告』）
         val ocrMatch = ocrRecognizer.findMatch(
             items = ocrItems,
             keywords = OcrRecognizer.GAME_AD_TRIGGER_KEYWORDS,
             screenWidth = sw,
             screenHeight = sh,
-            roiNormalized = RectF(0.08f, 0.25f, 0.92f, 0.88f)
+            roiNormalized = RectF(0.08f, 0.25f, 0.92f, 0.88f),
+            excludeKeywords = OcrRecognizer.GAME_AD_EXCLUDE_KEYWORDS
         )
         if (ocrMatch != null) {
             return "OCR[${ocrMatch.text}]" to ocrMatch.bounds
@@ -402,7 +438,8 @@ class AutomationEngine private constructor(context: Context) {
             root = service.getSafeRootNode(),
             keywords = OcrRecognizer.GAME_AD_TRIGGER_KEYWORDS,
             screenWidth = sw,
-            screenHeight = sh
+            screenHeight = sh,
+            excludeKeywords = OcrRecognizer.GAME_AD_EXCLUDE_KEYWORDS
         )
         if (nodeMatch != null) {
             return nodeMatch.label to nodeMatch.bounds
@@ -416,7 +453,8 @@ class AutomationEngine private constructor(context: Context) {
                 templates = adBtnTemplates,
                 roiNormalized = TemplateCategory.AD_TRIGGER_BTN.defaultSearchRoi,
                 threshold = config.templateMatchThreshold,
-                labelPrefix = "看廣告圖示"
+                labelPrefix = "看廣告圖示",
+                blacklistedCoord = FloatingOverlayService::isInsideOverlay
             )
             if (tplMatch != null) {
                 return tplMatch.label to tplMatch.bounds
@@ -426,16 +464,20 @@ class AutomationEngine private constructor(context: Context) {
         return null
     }
 
-    private fun transitionTo(newState: EngineState, detail: String) {
+    private fun transitionTo(newState: EngineState, detail: String, safeOverlayText: String) {
         _uiStatus.value = _uiStatus.value.copy(
             state = newState,
-            statusDetail = detail
+            statusDetail = detail,
+            overlaySafeDetail = safeOverlayText
         )
         appendLog("➡️ [${newState.title}] $detail")
     }
 
-    private fun updateDetail(detail: String) {
-        _uiStatus.value = _uiStatus.value.copy(statusDetail = detail)
+    private fun updateDetail(detail: String, safeOverlayText: String) {
+        _uiStatus.value = _uiStatus.value.copy(
+            statusDetail = detail,
+            overlaySafeDetail = safeOverlayText
+        )
     }
 
     fun appendLog(message: String) {

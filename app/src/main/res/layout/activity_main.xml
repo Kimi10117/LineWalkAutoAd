@@ -22,7 +22,7 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="《LINE 散步趣》自動看廣告助手"
+                android:text="散步趣助手 (LINE 散步趣專用)"
                 android:textColor="@color/card_white"
                 android:textSize="20sp"
                 android:textStyle="bold" />
@@ -31,7 +31,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="4dp"
-                android:text="Android 11+ 無感截圖 ‧ 離線中文 OCR ‧ 手機即時框選水瓶取樣"
+                android:text="Android 11+ 無感截圖 ‧ 離線中文 OCR ‧ 手機即時框選取樣"
                 android:textColor="#E8F5E9"
                 android:textSize="13sp" />
         </LinearLayout>
@@ -62,6 +62,43 @@
                 android:text="檢查權限狀態中..."
                 android:textColor="@color/text_secondary"
                 android:textSize="14sp" />
+
+            <!-- Android 13+ 受限制設定防呆提示盒 -->
+            <LinearLayout
+                android:id="@+id/layoutRestrictedHint"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:background="#FFF8E1"
+                android:orientation="vertical"
+                android:padding="12dp">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="⚠️ 首次開啟無障礙若跳出「存取權已遭拒絕 (受限制的設定)」："
+                    android:textColor="#B45309"
+                    android:textSize="13sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="1. 先點一次下方 [1. 開啟無障礙服務] 並點一下反灰的「散步趣助手」讓系統跳出拒絕提示。\n2. 點下方橘色 [🔓 解鎖受限制設定] 按鈕進入應用程式資訊。\n3. 點選畫面最右上角的「⋮」(三個直點) ➔ 選擇「允許受限制的設定」，即可回來正常開啟無障礙！"
+                    android:textColor="#78350F"
+                    android:textSize="12.5sp" />
+
+                <Button
+                    android:id="@+id/btnUnlockRestricted"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:backgroundTint="#F59E0B"
+                    android:text="🔓 解鎖「受限制的設定」(跳轉至右上角 ⋮ 選單)"
+                    android:textColor="@color/card_white"
+                    android:textSize="12.5sp" />
+            </LinearLayout>
 
             <LinearLayout
                 android:layout_width="match_parent"
@@ -94,7 +131,7 @@
                 android:layout_marginTop="10dp"
                 android:backgroundTint="@color/line_green"
                 android:paddingVertical="12dp"
-                android:text="🚀 啟動懸浮控制窗並打開《LINE 散步趣》"
+                android:text="🚀 啟動懸浮窗並打開《LINE 散步趣》"
                 android:textColor="@color/card_white"
                 android:textSize="15sp"
                 android:textStyle="bold" />
@@ -158,7 +195,7 @@
                 android:id="@+id/cbClaimNormalWhenNoAd"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="若彈窗無廣告可看（或次數用盡），自動點擊一般領取/確認"
+                android:text="自動關閉推銷彈窗（如『跳過』）與無廣告時的一般領取"
                 android:textColor="@color/text_secondary" />
         </LinearLayout>
 

@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">散步趣自動看廣告助手</string>
-    <string name="accessibility_service_label">散步趣自動看廣告無障礙服務</string>
-    <string name="accessibility_service_description">用於《LINE 散步趣》自動辨識滿水瓶、移動距離、放置獎勵與自動關閉廣告彈窗。本服務僅在您手動按下懸浮窗「開始」時運作，所有影像與文字辨識皆在手機本地端離線完成。</string>
+    <string name="app_name">散步趣助手</string>
+    <string name="accessibility_service_label">散步趣助手</string>
+    <string name="accessibility_service_description">用於《LINE 散步趣》自動辨識步數水瓶、移動距離、放置獎勵與自動關閉廣告彈窗。本服務僅在您手動按下懸浮窗「開始」時運作，所有影像與文字辨識皆在手機本地端離線完成。</string>
 </resources>

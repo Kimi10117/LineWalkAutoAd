@@ -6,6 +6,7 @@ import android.graphics.RectF
 import com.linewalk.autoad.config.AppConfig
 import com.linewalk.autoad.config.TemplateCategory
 import com.linewalk.autoad.config.TemplateStorage
+import com.linewalk.autoad.ui.FloatingOverlayService
 import com.linewalk.autoad.vision.OcrItem
 import com.linewalk.autoad.vision.OcrRecognizer
 import com.linewalk.autoad.vision.TemplateMatcher
@@ -17,9 +18,7 @@ data class TaskTriggerTarget(
 )
 
 /**
- * 《LINE 散步趣》模組化任務介面：
- * 每個任務負責在遊戲畫面中尋找可觸發獎勵的目標（如滿水瓶、移動計量條、放置金幣、扭蛋按鈕）。
- * 點擊目標後的「看廣告彈窗點擊 → 廣告倒數關閉 → 領取確認」統一由 AutomationEngine 與 AdCloserHandler 處理。
+ * 《LINE 散步趣》模組化任務介面。
  */
 interface GameTask {
     val id: String
@@ -38,7 +37,7 @@ interface GameTask {
 
 /**
  * 【第一優先任務】步數獎勵任務 (StepBottleTask)：
- * 偵測畫面上「集滿發亮的水瓶」圖示並點擊，觸發看廣告領金幣彈窗。
+ * 偵測畫面上「集滿發亮的水瓶」圖示並點擊。
  */
 class StepBottleTask : GameTask {
     override val id: String = "step_bottle"
@@ -54,7 +53,6 @@ class StepBottleTask : GameTask {
         templateMatcher: TemplateMatcher,
         ocrRecognizer: OcrRecognizer
     ): TaskTriggerTarget? {
-        // 1. 優先比對使用者透過懸浮窗框選的「滿水瓶」圖示範本 (STEP_BOTTLE)
         val bottleTemplates = templateStorage.getTemplates(TemplateCategory.STEP_BOTTLE).map { it.bitmap }
         if (bottleTemplates.isNotEmpty()) {
             val match = templateMatcher.findBestTemplateMatch(
@@ -62,7 +60,8 @@ class StepBottleTask : GameTask {
                 templates = bottleTemplates,
                 roiNormalized = TemplateCategory.STEP_BOTTLE.defaultSearchRoi,
                 threshold = config.templateMatchThreshold,
-                labelPrefix = "滿水瓶"
+                labelPrefix = "滿水瓶",
+                blacklistedCoord = FloatingOverlayService::isInsideOverlay
             )
             if (match != null) {
                 return TaskTriggerTarget(
@@ -72,30 +71,12 @@ class StepBottleTask : GameTask {
                 )
             }
         }
-
-        // 2. OCR 備援：若水瓶下方或旁邊顯示「完成 / MAX / 可領取」等字樣
-        val ocrMatch = ocrRecognizer.findMatch(
-            items = ocrItems,
-            keywords = listOf("水瓶", "步數獎勵", "集滿", "MAX"),
-            screenWidth = screenBitmap.width,
-            screenHeight = screenBitmap.height,
-            roiNormalized = TemplateCategory.STEP_BOTTLE.defaultSearchRoi
-        )
-        if (ocrMatch != null) {
-            return TaskTriggerTarget(
-                taskName = displayName,
-                targetLabel = "OCR[${ocrMatch.text}]",
-                bounds = ocrMatch.bounds
-            )
-        }
-
         return null
     }
 }
 
 /**
- * 【任務二】移動距離獎勵任務 (MoveGaugeTask)：
- * 偵測移動頁面的交通工具/火車車票集滿領獎圖示。
+ * 【任務二】移動距離獎勵任務 (MoveGaugeTask)
  */
 class MoveGaugeTask : GameTask {
     override val id: String = "move_gauge"
@@ -118,7 +99,8 @@ class MoveGaugeTask : GameTask {
                 templates = templates,
                 roiNormalized = TemplateCategory.MOVE_GAUGE.defaultSearchRoi,
                 threshold = config.templateMatchThreshold,
-                labelPrefix = "移動獎勵"
+                labelPrefix = "移動獎勵",
+                blacklistedCoord = FloatingOverlayService::isInsideOverlay
             )
             if (match != null) {
                 return TaskTriggerTarget(
@@ -133,8 +115,7 @@ class MoveGaugeTask : GameTask {
 }
 
 /**
- * 【任務三】放置/時間獎勵任務 (IdleRewardTask)：
- * 偵測角色定時產出的金幣或寶箱圖示。
+ * 【任務三】放置/時間獎勵任務 (IdleRewardTask)
  */
 class IdleRewardTask : GameTask {
     override val id: String = "idle_reward"
@@ -157,7 +138,8 @@ class IdleRewardTask : GameTask {
                 templates = templates,
                 roiNormalized = TemplateCategory.IDLE_REWARD.defaultSearchRoi,
                 threshold = config.templateMatchThreshold,
-                labelPrefix = "放置獎勵"
+                labelPrefix = "放置獎勵",
+                blacklistedCoord = FloatingOverlayService::isInsideOverlay
             )
             if (match != null) {
                 return TaskTriggerTarget(
@@ -172,8 +154,7 @@ class IdleRewardTask : GameTask {
 }
 
 /**
- * 【任務四】幸運扭蛋 / 刮刮樂任務 (GachaTask)：
- * 偵測扭蛋或刮刮樂中的免費看廣告抽獎按鈕。
+ * 【任務四】幸運扭蛋 / 刮刮樂任務 (GachaTask)
  */
 class GachaTask : GameTask {
     override val id: String = "gacha_task"
@@ -196,7 +177,8 @@ class GachaTask : GameTask {
                 templates = templates,
                 roiNormalized = TemplateCategory.GACHA_BTN.defaultSearchRoi,
                 threshold = config.templateMatchThreshold,
-                labelPrefix = "扭蛋按鈕"
+                labelPrefix = "扭蛋按鈕",
+                blacklistedCoord = FloatingOverlayService::isInsideOverlay
             )
             if (match != null) {
                 return TaskTriggerTarget(

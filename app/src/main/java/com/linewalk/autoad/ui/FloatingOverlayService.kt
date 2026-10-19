@@ -10,6 +10,7 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Color
 import android.graphics.PixelFormat
+import android.graphics.Rect
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
@@ -37,10 +38,8 @@ import kotlin.math.abs
 
 /**
  * 遊戲懸浮控制窗服務 (FloatingOverlayService)：
- * 提供可自由拖曳的迷你控制面板，支援：
- * - [▶ 開始 / ⏸ 暫停] 自動看廣告狀態機
- * - [✂️ 取樣] 一鍵擷取當前《LINE 散步趣》畫面並框選「滿水瓶」或「廣告 X」
- * - [➖ 縮小 / ➕ 展開] 避免遮擋遊戲或廣告按鈕
+ * - 記錄自身在螢幕上的精確座標 (overlayScreenBounds)，讓 OCR 與圖像比對完全忽略懸浮窗區域。
+ * - 懸浮窗內文字避免出現「水瓶 / 領取 / 跳過」等關鍵字，防止 OCR 誤判點到懸浮窗自己。
  */
 class FloatingOverlayService : Service() {
 
@@ -61,7 +60,7 @@ class FloatingOverlayService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP_OVERLAY) {
-            engine.stop("關閉懸浮控制窗")
+            engine.stop("關閉懸浮窗")
             stopSelf()
             return START_NOT_STICKY
         }
@@ -72,6 +71,7 @@ class FloatingOverlayService : Service() {
 
     override fun onDestroy() {
         serviceScope.cancel()
+        overlayScreenBounds.setEmpty()
         rootView?.let {
             try {
                 windowManager.removeView(it)
@@ -82,21 +82,40 @@ class FloatingOverlayService : Service() {
         super.onDestroy()
     }
 
+    private fun updateOverlayBoundsOnScreen() {
+        val v = rootView ?: return
+        if (v.visibility != View.VISIBLE) {
+            overlayScreenBounds.setEmpty()
+            return
+        }
+        val loc = IntArray(2)
+        v.getLocationOnScreen(loc)
+        // 外擴 16px 作為安全隔離區，避免 OCR 或模板比對掃到懸浮窗邊緣
+        overlayScreenBounds.set(
+            loc[0] - 16,
+            loc[1] - 16,
+            loc[0] + v.width + 16,
+            loc[1] + v.height + 16
+        )
+    }
+
     @SuppressLint("ClickableViewAccessibility")
     private fun createFloatingWidget() {
         val bgDrawable = GradientDrawable().apply {
             setColor(Color.parseColor("#E61E293B"))
-            cornerRadius = 28f
+            cornerRadius = 26f
             setStroke(3, Color.parseColor("#06C755"))
         }
 
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             background = bgDrawable
-            setPadding(24, 18, 24, 18)
+            setPadding(22, 16, 22, 16)
+            addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+                updateOverlayBoundsOnScreen()
+            }
         }
 
-        // 第一列：拖曳標題列 + 狀態 + 展開/縮小按鈕
         val headerRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -105,7 +124,7 @@ class FloatingOverlayService : Service() {
         val titleTv = TextView(this).apply {
             text = "🟢 散步趣助手 (待命)"
             setTextColor(Color.WHITE)
-            textSize = 13f
+            textSize = 12.5f
             typeface = Typeface.DEFAULT_BOLD
         }
 
@@ -119,17 +138,16 @@ class FloatingOverlayService : Service() {
         headerRow.addView(collapseBtn)
         container.addView(headerRow)
 
-        // 第二列：可折疊詳細資訊與控制按鈕區
         val bodyLayout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
         }
 
         val detailTv = TextView(this).apply {
-            text = "點擊 [▶開始] 啟動；首次請點 [✂️取樣] 框選滿水瓶"
+            text = "準備就緒 (首次可點 ✂️ 框選目標)"
             setTextColor(Color.parseColor("#CBD5E1"))
-            textSize = 11.5f
-            maxWidth = 620
-            setPadding(0, 6, 0, 10)
+            textSize = 11f
+            maxWidth = 540
+            setPadding(0, 4, 0, 8)
         }
         bodyLayout.addView(detailTv)
 
@@ -140,16 +158,16 @@ class FloatingOverlayService : Service() {
 
         fun styleMiniBtn(btn: Button, bgColor: String) {
             btn.setTextColor(Color.WHITE)
-            btn.textSize = 11.5f
+            btn.textSize = 11f
             btn.isAllCaps = false
             btn.minHeight = 0
             btn.minimumHeight = 0
             btn.minWidth = 0
             btn.minimumWidth = 0
-            btn.setPadding(22, 12, 22, 12)
+            btn.setPadding(20, 10, 20, 10)
             btn.background = GradientDrawable().apply {
                 setColor(Color.parseColor(bgColor))
-                cornerRadius = 16f
+                cornerRadius = 14f
             }
         }
 
@@ -193,7 +211,7 @@ class FloatingOverlayService : Service() {
             LinearLayout.LayoutParams.WRAP_CONTENT,
             LinearLayout.LayoutParams.WRAP_CONTENT
         ).apply {
-            marginStart = 12
+            marginStart = 10
         }
 
         btnRow.addView(toggleBtn)
@@ -207,9 +225,9 @@ class FloatingOverlayService : Service() {
             isCollapsed = !isCollapsed
             bodyLayout.visibility = if (isCollapsed) View.GONE else View.VISIBLE
             collapseBtn.text = if (isCollapsed) "  [➕]" else "  [➖]"
+            container.post { updateOverlayBoundsOnScreen() }
         }
 
-        // 預設停靠在螢幕左側中間，避開右上角廣告 X 與下方水瓶區
         val wmParams = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -220,10 +238,9 @@ class FloatingOverlayService : Service() {
         ).apply {
             gravity = Gravity.TOP or Gravity.START
             x = 16
-            y = 360
+            y = 320
         }
 
-        // 支援手指按住標題列自由拖曳懸浮窗位置
         var initialX = 0
         var initialY = 0
         var touchX = 0f
@@ -242,10 +259,12 @@ class FloatingOverlayService : Service() {
                     wmParams.x = initialX + (event.rawX - touchX).toInt()
                     wmParams.y = initialY + (event.rawY - touchY).toInt()
                     windowManager.updateViewLayout(container, wmParams)
+                    updateOverlayBoundsOnScreen()
                     true
                 }
 
                 MotionEvent.ACTION_UP -> {
+                    updateOverlayBoundsOnScreen()
                     if (abs(event.rawX - touchX) < 12f && abs(event.rawY - touchY) < 12f) {
                         collapseBtn.performClick()
                     }
@@ -258,25 +277,20 @@ class FloatingOverlayService : Service() {
 
         rootView = container
         windowManager.addView(container, wmParams)
+        container.post { updateOverlayBoundsOnScreen() }
 
-        // 訂閱 AutomationEngine 即時狀態更新懸浮窗文字
         serviceScope.launch {
             engine.uiStatus.collectLatest { status ->
                 val badge = if (status.isRunning) "🟢" else "⏸"
-                titleTv.text = "$badge ${status.state.title} (廣告:${status.adsCompletedCount})"
-                detailTv.text = status.statusDetail
+                titleTv.text = "$badge ${status.state.shortTitle} (完成:${status.adsCompletedCount})"
+                detailTv.text = status.overlaySafeDetail
                 toggleBtn.text = if (status.isRunning) "⏸ 暫停" else "▶ 開始"
                 styleMiniBtn(toggleBtn, if (status.isRunning) "#E53935" else "#06C755")
+                container.post { updateOverlayBoundsOnScreen() }
             }
         }
     }
 
-    /**
-     * 點擊 [✂️ 取樣] 時：
-     * 1. 先暫停自動化循環並隱藏懸浮窗，避免截圖拍到懸浮窗本身。
-     * 2. 呼叫無障礙服務擷取乾淨全螢幕畫面。
-     * 3. 開啟 TemplateCropOverlay 供使用者手指拉框儲存範本。
-     */
     private fun launchTemplateCropper() {
         val accService = AutoAdAccessibilityService.instance.value
         if (accService == null) {
@@ -290,10 +304,12 @@ class FloatingOverlayService : Service() {
 
         serviceScope.launch {
             rootView?.visibility = View.INVISIBLE
-            delay(180L)
+            overlayScreenBounds.setEmpty()
+            delay(200L)
             val bitmap = accService.captureScreenBitmap()
             if (bitmap == null) {
                 rootView?.visibility = View.VISIBLE
+                updateOverlayBoundsOnScreen()
                 Toast.makeText(
                     this@FloatingOverlayService,
                     "截圖失敗，請稍候 1 秒再試",
@@ -309,6 +325,7 @@ class FloatingOverlayService : Service() {
                 screenshot = bitmap,
                 onFinished = { savedCategory ->
                     rootView?.visibility = View.VISIBLE
+                    rootView?.post { updateOverlayBoundsOnScreen() }
                     if (savedCategory != null) {
                         engine.appendLog("✂️ 新增圖示範本: ${savedCategory.displayName}")
                     }
@@ -323,7 +340,7 @@ class FloatingOverlayService : Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 channelId,
-                "散步趣自動看廣告懸浮窗服務",
+                "散步趣助手懸浮窗",
                 NotificationManager.IMPORTANCE_LOW
             )
             nm.createNotificationChannel(channel)
@@ -339,7 +356,7 @@ class FloatingOverlayService : Service() {
         val notification: Notification = NotificationCompat.Builder(this, channelId)
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentTitle(getString(R.string.app_name))
-            .setContentText("懸浮控制窗執行中，點擊返回設定畫面")
+            .setContentText("懸浮窗執行中，點擊返回主設定")
             .setContentIntent(openMainIntent)
             .setOngoing(true)
             .build()
@@ -350,5 +367,12 @@ class FloatingOverlayService : Service() {
     companion object {
         private const val NOTIFICATION_ID = 1001
         const val ACTION_STOP_OVERLAY = "com.linewalk.autoad.ACTION_STOP_OVERLAY"
+
+        /** 紀錄懸浮窗目前在螢幕上的絕對區域，讓 OCR 與圖像比對自動避開懸浮窗本身 */
+        val overlayScreenBounds = Rect()
+
+        fun isInsideOverlay(x: Int, y: Int): Boolean {
+            return !overlayScreenBounds.isEmpty && overlayScreenBounds.contains(x, y)
+        }
     }
 }
