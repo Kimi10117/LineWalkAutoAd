@@ -306,15 +306,15 @@ class AutomationEngine private constructor(context: Context) {
             return
         }
 
-        // B2. 檢查是否停留在已無可領取項目的下半部彈窗（下方有 [取消] 按鈕，如時間分頁已點完且在冷卻中）：
+        // B2. 檢查是否停留在下半部彈窗（如獲得票券 / 獲得金幣）：
+        val popupAction = findPopupActionTarget(screenBitmap, ocrItems)
+        if (popupAction != null) {
+            executePopupAction(service, popupAction)
+            return
+        }
         val cancelBtn = ocrRecognizer.findPopupCancelButton(screenBitmap, ocrItems)
         if (cancelBtn != null) {
-            emptyTicksOnCurrentTab = 0
-            appendLog("✨ 偵測到彈窗已點完/冷卻中，點擊 [取消] 關閉彈窗進行後續巡邏")
-            FloatingOverlayService.clickWithOverlayPassthrough(cancelBtn) {
-                service.clickRect(cancelBtn)
-            }
-            updateDetail("✨ 已點掉 [取消] 按鈕，繼續後續巡邏...", "✨ 已點取消...")
+            handlePopupCooldownCancel(service, cancelBtn, sw, sh)
             return
         }
 
@@ -802,6 +802,35 @@ class AutomationEngine private constructor(context: Context) {
         return PatrolPhase.COMPLETED
     }
 
+    private suspend fun handlePopupCooldownCancel(
+        service: AutoAdAccessibilityService,
+        cancelBtn: Rect,
+        sw: Int,
+        sh: Int
+    ) {
+        appendLog("↩️【${currentTab.tabName}】獎勵皆在冷卻中，點擊 [取消] 關閉彈窗並切換至下一分頁/任務")
+        FloatingOverlayService.clickWithOverlayPassthrough(cancelBtn) {
+            service.clickRect(cancelBtn)
+        }
+        confirmedEmptyTabs.add(currentTab)
+        emptyTicksOnCurrentTab = 0
+
+        val enabledTabs = tabPriorityOrder.filter { it.isEnabled(config) }.ifEmpty { tabPriorityOrder }
+        val nextRemainingTabs = enabledTabs.filter { it !in confirmedEmptyTabs }
+        if (nextRemainingTabs.isEmpty()) {
+            val tabListStr = enabledTabs.joinToString("➔") { it.shortLabel }
+            appendLog("🎉 四大分頁 ($tabListStr) 常規獎勵皆已檢查完畢！準備檢查日常任務...")
+            currentPhase = getNextPhase(PatrolPhase.MAIN_TABS)
+        } else {
+            val nextTab = nextRemainingTabs.first()
+            val remainOrderStr = nextRemainingTabs.joinToString("➔") { it.shortLabel }
+            appendLog("🔄【${currentTab.tabName}】冷卻中，依序切換至【${nextTab.tabName}】(待檢查: $remainOrderStr)")
+            currentTab = nextTab
+        }
+
+        transitionTo(EngineState.IN_GAME_SCAN, "已點擊 [取消]，切換至下一分頁/任務...", "🔍 切換巡邏中...")
+    }
+
     private suspend fun handleTriggerAdPopup(
         service: AutoAdAccessibilityService,
         screenBitmap: android.graphics.Bitmap,
@@ -820,12 +849,7 @@ class AutomationEngine private constructor(context: Context) {
         // 若彈窗按鈕皆在冷卻中且出現 [取消]，立即點擊 [取消] 關閉彈窗以利後續巡邏
         val cancelBtn = ocrRecognizer.findPopupCancelButton(screenBitmap, ocrItems)
         if (cancelBtn != null) {
-            appendLog("↩️ 彈窗項目皆在冷卻中，自動點擊 [取消] 關閉彈窗進行後續巡邏")
-            FloatingOverlayService.clickWithOverlayPassthrough(cancelBtn) {
-                service.clickRect(cancelBtn)
-            }
-            emptyTicksOnCurrentTab = 0
-            transitionTo(EngineState.IN_GAME_SCAN, "已點擊 [取消]，繼續後續巡邏...", "🔍 繼續巡邏中...")
+            handlePopupCooldownCancel(service, cancelBtn, sw, sh)
             return
         }
 
@@ -937,6 +961,16 @@ class AutomationEngine private constructor(context: Context) {
             }
 
             is AdStepResult.ReturnedToGame -> {
+                if (res.sourceLabel == "已點擊彈窗 [取消]") {
+                    val cancelRect = res.confirmBounds ?: Rect(
+                        (screenBitmap.width * 0.38f).toInt(),
+                        (screenBitmap.height * 0.90f).toInt(),
+                        (screenBitmap.width * 0.62f).toInt(),
+                        (screenBitmap.height * 0.95f).toInt()
+                    )
+                    handlePopupCooldownCancel(service, cancelRect, screenBitmap.width, screenBitmap.height)
+                    return
+                }
                 val newAdsCount = _uiStatus.value.adsCompletedCount + 1
                 _uiStatus.value = _uiStatus.value.copy(adsCompletedCount = newAdsCount)
                 emptyTicksOnCurrentTab = 0
@@ -1036,6 +1070,7 @@ class AutomationEngine private constructor(context: Context) {
             maxTextLength = 10
         )
         if (skipAdCandyOcr != null &&
+            !ocrRecognizer.isAreaInCooldown(ocrItems, skipAdCandyOcr.bounds.top - 20, skipAdCandyOcr.bounds.bottom + 20) &&
             !templateMatcher.isPopupButtonDisabledGray(screenBitmap, skipAdCandyOcr.bounds.centerY())
         ) {
             return PopupActionTarget.CandySkipAd("糖果[跳過廣告]", skipAdCandyOcr.bounds)
@@ -1048,13 +1083,19 @@ class AutomationEngine private constructor(context: Context) {
             yEndRatio = 0.88f,
             label = "紅利粉紅看廣告鈕"
         )
-        if (pinkPopupBtn != null) {
+        if (pinkPopupBtn != null &&
+            !ocrRecognizer.isAreaInCooldown(ocrItems, pinkPopupBtn.bounds.top - 20, pinkPopupBtn.bounds.bottom + 20) &&
+            !templateMatcher.isPopupButtonDisabledGray(screenBitmap, pinkPopupBtn.bounds.centerY())
+        ) {
             return PopupActionTarget.WatchAd(pinkPopupBtn.label, pinkPopupBtn.bounds)
         }
 
         // 2. 偵測彈窗左側的珊瑚粉紅『紅利』小標籤 (特別針對『時間』分頁的白底黑框『紅利 [▶] x 1 獲得』按鈕！)
         val badgePopupBtn = templateMatcher.findPopupBonusBadgeAdButton(screenBitmap)
-        if (badgePopupBtn != null) {
+        if (badgePopupBtn != null &&
+            !ocrRecognizer.isAreaInCooldown(ocrItems, badgePopupBtn.bounds.top - 20, badgePopupBtn.bounds.bottom + 20) &&
+            !templateMatcher.isPopupButtonDisabledGray(screenBitmap, badgePopupBtn.bounds.centerY())
+        ) {
             return PopupActionTarget.WatchAd(badgePopupBtn.label, badgePopupBtn.bounds)
         }
 
@@ -1069,7 +1110,9 @@ class AutomationEngine private constructor(context: Context) {
         )
         if (bonusTag != null) {
             val targetY = (bonusTag.bounds.bottom + (sh * 0.032f).toInt()).coerceAtMost((sh * 0.90f).toInt())
-            if (!templateMatcher.isPopupButtonDisabledGray(screenBitmap, targetY)) {
+            if (!ocrRecognizer.isAreaInCooldown(ocrItems, targetY - 25, targetY + 25) &&
+                !templateMatcher.isPopupButtonDisabledGray(screenBitmap, targetY)
+            ) {
                 val btnRect = Rect((sw * 0.30f).toInt(), targetY - 20, (sw * 0.70f).toInt(), targetY + 20)
                 return PopupActionTarget.WatchAd("OCR[紅利下方看廣告鈕]", btnRect)
             }
@@ -1085,6 +1128,7 @@ class AutomationEngine private constructor(context: Context) {
                     item.text.length <= 12 &&
                     item.text.contains(kw, ignoreCase = true) &&
                     OcrRecognizer.GAME_AD_EXCLUDE_KEYWORDS.none { ex -> item.text.contains(ex, ignoreCase = true) } &&
+                    !ocrRecognizer.isAreaInCooldown(ocrItems, cy - 20, cy + 20) &&
                     !templateMatcher.isPopupButtonDisabledGray(screenBitmap, cy)
             }
             if (match != null) {
@@ -1103,7 +1147,10 @@ class AutomationEngine private constructor(context: Context) {
                 labelPrefix = "看廣告圖示",
                 blacklistedCoord = FloatingOverlayService::isInsideOverlay
             )
-            if (tplMatch != null) {
+            if (tplMatch != null &&
+                !ocrRecognizer.isAreaInCooldown(ocrItems, tplMatch.bounds.top - 20, tplMatch.bounds.bottom + 20) &&
+                !templateMatcher.isPopupButtonDisabledGray(screenBitmap, tplMatch.bounds.centerY())
+            ) {
                 return PopupActionTarget.WatchAd(tplMatch.label, tplMatch.bounds)
             }
         }

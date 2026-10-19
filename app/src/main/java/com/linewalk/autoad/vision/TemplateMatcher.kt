@@ -104,7 +104,9 @@ class TemplateMatcher {
                 val r = (c shr 16) and 0xFF
                 val g = (c shr 8) and 0xFF
                 val b = c and 0xFF
-                if (r in 180..225 && abs(r - g) <= 12 && abs(g - b) <= 12) {
+                // 判斷是否為無彩度反灰像素（涵蓋淺灰 180..235 與彈窗暗底灰 60..180）
+                val maxDiff = maxOf(abs(r - g), abs(g - b), abs(r - b))
+                if (r in 60..235 && maxDiff <= 15) {
                     grayPixels++
                 }
                 totalSampled++
@@ -112,7 +114,7 @@ class TemplateMatcher {
             }
             y += 3
         }
-        return totalSampled > 0 && (grayPixels.toFloat() / totalSampled) >= 0.45f
+        return totalSampled > 0 && (grayPixels.toFloat() / totalSampled) >= 0.40f
     }
 
     /**

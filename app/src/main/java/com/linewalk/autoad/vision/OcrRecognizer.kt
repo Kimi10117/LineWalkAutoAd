@@ -277,6 +277,28 @@ class OcrRecognizer {
     }
 
     /**
+     * 檢查指定垂直區域內是否含有冷卻倒數文字（如『回復還需』、『還需』、『回復』或『\d\d:\d\d』時間格式）
+     */
+    fun isAreaInCooldown(
+        items: List<OcrItem>,
+        topY: Int,
+        bottomY: Int
+    ): Boolean {
+        return items.any { item ->
+            val cy = item.bounds.centerY()
+            if (cy in topY..bottomY) {
+                val t = item.text
+                t.contains("回復還需") ||
+                t.contains("還需") ||
+                t.contains("回復") ||
+                Regex("""\d{1,2}:\d{2}""").containsMatchIn(t)
+            } else {
+                false
+            }
+        }
+    }
+
+    /**
      * 判斷目前畫面是否為《LINE 散步趣》的主畫面（涵蓋『首頁』『步數』『時間』『遊戲』四大分頁，且未開啟彈窗）。
      */
     fun isLineWalkMainScreenVisible(
