@@ -450,7 +450,7 @@ class AutomationEngine private constructor(context: Context) {
             executePopupAction(service, popupAction)
             return
         }
-        val cancelBtn = ocrRecognizer.findPopupCancelButton(screenBitmap, ocrItems)
+        val cancelBtn = ocrRecognizer.findPopupCancelButton(screenBitmap, ocrItems, templateMatcher)
         if (cancelBtn != null) {
             handlePopupCooldownCancel(service, cancelBtn, sw, sh)
             return
@@ -1168,11 +1168,18 @@ class AutomationEngine private constructor(context: Context) {
         }
 
         // 若彈窗按鈕皆在冷卻中且出現 [取消]，立即點擊 [取消] 關閉彈窗以利後續巡邏
-        val cancelBtn = ocrRecognizer.findPopupCancelButton(screenBitmap, ocrItems)
+        val cancelBtn = ocrRecognizer.findPopupCancelButton(screenBitmap, ocrItems, templateMatcher)
         if (cancelBtn != null) {
             handlePopupCooldownCancel(service, cancelBtn, sw, sh)
             return
         }
+
+        // 檢查是否處於四大分頁下半部領獎彈窗（獲得票券！/ 獲得金幣！/ 珊瑚粉紅按鈕 / 取消按鈕）
+        val isBottomRewardPopup = ocrItems.any { item ->
+            val cy = item.bounds.centerY()
+            val t = item.text.trim()
+            cy > sh * 0.55f && (t.contains("獲得票券") || t.contains("獲得金幣") || t == "取消")
+        } || templateMatcher.findCoralPinkButton(screenBitmap, 0.66f, 0.88f, "彈窗鈕") != null
 
         // 檢查是否點擊目標後已直接開啟全螢幕廣告、宣傳頁或外部跳轉網頁
         val directGeoX = templateMatcher.detectCornerGeometricX(
@@ -1201,7 +1208,8 @@ class AutomationEngine private constructor(context: Context) {
             cy < sh * 0.16f && (item.text.contains("正在載入") || item.text.contains(".com") || item.text.contains("http"))
         }
         val isGameScreen = adCloserHandler.isGameScreenVisible(service, screenBitmap, ocrItems)
-        if (!isStillInSubDialog && (directGeoX != null || isExternalDirect || hasBrowserTitleDirect || (!isGameScreen && popupRetryTicks >= 2))) {
+        // 嚴格安全防護：若畫面正在顯示領獎下半部彈窗，絕不誤判為全螢幕廣告！
+        if (!isStillInSubDialog && !isBottomRewardPopup && (directGeoX != null || isExternalDirect || hasBrowserTitleDirect || (!isGameScreen && popupRetryTicks >= 2))) {
             appendLog("📺 點擊目標後已直接進入全螢幕廣告/宣傳頁，啟動廣告監控流程！")
             adCloserHandler.onEnterAdMode()
             transitionTo(EngineState.AD_WATCHING, "已進入廣告畫面，安全監控中...", "📺 廣告監控中...")
@@ -1459,6 +1467,10 @@ class AutomationEngine private constructor(context: Context) {
 
         // 解析金幣/票券數值輔助函式（嚴格遵循使用者指令：以收到金幣數量最多的按鈕為第一優先選取！）
         fun parseRewardCoins(text: String): Int {
+            val numMatch = Regex("""(?:x|×)?\s*(\d+)\s*獲得""").find(text)
+            if (numMatch != null) {
+                return numMatch.groupValues[1].toIntOrNull() ?: 1
+            }
             val t = text.replace(" ", "")
             if (t.contains("100")) return 100
             if (t.contains("60")) return 60
@@ -1466,35 +1478,47 @@ class AutomationEngine private constructor(context: Context) {
             if (t.contains("30")) return 30
             if (t.contains("15")) return 15
             if (t.contains("10")) return 10
+            if (t.contains("9")) return 9
+            if (t.contains("8")) return 8
+            if (t.contains("7")) return 7
+            if (t.contains("6")) return 6
             if (t.contains("5")) return 5
+            if (t.contains("4")) return 4
+            if (t.contains("3")) return 3
+            if (t.contains("2")) return 2
             if (t.contains("2倍") || t.contains("加倍")) return 2
-            if (t.contains("x1獲得") || t.contains("×1獲得") || t.contains("1獲得") || t.contains("x 1 獲得") || t.contains("× 1 獲得") || t.contains("1 獲得")) return 1
+            if (t.contains("1")) return 1
             return 0
         }
 
         // 儲存所有可點擊的看廣告/領取按鈕候選項目及其對應金幣數量: List<Pair<PopupActionTarget, Int>>
         val candidates = mutableListOf<Pair<PopupActionTarget, Int>>()
 
-        // 1. 搜尋彈窗區 (y = 58% ~ 92%) 中所有符合關鍵字的 OCR 項目，解析其金幣數值
-        val roiTop = (sh * 0.58f).toInt()
-        val roiBottom = (sh * 0.92f).toInt()
+        // 1. 搜尋彈窗區 (y = 65% ~ 90%) 中所有符合關鍵字的 OCR 項目，解析其金幣數值
+        val roiTop = (sh * 0.65f).toInt()
+        val roiBottom = (sh * 0.90f).toInt()
         for (item in ocrItems) {
             val cy = item.bounds.centerY()
             if (cy in roiTop..roiBottom && item.text.length <= 16) {
-                val matchesKeyword = OcrRecognizer.GAME_AD_TRIGGER_KEYWORDS.any { kw -> item.text.contains(kw, ignoreCase = true) }
-                val hasRewardWord = item.text.contains("獲得") || item.text.contains("金幣") || item.text.contains("票券") || item.text.contains("看廣告")
+                val t = item.text.trim()
+                // 排除彈窗標題（如『獲得票券！』『獲得金幣！』）與取消按鈕
+                if (t.endsWith("！") || t.endsWith("!") || t == "獲得票券" || t == "獲得金幣" || t == "取消") {
+                    continue
+                }
+                val matchesKeyword = OcrRecognizer.GAME_AD_TRIGGER_KEYWORDS.any { kw -> t.contains(kw, ignoreCase = true) }
+                val hasRewardWord = Regex("""\d+\s*獲得""").containsMatchIn(t) || t.contains("看廣告") || t.contains("紅利")
                 if ((matchesKeyword || hasRewardWord) &&
-                    OcrRecognizer.GAME_AD_EXCLUDE_KEYWORDS.none { ex -> item.text.contains(ex, ignoreCase = true) } &&
+                    OcrRecognizer.GAME_AD_EXCLUDE_KEYWORDS.none { ex -> t.contains(ex, ignoreCase = true) } &&
                     !ocrRecognizer.isAreaInCooldown(ocrItems, cy - 20, cy + 20) &&
                     !templateMatcher.isPopupButtonDisabledGray(screenBitmap, cy)
                 ) {
-                    val coins = parseRewardCoins(item.text)
-                    candidates.add(PopupActionTarget.WatchAd("OCR[${item.text}](${coins}幣)", item.bounds) to coins)
+                    val coins = parseRewardCoins(t)
+                    candidates.add(PopupActionTarget.WatchAd("OCR[${t}](${coins}幣)", item.bounds) to coins)
                 }
             }
         }
 
-        // 2. 偵測下半部彈窗區 (y = 66% ~ 88%) 的整條珊瑚粉紅按鈕 (如步數/首頁的『紅利 [▶] 15/60 獲得』)
+        // 2. 偵測下半部彈窗區 (y = 66% ~ 88%) 的整條珊瑚粉紅按鈕 (如時間放置蘋果的『▶ 8 獲得』、步數/首頁的『紅利 [▶] 15/60 獲得』)
         val pinkPopupBtn = templateMatcher.findCoralPinkButton(
             screenBitmap = screenBitmap,
             yStartRatio = 0.66f,
@@ -1505,9 +1529,13 @@ class AutomationEngine private constructor(context: Context) {
             !ocrRecognizer.isAreaInCooldown(ocrItems, pinkPopupBtn.bounds.top - 20, pinkPopupBtn.bounds.bottom + 20) &&
             !templateMatcher.isPopupButtonDisabledGray(screenBitmap, pinkPopupBtn.bounds.centerY())
         ) {
-            val nearbyOcr = ocrItems.firstOrNull { kotlin.math.abs(it.bounds.centerY() - pinkPopupBtn.bounds.centerY()) < 35 }
-            val coins = if (nearbyOcr != null) parseRewardCoins(nearbyOcr.text) else 15
-            candidates.add(PopupActionTarget.WatchAd("${pinkPopupBtn.label}(${coins}幣)", pinkPopupBtn.bounds) to coins)
+            val nearbyOcr = ocrItems.firstOrNull {
+                kotlin.math.abs(it.bounds.centerY() - pinkPopupBtn.bounds.centerY()) < (sh * 0.05f).toInt() &&
+                !it.text.contains("取消") && !it.text.endsWith("！")
+            }
+            val coins = if (nearbyOcr != null) parseRewardCoins(nearbyOcr.text).coerceAtLeast(1) else 15
+            // 實體珊瑚粉紅按鈕點擊命中率最高，加權 100 分確保優先於模糊零散文字
+            candidates.add(PopupActionTarget.WatchAd("${pinkPopupBtn.label}(${coins}幣)", pinkPopupBtn.bounds) to (coins + 100))
         }
 
         // 3. 偵測彈窗左側的珊瑚粉紅『紅利』小標籤 (特別針對『時間』分頁的白底黑框『紅利 [▶] x 1 獲得』按鈕！)

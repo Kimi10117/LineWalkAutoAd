@@ -64,18 +64,18 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest-apk
-          name: "散步趣助手 v1.14.0 (修復領取一次後卡住、主畫面優先巡邏、杜絕日常彈窗誤判劫持 - Run #${{ github.run_number }})"
+          name: "散步趣助手 v1.14.1 (修復獲得票券彈窗誤點取消、支援時間分頁任意數量蘋果領取 - Run #${{ github.run_number }})"
           body: |
-            ✅ **版本：v1.14.0 (Run #${{ github.run_number }})**
-            1. **【徹底修復「領取一次後就卡住了、顯示『🔍 檢查彈窗中...』沒有繼續檢查」問題】**：
-               - **主畫面優先權提升至最高等級**：
-                 重構 `handleInGameScan` 決策樹，只要畫面處於《LINE 散步趣》主畫面（四大分頁與資產狀態正常），立即直接進入 `handleMainScreenPatrol` 巡邏四大分頁（移動 ➔ 時間 ➔ 遊戲 ➔ 步數），絕不再被下層的子彈窗辨識器誤判劫持！
-               - **全子彈窗辨識器嚴格排除主畫面四大分頁**：
-                 修復 `isMissionDialogOpen`、`isBingoDialogOpen`、`isLotteryDialogOpen`、`isReceiveGiftDialogOpen` 與 `isFriendsPage` 在主畫面上因包含「任務 / 賓果 / 抽抽樂」圖示文字或「可領取獎勵」氣泡而誤傳 true 的重大 Bug。現在所有子彈窗偵測器均強制檢查若頂部四大分頁存在，一律嚴格判定為非彈窗！
-               - **修復任務領取按鈕 2D 綠色像素誤將主畫面綠色風景視為按鈕**：
-                 `MissionTask.findClaimableMissionButton` 增加防呆，嚴禁在主畫面上執行綠色像素聚合，且唯有畫面真正出現「特別/每日/每週」任務分頁時才啟用備援，杜絕反覆盲點背景風景導致的無限循環！
-               - **看廣告後回到主畫面自動快速切換狀態**：
-                 在 `handleTriggerAdPopup` 中加入若確認回到主畫面且等待 2 次無廣告彈窗時，立即切回 `IN_GAME_SCAN` 繼續推進下一分頁，無縫巡邏時間分頁的 8 個待領獎勵與日常任務！
+            ✅ **版本：v1.14.1 (Run #${{ github.run_number }})**
+            1. **【徹底修復「點開畫面後沒有點擊領取，而是直接按取消」問題】**：
+               - **安全鎖定：彈窗有可領取按鈕時絕對不點取消**：
+                 重構 `findPopupCancelButton`，新增主動安全檢查。若畫面中仍有珊瑚粉紅實體看廣告按鈕（如 `▶ 8 獲得`）或有效領取文字且未在冷卻中，嚴禁點擊 [取消]，只有在確認倒數冷卻（`回復還需` / `\d+:\d+`）或按鈕反灰時才允許關閉彈窗！
+               - **支援全數字獎勵辨識 (1~100 獲得，包含時間分頁 8 獲得等)**：
+                 修復 `parseRewardCoins` 與 `GAME_AD_TRIGGER_KEYWORDS` 原先僅硬編碼 1/5/10/15/30/50/60/100，導致時間分頁採收累積蘋果（如 8 獲得、7 獲得、6 獲得...）無法解析金幣數值並被誤略過的問題。現在全面採用動態正則提取所有數字！
+               - **嚴格排除彈窗標題文字 (避免誤點『獲得票券！』無效標題)**：
+                 彈窗候選目標過濾排除以驚嘆號結尾的彈窗大標題（如 `獲得票券！`、`獲得金幣！`），避免誤將標題當成按鈕而點擊無反應，並將實體珊瑚粉紅按鈕加權優先選取！
+               - **防止領獎彈窗被誤判為全螢幕廣告提早進入廣告關閉流程**：
+                 在 `handleTriggerAdPopup` 與 `AdCloserHandler.isGameScreenVisible` 中加入領獎下半部彈窗特徵識別，防止系統在彈窗開啟時誤認已跳入廣告而由廣告守護程序直接發送取消點擊！
             2. **持續保持 Persistent Key 簽名，支援直接覆蓋更新（免刪舊版）**。
           files: LineWalkAutoAd.apk
           prerelease: false

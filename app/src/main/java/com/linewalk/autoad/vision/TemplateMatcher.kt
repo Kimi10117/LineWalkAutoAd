@@ -51,13 +51,13 @@ class TemplateMatcher {
                 val r = (c shr 16) and 0xFF
                 val g = (c shr 8) and 0xFF
                 val b = c and 0xFF
-                if (r > 215 && g in 35..125 && b in 45..135 && (r - g) > 110) {
+                if (r > 200 && g in 35..135 && b in 40..140 && (r - g) > 95) {
                     pinkPixels++
                 }
                 totalSampled++
                 x += 8
             }
-            if (totalSampled > 0 && (pinkPixels.toFloat() / totalSampled) >= 0.45f) {
+            if (totalSampled > 0 && (pinkPixels.toFloat() / totalSampled) >= 0.35f) {
                 if (y < minPinkY) minPinkY = y
                 if (y > maxPinkY) maxPinkY = y
                 matchedRowCount++

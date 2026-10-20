@@ -181,9 +181,12 @@ class AdCloserHandler(
 
         // 2B. 若廣告結束後畫面停留在『獲得票券！/ 獲得金幣！』下半部彈窗且按鈕皆在冷卻中 (下方有 [取消] 按鈕)，直接點擊 [取消] 關閉彈窗回到遊戲！
         if (elapsedSec >= 2) {
-            val cancelBtn = ocrRecognizer.findPopupCancelButton(screenBitmap, ocrItems)
-            if (cancelBtn != null) {
-                return AdStepResult.ReturnedToGame(cancelBtn, "已點擊彈窗 [取消]")
+            val hasActiveClaim = templateMatcher.findCoralPinkButton(screenBitmap, 0.66f, 0.88f, "彈窗看廣告鈕") != null
+            if (!hasActiveClaim) {
+                val cancelBtn = ocrRecognizer.findPopupCancelButton(screenBitmap, ocrItems, templateMatcher)
+                if (cancelBtn != null) {
+                    return AdStepResult.ReturnedToGame(cancelBtn, "已點擊彈窗 [取消]")
+                }
             }
         }
 
@@ -318,7 +321,20 @@ class AdCloserHandler(
         if (ocrRecognizer.isLineWalkMainScreenVisible(screenBitmap, ocrItems, templateMatcher)) {
             return true
         }
+
         val sh = screenBitmap.height
+
+        // 檢查是否在四大分頁的領獎下半部彈窗 (包含獲得票券！/獲得金幣！與取消按鈕或珊瑚粉紅按鈕)
+        val isBottomRewardPopup = ocrItems.any { item ->
+            val cy = item.bounds.centerY()
+            val t = item.text.trim()
+            cy > sh * 0.55f && (
+                t.contains("獲得票券") || t.contains("獲得金幣") || t == "取消"
+            )
+        } || templateMatcher.findCoralPinkButton(screenBitmap, 0.66f, 0.88f, "彈窗鈕") != null
+        if (isBottomRewardPopup) {
+            return true
+        }
         // 檢查是否回到每日賓果、好友排行榜、任務、抽抽樂或禮物盒彈窗 (排除全家禮物卡等廣告字眼)
         val matchesSubDialog = ocrItems.any { item ->
             val cy = item.bounds.centerY()
