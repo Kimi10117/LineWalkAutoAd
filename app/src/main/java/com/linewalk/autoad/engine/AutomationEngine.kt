@@ -387,6 +387,14 @@ class AutomationEngine private constructor(context: Context) {
             return
         }
 
+        // 0-1. 檢查是否正在向廣告伺服器載入廣告（畫面中央『載入中...』與白色 [取消] 鈕），直接進入廣告監控流程！
+        if (ocrRecognizer.isAdLoadingScreen(ocrItems)) {
+            appendLog("⏳ 畫面處於廣告載入中狀態，自動轉入廣告監控流程！")
+            adCloserHandler.onEnterAdMode()
+            transitionTo(EngineState.AD_WATCHING, "廣告正在載入中，請稍候...", "⏳ 廣告載入中...")
+            return
+        }
+
         // 0A. 檢查是否誤入「選單」(設定) 畫面，自動點擊右上角 (X) 或按返回鍵關閉選單退回主畫面！
         val isMenuScreen = ocrItems.any { item ->
             val t = item.text.replace(" ", "")
@@ -1230,6 +1238,14 @@ class AutomationEngine private constructor(context: Context) {
         val sw = screenBitmap.width
         val sh = screenBitmap.height
 
+        // 若點擊目標後已直接進入廣告載入中畫面，立即轉入廣告監控流程！
+        if (ocrRecognizer.isAdLoadingScreen(ocrItems)) {
+            appendLog("⏳ 點擊後進入廣告載入中狀態，自動轉入廣告監控流程！")
+            adCloserHandler.onEnterAdMode()
+            transitionTo(EngineState.AD_WATCHING, "廣告正在載入中，請稍候...", "⏳ 廣告載入中...")
+            return
+        }
+
         val popupAction = findPopupActionTarget(screenBitmap, ocrItems)
         if (popupAction != null) {
             executePopupAction(service, popupAction)
@@ -1417,6 +1433,13 @@ class AutomationEngine private constructor(context: Context) {
                 )
             }
 
+            is AdStepResult.AdLoading -> {
+                updateDetail(
+                    "⏳ 廣告向伺服器載入中 (${res.elapsedSec}s)，請稍候...",
+                    "⏳ 廣告載入中 (${res.elapsedSec}s)..."
+                )
+            }
+
             is AdStepResult.WaitingGracePeriod -> {
                 updateDetail("📺 廣告播放保護期 (${res.elapsedSec}s)...", "📺 播放中 (${res.elapsedSec}s)...")
             }
@@ -1437,6 +1460,37 @@ class AutomationEngine private constructor(context: Context) {
             }
 
             is AdStepResult.ReturnedToGame -> {
+                if (res.label == "廣告載入逾時已取消") {
+                    appendLog("⏳ 廣告伺服器載入逾時 (超過 18 秒)，已自動取消並返回遊戲！")
+                    // 若當前在日常子視窗，關閉該視窗並推進至下一項目，避免無廣告庫存時持續重試
+                    if (bingoTask.isBingoDialogOpen(ocrItems, sh)) {
+                        val closeBtn = bingoTask.getCloseButtonBounds(sw, sh)
+                        FloatingOverlayService.clickWithOverlayPassthrough(closeBtn) {
+                            service.clickRect(closeBtn)
+                        }
+                        currentPhase = getNextPhase(PatrolPhase.BINGO)
+                        appendLog("⏳ 每日賓果廣告載入逾時，關閉視窗並切換至下一項")
+                    } else if (lotteryTask.isLotteryDialogOpen(ocrItems, sh)) {
+                        val closeBtn = lotteryTask.getCloseButtonBounds(sw, sh)
+                        FloatingOverlayService.clickWithOverlayPassthrough(closeBtn) {
+                            service.clickRect(closeBtn)
+                        }
+                        currentPhase = getNextPhase(PatrolPhase.LOTTERY)
+                        appendLog("⏳ 抽抽樂廣告載入逾時，關閉視窗並切換至下一項")
+                    } else if (missionTask.isMissionDialogOpen(ocrItems, sh, screenBitmap)) {
+                        val closeBtn = missionTask.getCloseButtonBounds(sw, sh)
+                        FloatingOverlayService.clickWithOverlayPassthrough(closeBtn) {
+                            service.clickRect(closeBtn)
+                        }
+                        currentPhase = getNextPhase(PatrolPhase.MISSION)
+                        appendLog("⏳ 任務廣告載入逾時，關閉視窗並切換至下一項")
+                    } else {
+                        confirmedEmptyTabs.add(currentTab)
+                        appendLog("⏳【${currentTab.tabName}】廣告載入逾時，標記本頁並切換至下一分頁")
+                    }
+                    transitionTo(EngineState.IN_GAME_SCAN, "廣告載入逾時，返回巡邏...", "🔍 巡邏畫面目標中...")
+                    return
+                }
                 if (res.label == "已點擊彈窗 [取消]") {
                     val cancelRect = res.confirmBounds ?: Rect(
                         (screenBitmap.width * 0.38f).toInt(),

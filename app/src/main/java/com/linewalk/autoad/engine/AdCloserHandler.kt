@@ -18,6 +18,7 @@ import kotlin.math.hypot
 sealed class AdStepResult {
     data class RedirectRecovered(val externalPkg: String) : AdStepResult()
     data object AdChoicesDismissed : AdStepResult()
+    data class AdLoading(val elapsedSec: Int) : AdStepResult()
     data class StillCountingDown(val remainingSec: Int, val elapsedSec: Int) : AdStepResult()
     data class WaitingGracePeriod(val elapsedSec: Int) : AdStepResult()
     data class ClickedCloseOrSkip(val sourceLabel: String, val bounds: Rect) : AdStepResult()
@@ -45,6 +46,7 @@ class AdCloserHandler(
     private var adChoicesDismissCount: Int = 0
     private var redirectCount: Int = 0
     private var hasRecentRedirect: Boolean = false
+    private var wasAdLoading: Boolean = false
     private var lastClickedPoint: Point? = null
     private var lastBackActionTimeMs: Long = 0L
     private var lastFallbackCornerTimeMs: Long = 0L
@@ -58,6 +60,7 @@ class AdCloserHandler(
             adChoicesDismissCount = 0
             redirectCount = 0
             hasRecentRedirect = false
+            wasAdLoading = false
             lastClickedPoint = null
             lastBackActionTimeMs = 0L
             lastFallbackCornerTimeMs = 0L
@@ -173,6 +176,36 @@ class AdCloserHandler(
             return AdStepResult.AdChoicesDismissed
         } else {
             adChoicesDismissCount = 0
+        }
+
+        // 1C. 檢查是否處於向伺服器緩衝/載入廣告之等待畫面 (畫面顯示『載入中...』與白色 [取消] 鈕)
+        val isAdLoading = ocrRecognizer.isAdLoadingScreen(ocrItems)
+        if (isAdLoading) {
+            wasAdLoading = true
+            // 在容許載入時間 (18 秒) 內，靜候廣告緩衝，嚴禁誤按 [取消] 或誤判回到遊戲！
+            if (elapsedSec < 18) {
+                return AdStepResult.AdLoading(elapsedSec)
+            } else {
+                // 超過 18 秒伺服器無回應/無廣告庫存，點擊畫面上的 [取消] 鈕優雅返回遊戲
+                wasAdLoading = false
+                val cancelBtn = ocrItems.find { item ->
+                    val cy = item.bounds.centerY().toFloat() / sh
+                    val t = item.text.trim()
+                    cy in 0.82f..0.98f && (t == "取消" || t.contains("取消"))
+                }?.bounds ?: Rect(
+                    (sw * 0.25f).toInt(),
+                    (sh * 0.88f).toInt(),
+                    (sw * 0.75f).toInt(),
+                    (sh * 0.93f).toInt()
+                )
+                recordAndClick(service, cancelBtn)
+                return AdStepResult.ReturnedToGame(null, "廣告載入逾時已取消")
+            }
+        } else if (wasAdLoading) {
+            // 廣告剛從『載入中...』緩衝完成切換至實際廣告畫面！
+            // 重置計時起點，確保實際廣告享有完整的播放保護期 (Grace Period) 與倒數計時！
+            wasAdLoading = false
+            adStartTimeMs = System.currentTimeMillis()
         }
 
         // 2A. 若已關閉全螢幕廣告並跳出『獲得15張票券！ / 獲得金幣！』中央領獎彈窗，直接回傳並點擊 [ 關閉 ]！
@@ -350,6 +383,11 @@ class AdCloserHandler(
     }
 
     fun isGameScreenVisible(service: AutoAdAccessibilityService, screenBitmap: Bitmap, ocrItems: List<OcrItem>): Boolean {
+        // 0. 若畫面正在向廣告伺服器載入廣告（如『載入中...』），代表正在等候廣告，絕非遊戲主畫面！
+        if (ocrRecognizer.isAdLoadingScreen(ocrItems)) {
+            return false
+        }
+
         val fgPkg = service.getForegroundPackageName()
         if (fgPkg != null && AppConfig.isRedirectPackage(fgPkg)) {
             return false

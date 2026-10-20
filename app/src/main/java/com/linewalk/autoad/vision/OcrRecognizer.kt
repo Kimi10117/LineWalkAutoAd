@@ -243,6 +243,21 @@ class OcrRecognizer {
     }
 
     /**
+     * 檢查是否處於向伺服器緩衝/載入廣告的等待畫面（中央顯示『載入中...』，下方顯示『若廣告載入時間過長...』與白色 [取消] 鈕）。
+     */
+    fun isAdLoadingScreen(items: List<OcrItem>): Boolean {
+        return items.any { item ->
+            val t = item.text.replace(" ", "")
+            t.contains("載入中") ||
+            t.contains("廣告載入") ||
+            t.contains("載入時間過長") ||
+            t.contains("重新啟動應用程式") ||
+            t.contains("読み込み中") ||
+            (t.contains("Loading", ignoreCase = true) && items.any { it.text.contains("取消") || it.text.contains("Cancel") })
+        }
+    }
+
+    /**
      * 尋找下半部彈窗（如『時間』分頁點擊獲得票券後，按鈕皆在冷卻中）底部的 [ 取消 ] 按鈕：
      * - 嚴格安全機制：若彈窗內仍有可領取的珊瑚粉紅按鈕或有效領獎文字 (如 ▶ 8 獲得)，代表尚未領取，絕對不可點擊 [取消]！
      * - 僅在確定冷卻中 (hasCooldownText 或 hasGrayDisabledButton) 或確定無任何看廣告按鈕時，才回傳取消按鈕！
@@ -252,6 +267,11 @@ class OcrRecognizer {
         items: List<OcrItem>,
         templateMatcher: TemplateMatcher? = null
     ): Rect? {
+        // 0. 若畫面正在向廣告伺服器載入廣告（中央顯示『載入中...』與白色 [取消] 鈕），代表正在緩衝等候廣告播放，絕不可點擊取消！
+        if (isAdLoadingScreen(items)) {
+            return null
+        }
+
         val sw = screenBitmap.width
         val sh = screenBitmap.height
 
@@ -361,6 +381,11 @@ class OcrRecognizer {
         items: List<OcrItem>,
         templateMatcher: TemplateMatcher
     ): Boolean {
+        // 0. 若畫面正在向廣告伺服器載入廣告（中央顯示『載入中...』與白色 [取消] 鈕），代表正在等候廣告播放，絕非主畫面！
+        if (isAdLoadingScreen(items)) {
+            return false
+        }
+
         val sh = screenBitmap.height
 
         // 1. 若看完廣告後的中央領獎彈窗 (『獲得15張票券！ [關閉]』) 正開啟中，代表不在主畫面！
