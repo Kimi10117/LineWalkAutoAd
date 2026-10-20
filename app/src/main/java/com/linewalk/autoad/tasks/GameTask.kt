@@ -83,14 +83,17 @@ class StepBottleTask : GameTask {
         templateMatcher: TemplateMatcher,
         ocrRecognizer: OcrRecognizer
     ): TaskTriggerTarget? {
-        // 1. 優先透過珊瑚粉紅長條按鈕偵測器尋找主畫面 y=29%~40% 的『獲得票券 / 獲得金幣』按鈕
+        val sh = screenBitmap.height
+        val sw = screenBitmap.width
+
+        // 1. 優先透過珊瑚粉紅長條按鈕偵測器尋找主畫面 y=25%~42% 的『獲得票券 / 獲得金幣』按鈕
         val pinkBtn = templateMatcher.findCoralPinkButton(
             screenBitmap = screenBitmap,
-            yStartRatio = 0.29f,
-            yEndRatio = 0.40f,
+            yStartRatio = 0.25f,
+            yEndRatio = 0.42f,
             label = "粉紅[獲得票券]鈕"
         )
-        if (pinkBtn != null && pinkBtn.bounds.centerY() >= screenBitmap.height * 0.29f) {
+        if (pinkBtn != null && pinkBtn.bounds.centerY() in (sh * 0.26f).toInt()..(sh * 0.42f).toInt()) {
             return TaskTriggerTarget(
                 taskName = displayName,
                 targetLabel = pinkBtn.label,
@@ -98,16 +101,16 @@ class StepBottleTask : GameTask {
             )
         }
 
-        // 2. OCR 尋找彩色的『獲得票券 / 領取票券 / 獲得金幣』(嚴格限制 y >= 29.5%)
+        // 2. OCR 尋找彩色的『獲得票券 / 領取票券 / 獲得金幣』
         val ticketBtnOcr = ocrRecognizer.findMatch(
             items = ocrItems,
             keywords = listOf("獲得票券", "領取票券", "獲得金幣"),
-            screenWidth = screenBitmap.width,
-            screenHeight = screenBitmap.height,
-            roiNormalized = RectF(0.15f, 0.295f, 0.85f, 0.40f),
+            screenWidth = sw,
+            screenHeight = sh,
+            roiNormalized = RectF(0.15f, 0.26f, 0.85f, 0.42f),
             excludeKeywords = listOf("雙重", "LINE POINTS", "輕鬆賺", "輕鬆", "開始遊玩", "遊玩", "AD", "adjoe", "Sponsored", "簡單賺金幣")
         )
-        if (ticketBtnOcr != null && ticketBtnOcr.bounds.centerY() >= screenBitmap.height * 0.29f &&
+        if (ticketBtnOcr != null && ticketBtnOcr.bounds.centerY() in (sh * 0.26f).toInt()..(sh * 0.42f).toInt() &&
             isButtonColorfulAndActive(screenBitmap, ticketBtnOcr.bounds)
         ) {
             return TaskTriggerTarget(
@@ -157,13 +160,68 @@ class MoveGaugeTask : GameTask {
         templateMatcher: TemplateMatcher,
         ocrRecognizer: OcrRecognizer
     ): TaskTriggerTarget? {
+        val sw = screenBitmap.width
+        val sh = screenBitmap.height
+
+        // 1. 【最高優先】OCR 搜尋列車對話框「乘車費用 / 收取乘車 / 移動一段距離 / 費用」
+        val trainBubbleOcr = ocrRecognizer.findMatch(
+            items = ocrItems,
+            keywords = listOf("乘車費用", "收取乘車", "乘車", "移動一段距離", "費用", "你可以收取", "一段距離"),
+            screenWidth = sw,
+            screenHeight = sh,
+            roiNormalized = RectF(0.10f, 0.22f, 0.90f, 0.45f),
+            excludeKeywords = listOf("雙重", "LINE POINTS", "輕鬆賺", "輕鬆", "開始遊玩", "遊玩", "AD", "adjoe", "Sponsored", "簡單賺金幣")
+        )
+        val trainRect = Rect(
+            (sw * 0.30f).toInt(),
+            (sh * 0.28f).toInt(),
+            (sw * 0.70f).toInt(),
+            (sh * 0.42f).toInt()
+        )
+        if (trainBubbleOcr != null) {
+            return TaskTriggerTarget(
+                taskName = displayName,
+                targetLabel = "列車車廂[${trainBubbleOcr.text}]",
+                bounds = trainRect
+            )
+        }
+
+        // 2. 【視覺特徵】偵測熊大車長頭頂之金色金幣泡泡 (x in 38%..58%, y in 31%..40%)
+        var goldCoinPixels = 0
+        var cy = (sh * 0.31f).toInt()
+        val cyEnd = (sh * 0.40f).toInt()
+        val cxStart = (sw * 0.38f).toInt()
+        val cxEnd = (sw * 0.58f).toInt()
+        while (cy < cyEnd) {
+            var cx = cxStart
+            while (cx < cxEnd) {
+                val c = screenBitmap.getPixel(cx, cy)
+                val r = (c shr 16) and 0xFF
+                val g = (c shr 8) and 0xFF
+                val b = c and 0xFF
+                if (r > 180 && g > 130 && b < 85 && r >= g) {
+                    goldCoinPixels++
+                }
+                cx += 2
+            }
+            cy += 2
+        }
+        if (goldCoinPixels >= 35) {
+            return TaskTriggerTarget(
+                taskName = displayName,
+                targetLabel = "列車金幣泡泡",
+                bounds = trainRect
+            )
+        }
+
+        // 3. 備用：珊瑚粉紅按鈕 (y=25%~42%)
         val pinkBtn = templateMatcher.findCoralPinkButton(
             screenBitmap = screenBitmap,
-            yStartRatio = 0.29f,
-            yEndRatio = 0.40f,
+            yStartRatio = 0.25f,
+            yEndRatio = 0.42f,
             label = "粉紅[獲得金幣]鈕"
         )
-        if (pinkBtn != null && pinkBtn.bounds.centerY() >= screenBitmap.height * 0.29f) {
+        if (pinkBtn != null && pinkBtn.bounds.centerY() in (sh * 0.26f).toInt()..(sh * 0.42f).toInt()) {
             return TaskTriggerTarget(
                 taskName = displayName,
                 targetLabel = pinkBtn.label,
@@ -171,15 +229,16 @@ class MoveGaugeTask : GameTask {
             )
         }
 
+        // 4. 備用：OCR 尋找彩色的『獲得金幣 / 獲得票券』
         val coinBtnOcr = ocrRecognizer.findMatch(
             items = ocrItems,
             keywords = listOf("獲得金幣", "獲得票券"),
-            screenWidth = screenBitmap.width,
-            screenHeight = screenBitmap.height,
-            roiNormalized = RectF(0.15f, 0.295f, 0.85f, 0.40f),
+            screenWidth = sw,
+            screenHeight = sh,
+            roiNormalized = RectF(0.15f, 0.26f, 0.85f, 0.42f),
             excludeKeywords = listOf("雙重", "LINE POINTS", "輕鬆賺", "輕鬆", "開始遊玩", "遊玩", "AD", "adjoe", "Sponsored", "簡單賺金幣")
         )
-        if (coinBtnOcr != null && coinBtnOcr.bounds.centerY() >= screenBitmap.height * 0.29f &&
+        if (coinBtnOcr != null && coinBtnOcr.bounds.centerY() in (sh * 0.26f).toInt()..(sh * 0.42f).toInt() &&
             isButtonColorfulAndActive(screenBitmap, coinBtnOcr.bounds)
         ) {
             return TaskTriggerTarget(
@@ -189,6 +248,7 @@ class MoveGaugeTask : GameTask {
             )
         }
 
+        // 5. 備用：範本比對
         val templates = templateStorage.getTemplates(TemplateCategory.MOVE_GAUGE).map { it.bitmap }
         if (templates.isNotEmpty()) {
             val match = templateMatcher.findBestTemplateMatch(
@@ -228,13 +288,16 @@ class IdleRewardTask : GameTask {
         templateMatcher: TemplateMatcher,
         ocrRecognizer: OcrRecognizer
     ): TaskTriggerTarget? {
+        val sw = screenBitmap.width
+        val sh = screenBitmap.height
+
         val pinkBtn = templateMatcher.findCoralPinkButton(
             screenBitmap = screenBitmap,
-            yStartRatio = 0.29f,
-            yEndRatio = 0.40f,
+            yStartRatio = 0.25f,
+            yEndRatio = 0.42f,
             label = "粉紅[獲得票券]鈕"
         )
-        if (pinkBtn != null && pinkBtn.bounds.centerY() >= screenBitmap.height * 0.29f) {
+        if (pinkBtn != null && pinkBtn.bounds.centerY() in (sh * 0.26f).toInt()..(sh * 0.42f).toInt()) {
             return TaskTriggerTarget(
                 taskName = displayName,
                 targetLabel = pinkBtn.label,
@@ -245,12 +308,12 @@ class IdleRewardTask : GameTask {
         val ticketBtnOcr = ocrRecognizer.findMatch(
             items = ocrItems,
             keywords = listOf("獲得票券", "獲得金幣"),
-            screenWidth = screenBitmap.width,
-            screenHeight = screenBitmap.height,
-            roiNormalized = RectF(0.15f, 0.295f, 0.85f, 0.40f),
+            screenWidth = sw,
+            screenHeight = sh,
+            roiNormalized = RectF(0.15f, 0.26f, 0.85f, 0.42f),
             excludeKeywords = listOf("雙重", "LINE POINTS", "輕鬆賺", "輕鬆", "開始遊玩", "遊玩", "AD", "adjoe", "Sponsored", "簡單賺金幣")
         )
-        if (ticketBtnOcr != null && ticketBtnOcr.bounds.centerY() >= screenBitmap.height * 0.29f &&
+        if (ticketBtnOcr != null && ticketBtnOcr.bounds.centerY() in (sh * 0.26f).toInt()..(sh * 0.42f).toInt() &&
             isButtonColorfulAndActive(screenBitmap, ticketBtnOcr.bounds)
         ) {
             return TaskTriggerTarget(

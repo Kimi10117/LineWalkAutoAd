@@ -582,9 +582,8 @@ class AutomationEngine private constructor(context: Context) {
             FloatingOverlayService.clickWithOverlayPassthrough(rewardBtn) {
                 service.clickRect(rewardBtn)
             }
-            delay(500)
-            popupRetryTicks = 0
-            transitionTo(EngineState.TRIGGER_AD_POPUP, "已點擊賓果連線獎勵，等待廣告或確認視窗...", "⏳ 領取連線中...")
+            adCloserHandler.onEnterAdMode()
+            transitionTo(EngineState.AD_WATCHING, "已點擊賓果連線獎勵 [▶ Get]，觀看廣告中...", "📺 廣告監控中...")
             return
         }
 
@@ -903,8 +902,9 @@ class AutomationEngine private constructor(context: Context) {
                     return
                 }
 
-                // 依優先順序（1.移動 ➔ 2.時間 ➔ 3.遊戲 ➔ 4.步數）決定當前應檢查的最高優先分頁
-                val desiredTab = remainingTabs.first()
+                // 依優先順序（1.移動 ➔ 2.時間 ➔ 3.遊戲 ➔ 4.步數）決定當前應檢查的分頁：
+                // 若當前停留在尚有獎勵待領取的分頁（且已完成初始分頁同步），優先留在此分頁全部領取完畢，絕不提前跳轉！
+                val desiredTab = if (currentTab in remainingTabs && !needsInitialTabSync) currentTab else remainingTabs.first()
 
                 detectTabFromScreen(screenBitmap, ocrItems)?.let { detectedTab ->
                     currentTab = detectedTab
@@ -977,15 +977,15 @@ class AutomationEngine private constructor(context: Context) {
 
                 // 本分頁目前沒有亮起的可領取獎勵按鈕
                 emptyTicksOnCurrentTab++
-                if (emptyTicksOnCurrentTab < 2) {
+                if (emptyTicksOnCurrentTab < 4) {
                     updateDetail(
-                        "🔍 正在檢查【${currentTab.tabName}】是否有可領取獎勵 ($emptyTicksOnCurrentTab/2)...",
-                        "🔍 檢查[${currentTab.shortLabel}] ($emptyTicksOnCurrentTab/2)..."
+                        "🔍 正在檢查【${currentTab.tabName}】是否有可領取獎勵 ($emptyTicksOnCurrentTab/4)...",
+                        "🔍 檢查[${currentTab.shortLabel}] ($emptyTicksOnCurrentTab/4)..."
                     )
                     return
                 }
 
-                // 連續 2 次確認本分頁已無可領取項目
+                // 連續 4 次確認本分頁已無可領取項目
                 emptyTicksOnCurrentTab = 0
                 confirmedEmptyTabs.add(currentTab)
 

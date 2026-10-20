@@ -120,8 +120,8 @@ class BingoTask {
         for (cx in colCenters) {
             val x1 = (sw * (cx - 0.09f)).toInt().coerceIn(0, sw - 1)
             val x2 = (sw * (cx + 0.09f)).toInt().coerceIn(x1 + 1, sw)
-            val y1 = (sh * 0.78f).toInt().coerceIn(0, sh - 1)
-            val y2 = (sh * 0.89f).toInt().coerceIn(y1 + 1, sh)
+            val y1 = (sh * 0.81f).toInt().coerceIn(0, sh - 1)
+            val y2 = (sh * 0.88f).toInt().coerceIn(y1 + 1, sh)
 
             val redPoints = mutableListOf<android.graphics.Point>()
             var y = y1
@@ -146,7 +146,7 @@ class BingoTask {
                 val maxX = redPoints.maxOf { it.x }
                 val minY = redPoints.minOf { it.y }
                 val maxY = redPoints.maxOf { it.y }
-                if (maxY - minY in 12..(sh * 0.12f).toInt()) {
+                if (maxX - minX >= (sw * 0.10f).toInt() && maxY - minY in 12..(sh * 0.08f).toInt()) {
                     return Rect(minX, minY, maxX, maxY)
                 }
             }
@@ -155,7 +155,7 @@ class BingoTask {
         // 2. OCR 尋找「Get / get / GET / ▶Get / 領取」
         val match = ocrItems.firstOrNull { item ->
             val cy = item.bounds.centerY()
-            cy in (sh * 0.75f).toInt()..(sh * 0.90f).toInt() && (
+            cy in (sh * 0.80f).toInt()..(sh * 0.88f).toInt() && (
                 item.text.contains("Get", ignoreCase = true) ||
                 item.text.contains("Cet", ignoreCase = true) ||
                 item.text.contains("Qet", ignoreCase = true) ||
