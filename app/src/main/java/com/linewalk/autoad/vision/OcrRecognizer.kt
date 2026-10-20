@@ -255,13 +255,30 @@ class OcrRecognizer {
         val sw = screenBitmap.width
         val sh = screenBitmap.height
 
-        // 0. 重要安全防護：若彈窗內仍有高亮可領取的珊瑚粉紅按鈕 (如 ▶ 8 獲得、▶ 15 獲得)，代表獎勵未進入冷卻，絕對不可點擊 [取消]！
+        // 0. 重要安全防護：若彈窗內仍有高亮可領取的珊瑚粉紅按鈕 (如 ▶ 8 獲得、▶ 15 獲得) 或紅利標籤按鈕，代表獎勵未進入冷卻，絕對不可點擊 [取消]！
         val hasActivePinkBtn = templateMatcher?.let { tm ->
             val pinkBtn = tm.findCoralPinkButton(screenBitmap, 0.66f, 0.88f, "彈窗看廣告鈕")
             pinkBtn != null && !isAreaInCooldown(items, pinkBtn.bounds.top - 20, pinkBtn.bounds.bottom + 20) &&
                 !tm.isPopupButtonDisabledGray(screenBitmap, pinkBtn.bounds.centerY())
         } ?: false
-        if (hasActivePinkBtn) {
+
+        val hasActiveBadgeBtn = templateMatcher?.let { tm ->
+            val badgeBtn = tm.findPopupBonusBadgeAdButton(screenBitmap)
+            badgeBtn != null && !isAreaInCooldown(items, badgeBtn.bounds.top - 20, badgeBtn.bounds.bottom + 20) &&
+                !tm.isPopupButtonDisabledGray(screenBitmap, badgeBtn.bounds.centerY())
+        } ?: false
+
+        // 檢查畫面中是否有可領取文字 (如 \d+ 獲得、看廣告、紅利)
+        val hasActiveClaimRewardOcr = items.any { item ->
+            val cy = item.bounds.centerY()
+            val t = item.text.trim()
+            cy in (sh * 0.65f).toInt()..(sh * 0.90f).toInt() &&
+                (Regex("""\d+\s*獲得""").containsMatchIn(t) || t.contains("看廣告") || t.contains("紅利")) &&
+                !isAreaInCooldown(items, cy - 20, cy + 20)
+        }
+
+        // 只要彈窗內仍有任何看廣告領獎鈕，絕對不可誤按取消！
+        if (hasActivePinkBtn || hasActiveBadgeBtn || hasActiveClaimRewardOcr) {
             return null
         }
 
@@ -276,23 +293,6 @@ class OcrRecognizer {
             )
         }
 
-        // 檢查常見按鈕高度 (74%..84%) 是否反灰不可用
-        val hasGrayDisabledButton = templateMatcher?.let { tm ->
-            (74..84 step 2).any { pct ->
-                val testY = (sh * (pct / 100f)).toInt()
-                tm.isPopupButtonDisabledGray(screenBitmap, testY)
-            }
-        } ?: false
-
-        // 檢查畫面中是否有可領取文字 (如 \d+ 獲得、看廣告、跳過廣告)
-        val hasActiveClaimRewardOcr = items.any { item ->
-            val cy = item.bounds.centerY()
-            val t = item.text.trim()
-            cy in (sh * 0.65f).toInt()..(sh * 0.88f).toInt() &&
-                (Regex("""\d+\s*獲得""").containsMatchIn(t) || t.contains("跳過廣告") || t.contains("看廣告")) &&
-                !isAreaInCooldown(items, cy - 20, cy + 20)
-        }
-
         // 1. OCR 搜尋下半部 (y = 0.82..0.97, x = 0.30..0.70) 的「取消」文字
         val cancelOcr = findMatch(
             items = items,
@@ -304,8 +304,8 @@ class OcrRecognizer {
             maxTextLength = 4
         )
         if (cancelOcr != null) {
-            // 只有在明確冷卻中、或按鈕反灰、或確定完全沒有可領取按鈕時才點取消！
-            if (hasCooldownText || hasGrayDisabledButton || !hasActiveClaimRewardOcr) {
+            // 只有在明確冷卻中、或確定畫面無任何可領取看廣告按鈕時才點取消！
+            if (hasCooldownText || (!hasActivePinkBtn && !hasActiveBadgeBtn && !hasActiveClaimRewardOcr)) {
                 return cancelOcr.bounds
             }
             return null

@@ -81,9 +81,9 @@ class AdCloserHandler(
 
     private fun isInvalidOrBlacklisted(x: Int, y: Int): Boolean {
         if (FloatingOverlayService.isInsideOverlay(x, y)) return true
-        // 嚴格黑名單：主畫面頂部狀態列與四大分頁區 (y < 16.5%) 嚴禁作為廣告 X 點擊！
+        // 僅排除最頂部系統狀態列 (時間、電量，y < 3.5%)，放行廣告右上角/左上角關閉鈕
         if (currentScreenHeight > 0) {
-            if (y < currentScreenHeight * 0.165f) return true
+            if (y < currentScreenHeight * 0.035f) return true
         }
         return blacklistedPoints.any { pt ->
             hypot((pt.x - x).toDouble(), (pt.y - y).toDouble()) < BLACKLIST_RADIUS_PX
@@ -270,13 +270,25 @@ class AdCloserHandler(
             }
         }
 
-        // 8B. 主動安全返回策略（大幅加速廣告關閉速度，告別 60 秒乾等）：
+        // 8B. 主動安全返回策略與右上角 X 熱區點擊（大幅加速廣告關閉速度，告別 60 秒乾等）：
         // - 若該廣告曾觸發跳轉外部網頁 (redirectCount > 0)，每次 tick 優先發送返回鍵關閉廣告
-        // - 若廣告無倒數計時（例如 Meta 輪播、靜態廣告或已播完的互動式 end-card），且已播放超過 12 秒：
-        //   在 12s, 16s, 20s, 24s, 28s, 32s 嘗試發送返回鍵，迅速關閉廣告，不必乾等 60 秒！
-        if (remainingSec == null && (redirectCount > 0 || elapsedSec in listOf(12, 16, 20, 24, 28, 32))) {
-            service.navigateBack()
-            return AdStepResult.WatchdogBackTriggered(elapsedSec)
+        // - 若廣告無倒數計時（例如可玩式互動廣告、應用商店推廣頁、Meta 輪播、靜態廣告或互動式 end-card），且已播放超過 6 秒：
+        //   在 6s, 10s, 14s, 18s, 22s, 26s, 30s 嘗試發送返回鍵！
+        //   在 8s, 12s, 16s, 20s, 24s, 28s 嘗試點擊右上角標準關閉熱區！
+        if (remainingSec == null && elapsedSec >= 6) {
+            if (redirectCount > 0 || elapsedSec in listOf(6, 10, 14, 18, 22, 26, 30)) {
+                service.navigateBack()
+                return AdStepResult.WatchdogBackTriggered(elapsedSec)
+            } else if (elapsedSec in listOf(8, 12, 16, 20, 24, 28)) {
+                val fallbackCorner = Rect(
+                    (sw * 0.88f).toInt(),
+                    (sh * 0.045f).toInt(),
+                    (sw * 0.96f).toInt(),
+                    (sh * 0.090f).toInt()
+                )
+                recordAndClick(service, fallbackCorner)
+                return AdStepResult.ClickedCloseOrSkip("右上角標準關閉熱區", fallbackCorner)
+            }
         }
 
         // 9. 防卡死 Watchdog：若單支廣告超過最大等待秒數 (預設 32 秒)，嘗試發送系統返回鍵或點右上角標準 X 熱區
@@ -286,9 +298,9 @@ class AdCloserHandler(
             } else {
                 val fallbackRect = Rect(
                     (sw * 0.88f).toInt(),
-                    (sh * 0.095f).toInt(),
-                    (sw * 0.94f).toInt(),
-                    (sh * 0.135f).toInt()
+                    (sh * 0.045f).toInt(),
+                    (sw * 0.96f).toInt(),
+                    (sh * 0.090f).toInt()
                 )
                 recordAndClick(service, fallbackRect)
             }

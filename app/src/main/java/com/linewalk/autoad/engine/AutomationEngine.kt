@@ -148,6 +148,7 @@ class AutomationEngine private constructor(context: Context) {
     private val missionTabSequence = listOf("特別", "每日", "每週")
     private var friendGiftEmptyTicks = 0
     private var currentPhaseEmptyTicks = 0
+    private var nonGameScreenTicks = 0
 
     private val _uiStatus = MutableStateFlow(EngineUiStatus())
     val uiStatus: StateFlow<EngineUiStatus> = _uiStatus.asStateFlow()
@@ -162,6 +163,7 @@ class AutomationEngine private constructor(context: Context) {
 
         popupRetryTicks = 0
         rewardClaimRetryTicks = 0
+        nonGameScreenTicks = 0
         emptyTicksOnCurrentTab = 0
         confirmedEmptyTabs.clear()
         isBingoCompleted = false
@@ -470,6 +472,7 @@ class AutomationEngine private constructor(context: Context) {
         // 只要在主畫面，絕不被日常子彈窗誤判劫持，立即交由 handleMainScreenPatrol 進行分頁切換與常規巡邏！
         val onMainScreen = ocrRecognizer.isLineWalkMainScreenVisible(screenBitmap, ocrItems, templateMatcher)
         if (onMainScreen) {
+            nonGameScreenTicks = 0
             handleMainScreenPatrol(service, screenBitmap, ocrItems, sw, sh)
             return
         }
@@ -477,30 +480,35 @@ class AutomationEngine private constructor(context: Context) {
         // E. 若不在乾淨主畫面，檢查各個日常任務子彈窗或好友分頁：
         // E1. 優先檢查是否正在「每日賓果」彈窗
         if (bingoTask.isBingoDialogOpen(ocrItems, sh)) {
+            nonGameScreenTicks = 0
             handleBingoDialog(service, screenBitmap, ocrItems, sw, sh)
             return
         }
 
         // E2. 檢查是否正在「抽抽樂」彈窗
         if (lotteryTask.isLotteryDialogOpen(ocrItems, sh)) {
+            nonGameScreenTicks = 0
             handleLotteryDialog(service, screenBitmap, ocrItems, sw, sh)
             return
         }
 
         // E3. 檢查是否正在「任務」彈窗
         if (missionTask.isMissionDialogOpen(ocrItems, sh, screenBitmap)) {
+            nonGameScreenTicks = 0
             handleMissionDialog(service, screenBitmap, ocrItems, sw, sh)
             return
         }
 
         // E4. 檢查是否正在「接收禮物」彈窗
         if (receiveGiftTask.isReceiveGiftDialogOpen(ocrItems, sh)) {
+            nonGameScreenTicks = 0
             handleReceiveGiftDialog(service, screenBitmap, ocrItems, sw, sh)
             return
         }
 
         // E5. 檢查是否正在底部導覽列「好友」頁面
         if (friendGiftTask.isFriendsPage(ocrItems, sh)) {
+            nonGameScreenTicks = 0
             handleFriendsPage(service, screenBitmap, ocrItems, sw, sh)
             return
         }
@@ -517,6 +525,7 @@ class AutomationEngine private constructor(context: Context) {
             maxTextLength = 6
         )
         if (dismissOrSkipOcr != null) {
+            nonGameScreenTicks = 0
             appendLog("✨ 自動點擊彈窗 [${dismissOrSkipOcr.text}]")
             FloatingOverlayService.clickWithOverlayPassthrough(dismissOrSkipOcr.bounds) {
                 service.clickRect(dismissOrSkipOcr.bounds)
@@ -534,6 +543,7 @@ class AutomationEngine private constructor(context: Context) {
             }
         )
         if (closeNode != null) {
+            nonGameScreenTicks = 0
             appendLog("✨ 自動點擊關閉節點: ${closeNode.label}")
             service.clickRect(closeNode.bounds)
             return
@@ -544,11 +554,11 @@ class AutomationEngine private constructor(context: Context) {
             screenBitmap = screenBitmap,
             blacklistedCoord = { x, y ->
                 FloatingOverlayService.isInsideOverlay(x, y) ||
-                y < sh * 0.165f ||
-                (y in (sh * 0.165f).toInt()..(sh * 0.35f).toInt())
+                y < sh * 0.035f
             }
         )
         if (geoX != null) {
+            nonGameScreenTicks = 0
             appendLog("📺 偵測到全螢幕宣傳頁/廣告角落關閉鈕 (${geoX.label})，切換至廣告監控流程安全關閉！")
             adCloserHandler.onEnterAdMode()
             transitionTo(
@@ -557,6 +567,53 @@ class AutomationEngine private constructor(context: Context) {
                 "📺 廣告監控中..."
             )
             return
+        }
+
+        // D4. 檢查是否處於下半部領獎彈窗（若是，自動切換至 TRIGGER_AD_POPUP 點擊看廣告/領取）
+        val isBottomRewardPopup = ocrItems.any { item ->
+            val cy = item.bounds.centerY()
+            val t = item.text.trim()
+            cy > sh * 0.55f && (t.contains("獲得票券") || t.contains("獲得金幣") || t == "取消")
+        } || templateMatcher.findCoralPinkButton(screenBitmap, 0.66f, 0.88f, "彈窗鈕") != null
+
+        if (isBottomRewardPopup) {
+            nonGameScreenTicks = 0
+            popupRetryTicks = 0
+            transitionTo(EngineState.TRIGGER_AD_POPUP, "偵測到下半部領獎彈窗，準備點擊看廣告/領取...", "⏳ 處理彈窗中...")
+            return
+        }
+
+        // D5. 檢查是否處於可玩式互動廣告 / 應用商店推廣頁 / 全螢幕廣告 (如『開啟商店』、『DOWNLOAD』、『安裝』、『下載』、『Google Play』)
+        val hasPlayableOrStoreAdOcr = ocrItems.any { item ->
+            val t = item.text
+            t.contains("開啟商店") ||
+            t.contains("DOWNLOAD", ignoreCase = true) ||
+            t.contains("INSTALL", ignoreCase = true) ||
+            t.contains("Play Now", ignoreCase = true) ||
+            t.contains("立即遊玩") ||
+            t.contains("免費下載") ||
+            t.contains("安裝") ||
+            t.contains("Google Play") ||
+            (t.contains("廣告") && (t.contains("秒") || t.contains("後") || item.bounds.centerY() < sh * 0.15f))
+        }
+
+        val isGameScreen = adCloserHandler.isGameScreenVisible(service, screenBitmap, ocrItems)
+        if (hasPlayableOrStoreAdOcr || (!isGameScreen && nonGameScreenTicks >= 2)) {
+            nonGameScreenTicks = 0
+            appendLog("📺 偵測到全螢幕廣告/可玩式廣告/商店宣傳頁，切換至廣告監控流程安全關閉！")
+            adCloserHandler.onEnterAdMode()
+            transitionTo(
+                EngineState.AD_WATCHING,
+                "偵測到廣告/宣傳視窗，安全等待與關閉中...",
+                "📺 廣告監控中..."
+            )
+            return
+        }
+
+        if (!isGameScreen) {
+            nonGameScreenTicks++
+        } else {
+            nonGameScreenTicks = 0
         }
 
         updateDetail(
@@ -1165,11 +1222,13 @@ class AutomationEngine private constructor(context: Context) {
             return
         }
 
-        // 若彈窗按鈕皆在冷卻中且出現 [取消]，立即點擊 [取消] 關閉彈窗以利後續巡邏
-        val cancelBtn = ocrRecognizer.findPopupCancelButton(screenBitmap, ocrItems, templateMatcher)
-        if (cancelBtn != null) {
-            handlePopupCooldownCancel(service, cancelBtn, sw, sh)
-            return
+        // 若彈窗按鈕皆在冷卻中且出現 [取消]，且至少已嘗試 1 次 (確保非畫面剛彈出時的載入延遲)
+        if (popupRetryTicks >= 2) {
+            val cancelBtn = ocrRecognizer.findPopupCancelButton(screenBitmap, ocrItems, templateMatcher)
+            if (cancelBtn != null) {
+                handlePopupCooldownCancel(service, cancelBtn, sw, sh)
+                return
+            }
         }
 
         // 檢查是否處於四大分頁下半部領獎彈窗（獲得票券！/ 獲得金幣！/ 珊瑚粉紅按鈕 / 取消按鈕）
@@ -1184,8 +1243,7 @@ class AutomationEngine private constructor(context: Context) {
             screenBitmap = screenBitmap,
             blacklistedCoord = { x, y ->
                 FloatingOverlayService.isInsideOverlay(x, y) ||
-                y < sh * 0.165f ||
-                (y in (sh * 0.165f).toInt()..(sh * 0.35f).toInt())
+                y < sh * 0.035f
             }
         )
         val onMainScreenDirect = ocrRecognizer.isLineWalkMainScreenVisible(screenBitmap, ocrItems, templateMatcher)
@@ -1540,7 +1598,7 @@ class AutomationEngine private constructor(context: Context) {
             !ocrRecognizer.isAreaInCooldown(ocrItems, badgePopupBtn.bounds.top - 20, badgePopupBtn.bounds.bottom + 20) &&
             !templateMatcher.isPopupButtonDisabledGray(screenBitmap, badgePopupBtn.bounds.centerY())
         ) {
-            candidates.add(PopupActionTarget.WatchAd(badgePopupBtn.label, badgePopupBtn.bounds) to 1)
+            candidates.add(PopupActionTarget.WatchAd(badgePopupBtn.label, badgePopupBtn.bounds) to (1 + 90))
         }
 
         // 4. 若 OCR 看到『紅利』標籤 (y = 64% ~ 86%)，加入其正下方的看廣告按鈕
@@ -1591,6 +1649,9 @@ class AutomationEngine private constructor(context: Context) {
     }
 
     private fun transitionTo(newState: EngineState, detail: String, safeOverlayText: String) {
+        if (newState != EngineState.IN_GAME_SCAN) {
+            nonGameScreenTicks = 0
+        }
         _uiStatus.value = _uiStatus.value.copy(
             state = newState,
             statusDetail = detail,
