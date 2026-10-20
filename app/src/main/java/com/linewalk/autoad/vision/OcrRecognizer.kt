@@ -387,14 +387,24 @@ class OcrRecognizer {
             return false
         }
 
-        // 3. 若畫面出現了全螢幕推廣遮罩頁（如邀請好友、服務條款），代表不在主畫面！
-        val hasModalPromoOverlay = items.any { item ->
-            val t = item.text
-            t.contains("想體驗更多遊戲") || t.contains("解鎖更多遊戲") ||
-                t.contains("探索最熱門遊戲") || t.contains("服務條款") || t.contains("條款與條件") ||
-                t.contains("邀請好友") || t.contains("同意並繼續")
+        // 3. 若畫面出現了任何日常子彈窗（每日賓果、抽抽樂、任務、接收禮物、好友排行榜）或全螢幕推廣頁，代表絕非主畫面！
+        val hasSubDialogOpen = items.any { item ->
+            val cy = item.bounds.centerY().toFloat() / sh
+            val t = item.text.replace(" ", "")
+            (cy < 0.35f && (
+                t.contains("每日賓果") || t.contains("今日賓果") || (t == "賓果" && cy < 0.20f) ||
+                t.contains("抽抽樂") ||
+                t.contains("任務") ||
+                t.contains("禮物盒") || t.contains("接收禮物") ||
+                t.contains("好友排行榜") || t.contains("好友清單") ||
+                t.contains("邀請好友") || t.contains("服務條款") || t.contains("條款與條件") ||
+                t.contains("想體驗更多遊戲") || t.contains("解鎖更多遊戲")
+            )) || (cy in 0.35f..0.85f && (
+                t.contains("開啟賓果格") || t.contains("立即開啟") || t.contains("BINGO") || t.contains("OPEN") ||
+                t.contains("再抽一次") || t.contains("送禮物也送自己")
+            ))
         }
-        if (hasModalPromoOverlay) return false
+        if (hasSubDialogOpen) return false
 
         // 4. 主畫面特徵判定（頂部四大分頁、遊戲分頁、狀態列資產數值、底部導覽列）
         var hasTopTabs = false
@@ -424,8 +434,7 @@ class OcrRecognizer {
             if (cy < 0.58f && (
                     t.contains("距離下次") || t.contains("今天的步數") ||
                     t.contains("獲得票券") || t.contains("獲得金幣") ||
-                    t.contains("達成條件") || t.contains("賓果") || t.contains("抽抽樂") || t.contains("糖果") ||
-                    t.contains("速度")
+                    t.contains("達成條件") || t.contains("速度")
                 )
             ) {
                 hasUpperStage = true
@@ -448,8 +457,9 @@ class OcrRecognizer {
         }
         hasTopTabs = topTabCount >= 1
 
-        // 只要具備頂部分頁、底部導覽列、遊戲分頁特徵，或頂部資產+內容，即為乾淨主畫面！
-        return hasTopTabs || hasGamePage || hasBottomNav || (hasTopCoins && hasUpperStage)
+        // 必須具備頂部分頁、遊戲分頁特徵，或導覽列+頂部分頁/分頁內容，方為乾淨主畫面！
+        // （絕不可單憑看見底部導覽列即認定為主畫面，因為日常子視窗多覆蓋於導覽列上方）
+        return hasTopTabs || hasGamePage || (hasBottomNav && (hasTopTabs || hasUpperStage)) || (hasTopCoins && hasUpperStage)
     }
 
     /**

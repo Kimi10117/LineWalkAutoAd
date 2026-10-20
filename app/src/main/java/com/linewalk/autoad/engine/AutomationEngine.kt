@@ -468,48 +468,48 @@ class AutomationEngine private constructor(context: Context) {
             return
         }
 
-        // D. 【最高優先】判斷目前是否在乾淨的《LINE 散步趣》主畫面（涵蓋『首頁(移動)』『時間』『遊戲』『步數』四大分頁）
-        // 只要在主畫面，絕不被日常子彈窗誤判劫持，立即交由 handleMainScreenPatrol 進行分頁切換與常規巡邏！
-        val onMainScreen = ocrRecognizer.isLineWalkMainScreenVisible(screenBitmap, ocrItems, templateMatcher)
-        if (onMainScreen) {
-            nonGameScreenTicks = 0
-            handleMainScreenPatrol(service, screenBitmap, ocrItems, sw, sh)
-            return
-        }
-
-        // E. 若不在乾淨主畫面，檢查各個日常任務子彈窗或好友分頁：
-        // E1. 優先檢查是否正在「每日賓果」彈窗
+        // D. 【子視窗與日常任務優先】優先檢查是否處於日常任務子彈窗或好友分頁（絕不可被底層導覽列誤判為主畫面而忽略已開啟的視窗！）：
+        // D1. 優先檢查是否正在「每日賓果」彈窗
         if (bingoTask.isBingoDialogOpen(ocrItems, sh)) {
             nonGameScreenTicks = 0
             handleBingoDialog(service, screenBitmap, ocrItems, sw, sh)
             return
         }
 
-        // E2. 檢查是否正在「抽抽樂」彈窗
+        // D2. 檢查是否正在「抽抽樂」彈窗
         if (lotteryTask.isLotteryDialogOpen(ocrItems, sh)) {
             nonGameScreenTicks = 0
             handleLotteryDialog(service, screenBitmap, ocrItems, sw, sh)
             return
         }
 
-        // E3. 檢查是否正在「任務」彈窗
+        // D3. 檢查是否正在「任務」彈窗
         if (missionTask.isMissionDialogOpen(ocrItems, sh, screenBitmap)) {
             nonGameScreenTicks = 0
             handleMissionDialog(service, screenBitmap, ocrItems, sw, sh)
             return
         }
 
-        // E4. 檢查是否正在「接收禮物」彈窗
+        // D4. 檢查是否正在「接收禮物」彈窗
         if (receiveGiftTask.isReceiveGiftDialogOpen(ocrItems, sh)) {
             nonGameScreenTicks = 0
             handleReceiveGiftDialog(service, screenBitmap, ocrItems, sw, sh)
             return
         }
 
-        // E5. 檢查是否正在底部導覽列「好友」頁面
+        // D5. 檢查是否正在底部導覽列「好友」頁面
         if (friendGiftTask.isFriendsPage(ocrItems, sh)) {
             nonGameScreenTicks = 0
             handleFriendsPage(service, screenBitmap, ocrItems, sw, sh)
+            return
+        }
+
+        // E. 判斷目前是否在乾淨的《LINE 散步趣》主畫面（涵蓋『首頁(移動)』『時間』『遊戲』『步數』四大分頁）
+        // 只要在主畫面，立即交由 handleMainScreenPatrol 進行分頁切換與常規巡邏！
+        val onMainScreen = ocrRecognizer.isLineWalkMainScreenVisible(screenBitmap, ocrItems, templateMatcher)
+        if (onMainScreen) {
+            nonGameScreenTicks = 0
+            handleMainScreenPatrol(service, screenBitmap, ocrItems, sw, sh)
             return
         }
 
