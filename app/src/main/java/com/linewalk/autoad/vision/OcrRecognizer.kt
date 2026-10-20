@@ -484,7 +484,7 @@ class OcrRecognizer {
         private const val TAG = "OcrRecognizer"
 
         private val COUNTDOWN_REGEX = Regex(
-            "(?:還有|剩餘|倒數)?\\s*(\\d{1,2})\\s*(?:秒|s|S|sec)|(?:in|remaining)\\s*(\\d{1,2})\\s*s",
+            "(?:還有|剩餘|倒數|あと)?\\s*(\\d{1,2})\\s*(?:秒|s|S|sec)|(?:in|remaining)\\s*(\\d{1,2})\\s*s",
             RegexOption.IGNORE_CASE
         )
 
@@ -633,14 +633,27 @@ class OcrRecognizer {
             "略過廣告",
             "跳過廣告",
             "關閉廣告",
+            "離開廣告",
+            "退出廣告",
             "跳過",
             "略過",
             "關閉",
+            "離開",
+            "退出",
+            "放棄獎勵",
+            "放棄",
+            "スキップ",
+            "閉じる",
+            "広告をスキップ",
+            "広告を閉じる",
+            "終了",
             "Skip Ad",
             "SKIP",
             "Skip",
             "Close",
             "CLOSE",
+            "Quit",
+            "Discard",
             "✕",
             "×",
             ">>"
@@ -659,7 +672,10 @@ class OcrRecognizer {
             "Hide",
             "Report",
             "irrelevant",
-            "offensive"
+            "offensive",
+            "Google Play",
+            "Play Store",
+            "Play 商店"
         )
 
         val AD_REWARD_GRANTED_KEYWORDS = listOf(
@@ -667,7 +683,9 @@ class OcrRecognizer {
             "獎勵已發放",
             "獲得獎勵",
             "Reward granted",
-            "Reward earned"
+            "Reward earned",
+            "リワードを獲得しました",
+            "報酬を獲得しました"
         )
     }
 }

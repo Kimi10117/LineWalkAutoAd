@@ -610,6 +610,7 @@ class AutomationEngine private constructor(context: Context) {
             t.contains("免費下載") ||
             t.contains("安裝") ||
             t.contains("Google Play") ||
+            t.contains("インストール") ||
             (t.contains("廣告") && (t.contains("秒") || t.contains("後") || item.bounds.centerY() < sh * 0.15f))
         }
 
@@ -1453,7 +1454,11 @@ class AutomationEngine private constructor(context: Context) {
             }
 
             is AdStepResult.WatchdogBackTriggered -> {
-                appendLog("⚠️ 等待逾時 (${res.elapsedSec}s)，觸發防卡死返回/右上角關閉")
+                appendLog("🛡️ 廣告等待 (${res.elapsedSec}s)：嘗試發送 ${res.actionLabel} 關閉廣告")
+                updateDetail(
+                    "🛡️ 嘗試 ${res.actionLabel} 關閉廣告 (${res.elapsedSec}s)...",
+                    "🛡️ 嘗試關閉 (${res.elapsedSec}s)..."
+                )
                 if (res.elapsedSec >= config.maxAdWaitSeconds + 15) {
                     transitionTo(EngineState.IN_GAME_SCAN, "逾時重置回巡邏狀態", "🔍 重新巡邏中...")
                 }

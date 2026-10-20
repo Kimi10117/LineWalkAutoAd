@@ -22,7 +22,7 @@ sealed class AdStepResult {
     data class WaitingGracePeriod(val elapsedSec: Int) : AdStepResult()
     data class ClickedCloseOrSkip(val sourceLabel: String, val bounds: Rect) : AdStepResult()
     data class ReturnedToGame(val confirmBounds: Rect?, val label: String) : AdStepResult()
-    data class WatchdogBackTriggered(val elapsedSec: Int) : AdStepResult()
+    data class WatchdogBackTriggered(val elapsedSec: Int, val actionLabel: String = "返回鍵") : AdStepResult()
     data class ScanningAd(val elapsedSec: Int) : AdStepResult()
 }
 
@@ -46,6 +46,8 @@ class AdCloserHandler(
     private var redirectCount: Int = 0
     private var hasRecentRedirect: Boolean = false
     private var lastClickedPoint: Point? = null
+    private var lastBackActionTimeMs: Long = 0L
+    private var lastFallbackCornerTimeMs: Long = 0L
     private val clickedHistory = mutableListOf<Point>()
     private val blacklistedPoints = mutableListOf<Point>()
 
@@ -57,6 +59,8 @@ class AdCloserHandler(
             redirectCount = 0
             hasRecentRedirect = false
             lastClickedPoint = null
+            lastBackActionTimeMs = 0L
+            lastFallbackCornerTimeMs = 0L
             clickedHistory.clear()
             blacklistedPoints.clear()
         }
@@ -144,7 +148,7 @@ class AdCloserHandler(
         if (hasRecentRedirect) {
             hasRecentRedirect = false
             service.navigateBack()
-            return AdStepResult.WatchdogBackTriggered(elapsedSec)
+            return AdStepResult.WatchdogBackTriggered(elapsedSec, "防重定向返回鍵")
         }
 
         // 1B. 防誤觸 AdChoices 選單檢查：若誤點『ⓘ ▷』彈出『Hide Ad / Report Ad / Why am I seeing this ad?』選單，
@@ -272,39 +276,59 @@ class AdCloserHandler(
 
         // 8B. 主動安全返回策略與右上角 X 熱區點擊（大幅加速廣告關閉速度，告別 60 秒乾等）：
         // - 若該廣告曾觸發跳轉外部網頁 (redirectCount > 0)，每次 tick 優先發送返回鍵關閉廣告
-        // - 若廣告無倒數計時（例如可玩式互動廣告、應用商店推廣頁、Meta 輪播、靜態廣告或互動式 end-card），且已播放超過 6 秒：
-        //   在 6s, 10s, 14s, 18s, 22s, 26s, 30s 嘗試發送返回鍵！
-        //   在 8s, 12s, 16s, 20s, 24s, 28s 嘗試點擊右上角標準關閉熱區！
-        if (remainingSec == null && elapsedSec >= 6) {
-            if (redirectCount > 0 || elapsedSec in listOf(6, 10, 14, 18, 22, 26, 30)) {
+        // - 若廣告無倒數計時（例如可玩式互動廣告、應用商店推廣頁、Meta 輪播、靜態廣告或互動式 end-card），且已播放超過 5 秒：
+        //   使用時間戳記間隔控制（徹底根除離散秒數被跳過的競態條件 bug）：
+        //   - 每間隔 3.5 秒發送系統返回鍵 (service.navigateBack())！
+        //   - 若返回鍵未關閉廣告，每間隔 4.0 秒嘗試點擊右上角標準關閉熱區！
+        val now = System.currentTimeMillis()
+        if (remainingSec == null && elapsedSec >= 5) {
+            if (redirectCount > 0) {
                 service.navigateBack()
-                return AdStepResult.WatchdogBackTriggered(elapsedSec)
-            } else if (elapsedSec in listOf(8, 12, 16, 20, 24, 28)) {
+                lastBackActionTimeMs = now
+                return AdStepResult.WatchdogBackTriggered(elapsedSec, "重定向返回鍵")
+            }
+
+            // 優先發送系統返回鍵（Google AdMob / LY Corp / Unity 等各家 SDK 在結束頁/靜態頁的標準關閉手勢）
+            if (now - lastBackActionTimeMs >= 3500L) {
+                service.navigateBack()
+                lastBackActionTimeMs = now
+                return AdStepResult.WatchdogBackTriggered(elapsedSec, "系統返回鍵")
+            }
+
+            // 備援：若返回鍵剛按過且間隔達標，嘗試點擊右上角關閉熱區 (涵蓋標準頂部與黑邊頂部區域)
+            if (now - lastFallbackCornerTimeMs >= 4000L && now - lastBackActionTimeMs >= 1500L) {
                 val fallbackCorner = Rect(
                     (sw * 0.88f).toInt(),
-                    (sh * 0.045f).toInt(),
+                    (sh * 0.050f).toInt(),
                     (sw * 0.96f).toInt(),
-                    (sh * 0.090f).toInt()
+                    (sh * 0.110f).toInt()
                 )
-                recordAndClick(service, fallbackCorner)
-                return AdStepResult.ClickedCloseOrSkip("右上角標準關閉熱區", fallbackCorner)
+                if (!isInvalidOrBlacklisted(fallbackCorner.centerX(), fallbackCorner.centerY())) {
+                    lastFallbackCornerTimeMs = now
+                    recordAndClick(service, fallbackCorner)
+                    return AdStepResult.ClickedCloseOrSkip("右上角標準關閉熱區", fallbackCorner)
+                }
             }
         }
 
-        // 9. 防卡死 Watchdog：若單支廣告超過最大等待秒數 (預設 32 秒)，嘗試發送系統返回鍵或點右上角標準 X 熱區
+        // 9. 防卡死 Watchdog：若單支廣告超過最大等待秒數 (預設 32 秒)，持續發送返回鍵與右上角點擊
         if (elapsedSec >= config.maxAdWaitSeconds) {
-            if (elapsedSec % 4 < 2) {
+            if (now - lastBackActionTimeMs >= 2000L) {
                 service.navigateBack()
+                lastBackActionTimeMs = now
+                return AdStepResult.WatchdogBackTriggered(elapsedSec, "逾時強效返回鍵")
             } else {
                 val fallbackRect = Rect(
                     (sw * 0.88f).toInt(),
-                    (sh * 0.045f).toInt(),
+                    (sh * 0.050f).toInt(),
                     (sw * 0.96f).toInt(),
-                    (sh * 0.090f).toInt()
+                    (sh * 0.110f).toInt()
                 )
-                recordAndClick(service, fallbackRect)
+                if (!isInvalidOrBlacklisted(fallbackRect.centerX(), fallbackRect.centerY())) {
+                    recordAndClick(service, fallbackRect)
+                }
+                return AdStepResult.WatchdogBackTriggered(elapsedSec, "逾時強效關閉")
             }
-            return AdStepResult.WatchdogBackTriggered(elapsedSec)
         }
 
         return AdStepResult.ScanningAd(elapsedSec)
