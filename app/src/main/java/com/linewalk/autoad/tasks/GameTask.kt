@@ -220,32 +220,10 @@ class MoveGaugeTask : GameTask {
             )
         }
 
-        // 4. 【視覺特徵】偵測熊大車長頭頂之金色金幣泡泡 (x in 38%..58%, y in 31%..40%)
-        var goldCoinPixels = 0
-        var cy = (sh * 0.31f).toInt()
-        val cyEnd = (sh * 0.40f).toInt()
-        val cxStart = (sw * 0.38f).toInt()
-        val cxEnd = (sw * 0.58f).toInt()
-        while (cy < cyEnd) {
-            var cx = cxStart
-            while (cx < cxEnd) {
-                val c = screenBitmap.getPixel(cx, cy)
-                val r = (c shr 16) and 0xFF
-                val g = (c shr 8) and 0xFF
-                val b = c and 0xFF
-                if (r > 180 && g > 130 && b < 85 && r >= g) {
-                    goldCoinPixels++
-                }
-                cx += 2
-            }
-            cy += 2
-        }
-        if (goldCoinPixels >= 35) {
-            return TaskTriggerTarget(
-                taskName = displayName,
-                targetLabel = "列車金幣泡泡",
-                bounds = trainRect
-            )
+        // 4. 若主按鈕已反灰且無列車對話框，嚴格判定本分頁已領取完畢，避免誤抓反灰按鈕內之小金幣圖示
+        val isBtnGray = templateMatcher.isPopupButtonDisabledGray(screenBitmap, (sh * 0.305f).toInt())
+        if (isBtnGray) {
+            return null
         }
 
         // 5. 備用：範本比對

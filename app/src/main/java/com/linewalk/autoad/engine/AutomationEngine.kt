@@ -1217,7 +1217,7 @@ class AutomationEngine private constructor(context: Context) {
             return
         }
 
-        if (onMainScreenDirect && popupRetryTicks >= 4) {
+        if (onMainScreenDirect && popupRetryTicks >= 3) {
             transitionTo(EngineState.IN_GAME_SCAN, "已回到主畫面，繼續常規巡邏...", "🔍 巡邏畫面目標中...")
             return
         }
@@ -1247,11 +1247,11 @@ class AutomationEngine private constructor(context: Context) {
             }
         }
 
-        if (popupRetryTicks >= 4) {
+        if (popupRetryTicks >= 3) {
             appendLog("↩️ 未偵測到看廣告彈窗，返回主畫面繼續巡邏")
             transitionTo(EngineState.IN_GAME_SCAN, "重新掃描遊戲畫面...", "🔍 巡邏畫面目標中...")
         } else {
-            updateDetail("⏳ 等待看廣告彈窗出現 ($popupRetryTicks/4)...", "⏳ 等待彈窗 ($popupRetryTicks/4)...")
+            updateDetail("⏳ 等待看廣告彈窗出現 ($popupRetryTicks/3)...", "⏳ 等待彈窗 ($popupRetryTicks/3)...")
         }
     }
 

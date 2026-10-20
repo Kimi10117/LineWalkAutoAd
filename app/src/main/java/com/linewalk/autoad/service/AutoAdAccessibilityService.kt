@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
 import kotlin.random.Random
 
@@ -94,45 +95,47 @@ class AutoAdAccessibilityService : AccessibilityService() {
      * 使用 Android 11+ (API 30) 內建無障礙截圖 API 擷取全螢幕軟體 Bitmap (ARGB_8888)。
      * 注意：系統限制呼叫頻率約每秒 1~2 次，狀態機預設 2.2 秒呼叫一次完全符合規範。
      */
-    suspend fun captureScreenBitmap(): Bitmap? = suspendCancellableCoroutine { cont ->
-        try {
-            takeScreenshot(
-                Display.DEFAULT_DISPLAY,
-                mainExecutor,
-                object : TakeScreenshotCallback {
-                    override fun onSuccess(screenshot: ScreenshotResult) {
-                        val hardwareBuffer = screenshot.hardwareBuffer
-                        val colorSpace = screenshot.colorSpace
-                        try {
-                            val hwBitmap = Bitmap.wrapHardwareBuffer(hardwareBuffer, colorSpace)
-                            val softBitmap = hwBitmap?.copy(Bitmap.Config.ARGB_8888, false)
-                            hwBitmap?.recycle()
-                            softBitmap?.let {
-                                lastCapturedWidth = it.width
-                                lastCapturedHeight = it.height
+    suspend fun captureScreenBitmap(): Bitmap? = withTimeoutOrNull(2500L) {
+        suspendCancellableCoroutine { cont ->
+            try {
+                takeScreenshot(
+                    Display.DEFAULT_DISPLAY,
+                    mainExecutor,
+                    object : TakeScreenshotCallback {
+                        override fun onSuccess(screenshot: ScreenshotResult) {
+                            val hardwareBuffer = screenshot.hardwareBuffer
+                            val colorSpace = screenshot.colorSpace
+                            try {
+                                val hwBitmap = Bitmap.wrapHardwareBuffer(hardwareBuffer, colorSpace)
+                                val softBitmap = hwBitmap?.copy(Bitmap.Config.ARGB_8888, false)
+                                hwBitmap?.recycle()
+                                softBitmap?.let {
+                                    lastCapturedWidth = it.width
+                                    lastCapturedHeight = it.height
+                                }
+                                if (cont.isActive) {
+                                    cont.resume(softBitmap)
+                                } else {
+                                    softBitmap?.recycle()
+                                }
+                            } catch (t: Throwable) {
+                                Log.e(TAG, "轉換 Screenshot HardwareBuffer 失敗", t)
+                                if (cont.isActive) cont.resume(null)
+                            } finally {
+                                hardwareBuffer.close()
                             }
-                            if (cont.isActive) {
-                                cont.resume(softBitmap)
-                            } else {
-                                softBitmap?.recycle()
-                            }
-                        } catch (t: Throwable) {
-                            Log.e(TAG, "轉換 Screenshot HardwareBuffer 失敗", t)
+                        }
+
+                        override fun onFailure(errorCode: Int) {
+                            Log.w(TAG, "takeScreenshot 失敗，errorCode=$errorCode")
                             if (cont.isActive) cont.resume(null)
-                        } finally {
-                            hardwareBuffer.close()
                         }
                     }
-
-                    override fun onFailure(errorCode: Int) {
-                        Log.w(TAG, "takeScreenshot 失敗，errorCode=$errorCode")
-                        if (cont.isActive) cont.resume(null)
-                    }
-                }
-            )
-        } catch (e: Exception) {
-            Log.e(TAG, "呼叫 takeScreenshot 發生例外", e)
-            if (cont.isActive) cont.resume(null)
+                )
+            } catch (e: Exception) {
+                Log.e(TAG, "呼叫 takeScreenshot 發生例外", e)
+                if (cont.isActive) cont.resume(null)
+            }
         }
     }
 

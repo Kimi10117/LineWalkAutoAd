@@ -11,8 +11,8 @@ android {
         applicationId = "com.linewalk.autoad"
         minSdk = 30
         targetSdk = 34
-        versionCode = 26
-        versionName = "1.14.3"
+        versionCode = 27
+        versionName = "1.14.4"
     }
 
     signingConfigs {
