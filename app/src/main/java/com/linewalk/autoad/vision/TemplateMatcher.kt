@@ -482,8 +482,8 @@ class TemplateMatcher {
         val searchZones = listOf(
             // 右上角 (最常見，如『邀請好友』右上角灰底圓形 X)
             Rect((sw * 0.75f).toInt(), (sh * 0.02f).toInt(), (sw * 0.98f).toInt(), (sh * 0.18f).toInt()),
-            // 左上角
-            Rect((sw * 0.02f).toInt(), (sh * 0.02f).toInt(), (sw * 0.25f).toInt(), (sh * 0.18f).toInt())
+            // 左上角 (廣告左上角關閉鈕通常緊貼左上 x < 16%, y < 10%，避免侵入金幣狀態列與分頁)
+            Rect((sw * 0.02f).toInt(), (sh * 0.02f).toInt(), (sw * 0.16f).toInt(), (sh * 0.10f).toInt())
         )
 
         var bestCandidate: TemplateMatchResult? = null

@@ -81,9 +81,9 @@ class AdCloserHandler(
 
     private fun isInvalidOrBlacklisted(x: Int, y: Int): Boolean {
         if (FloatingOverlayService.isInsideOverlay(x, y)) return true
-        // 嚴格黑名單：主畫面頂部狀態列圖示區（齒輪設定/廣播 x > 0.72, y < 0.088）嚴禁作為廣告 X 點擊！
-        if (currentScreenHeight > 0 && currentScreenWidth > 0) {
-            if (y < currentScreenHeight * 0.088f && x > currentScreenWidth * 0.72f) return true
+        // 嚴格黑名單：主畫面頂部狀態列與四大分頁區 (y < 16.5%) 嚴禁作為廣告 X 點擊！
+        if (currentScreenHeight > 0) {
+            if (y < currentScreenHeight * 0.165f) return true
         }
         return blacklistedPoints.any { pt ->
             hypot((pt.x - x).toDouble(), (pt.y - y).toDouble()) < BLACKLIST_RADIUS_PX

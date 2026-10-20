@@ -544,10 +544,8 @@ class AutomationEngine private constructor(context: Context) {
             screenBitmap = screenBitmap,
             blacklistedCoord = { x, y ->
                 FloatingOverlayService.isInsideOverlay(x, y) ||
-                (y < sh * 0.088f && x > sw * 0.72f) ||
-                (y in (sh * 0.088f).toInt()..(sh * 0.160f).toInt() && x > sw * 0.78f) ||
-                y < sh * 0.045f ||
-                (y in (sh * 0.14f).toInt()..(sh * 0.35f).toInt())
+                y < sh * 0.165f ||
+                (y in (sh * 0.165f).toInt()..(sh * 0.35f).toInt())
             }
         )
         if (geoX != null) {
@@ -1186,10 +1184,8 @@ class AutomationEngine private constructor(context: Context) {
             screenBitmap = screenBitmap,
             blacklistedCoord = { x, y ->
                 FloatingOverlayService.isInsideOverlay(x, y) ||
-                (y < sh * 0.088f && x > sw * 0.72f) ||
-                (y in (sh * 0.088f).toInt()..(sh * 0.160f).toInt() && x > sw * 0.78f) ||
-                y < sh * 0.045f ||
-                (y in (sh * 0.14f).toInt()..(sh * 0.35f).toInt())
+                y < sh * 0.165f ||
+                (y in (sh * 0.165f).toInt()..(sh * 0.35f).toInt())
             }
         )
         val onMainScreenDirect = ocrRecognizer.isLineWalkMainScreenVisible(screenBitmap, ocrItems, templateMatcher)
@@ -1208,8 +1204,8 @@ class AutomationEngine private constructor(context: Context) {
             cy < sh * 0.16f && (item.text.contains("正在載入") || item.text.contains(".com") || item.text.contains("http"))
         }
         val isGameScreen = adCloserHandler.isGameScreenVisible(service, screenBitmap, ocrItems)
-        // 嚴格安全防護：若畫面正在顯示領獎下半部彈窗，絕不誤判為全螢幕廣告！
-        if (!isStillInSubDialog && !isBottomRewardPopup && (directGeoX != null || isExternalDirect || hasBrowserTitleDirect || (!isGameScreen && popupRetryTicks >= 2))) {
+        // 嚴格安全防護：若畫面仍在主畫面或領獎下半部彈窗，絕不誤判為全螢幕廣告！
+        if (!onMainScreenDirect && !isStillInSubDialog && !isBottomRewardPopup && (directGeoX != null || isExternalDirect || hasBrowserTitleDirect || (!isGameScreen && popupRetryTicks >= 2))) {
             appendLog("📺 點擊目標後已直接進入全螢幕廣告/宣傳頁，啟動廣告監控流程！")
             adCloserHandler.onEnterAdMode()
             transitionTo(EngineState.AD_WATCHING, "已進入廣告畫面，安全監控中...", "📺 廣告監控中...")
@@ -1221,7 +1217,7 @@ class AutomationEngine private constructor(context: Context) {
             return
         }
 
-        if (onMainScreenDirect && popupRetryTicks >= 2) {
+        if (onMainScreenDirect && popupRetryTicks >= 4) {
             transitionTo(EngineState.IN_GAME_SCAN, "已回到主畫面，繼續常規巡邏...", "🔍 巡邏畫面目標中...")
             return
         }
