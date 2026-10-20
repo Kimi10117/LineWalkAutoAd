@@ -324,8 +324,9 @@ class OcrRecognizer {
             maxTextLength = 4
         )
         if (cancelOcr != null) {
-            // 只有在明確冷卻中、或確定畫面無任何可領取看廣告按鈕時才點取消！
-            if (hasCooldownText || (!hasActivePinkBtn && !hasActiveBadgeBtn && !hasActiveClaimRewardOcr)) {
+            // 只有在明確出現冷卻倒數文字（回復還需、還需、00:xx）時，才點擊 [取消]！
+            // 嚴禁在未冷卻的正常彈窗上誤點取消！
+            if (hasCooldownText) {
                 return cancelOcr.bounds
             }
             return null
@@ -421,6 +422,8 @@ class OcrRecognizer {
                 t.contains("抽抽樂") ||
                 t.contains("任務") ||
                 t.contains("禮物盒") || t.contains("接收禮物") ||
+                (cy in 0.18f..0.32f && (t == "禮物" || t == "禮物盒")) ||
+                t.contains("送來的禮物") || (t.contains("收到") && t.contains("禮物")) ||
                 t.contains("好友排行榜") || t.contains("好友清單") ||
                 t.contains("邀請好友") || t.contains("服務條款") || t.contains("條款與條件") ||
                 t.contains("想體驗更多遊戲") || t.contains("解鎖更多遊戲")

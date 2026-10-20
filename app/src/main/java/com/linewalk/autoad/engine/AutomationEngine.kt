@@ -90,8 +90,8 @@ enum class PatrolPhase(val title: String) {
     BINGO("每日賓果"),
     LOTTERY("抽抽樂"),
     MISSION("任務"),
-    RECEIVE_GIFT("接收好友禮物"),
     FRIEND_GIFT("好友送禮"),
+    RECEIVE_GIFT("接收好友禮物"),
     COMPLETED("全任務完成")
 }
 
@@ -1141,19 +1141,6 @@ class AutomationEngine private constructor(context: Context) {
                 updateDetail("🎯 開啟【任務】視窗中...", "🎯 開啟任務...")
             }
 
-            PatrolPhase.RECEIVE_GIFT -> {
-                if (!config.enableFriendGiftTask || isReceiveGiftCompleted) {
-                    currentPhase = getNextPhase(PatrolPhase.RECEIVE_GIFT)
-                    return
-                }
-                appendLog("🎁 點擊主畫面右上角【禮物盒】圖示按鈕...")
-                val giftBoxRect = receiveGiftTask.getHeaderGiftBoxRect(sw, sh)
-                FloatingOverlayService.clickWithOverlayPassthrough(giftBoxRect) {
-                    service.clickRect(giftBoxRect)
-                }
-                updateDetail("🎁 開啟【禮物】視窗接收禮物中...", "🎁 接收禮物中...")
-            }
-
             PatrolPhase.FRIEND_GIFT -> {
                 if (!config.enableFriendGiftTask || isFriendGiftCompleted) {
                     currentPhase = getNextPhase(PatrolPhase.FRIEND_GIFT)
@@ -1167,8 +1154,21 @@ class AutomationEngine private constructor(context: Context) {
                 updateDetail("🎁 進入【好友排行榜】送禮中...", "🎁 進入好友...")
             }
 
+            PatrolPhase.RECEIVE_GIFT -> {
+                if (!config.enableFriendGiftTask || isReceiveGiftCompleted) {
+                    currentPhase = getNextPhase(PatrolPhase.RECEIVE_GIFT)
+                    return
+                }
+                appendLog("🎁 點擊主畫面右上角【禮物盒】圖示按鈕...")
+                val giftBoxRect = receiveGiftTask.getHeaderGiftBoxRect(sw, sh)
+                FloatingOverlayService.clickWithOverlayPassthrough(giftBoxRect) {
+                    service.clickRect(giftBoxRect)
+                }
+                updateDetail("🎁 開啟【禮物】視窗接收禮物中...", "🎁 接收禮物中...")
+            }
+
             PatrolPhase.COMPLETED -> {
-                stop("🎉 全日任務與巡邏獎勵皆已領取完畢！（四大分頁/每日賓果/抽抽樂/任務/收禮/送禮）")
+                stop("🎉 全日任務與巡邏獎勵皆已領取完畢！（四大分頁/每日賓果/抽抽樂/任務/送禮/收禮）")
             }
         }
     }
@@ -1179,8 +1179,8 @@ class AutomationEngine private constructor(context: Context) {
             PatrolPhase.BINGO,
             PatrolPhase.LOTTERY,
             PatrolPhase.MISSION,
-            PatrolPhase.RECEIVE_GIFT,
-            PatrolPhase.FRIEND_GIFT
+            PatrolPhase.FRIEND_GIFT,
+            PatrolPhase.RECEIVE_GIFT
         )
         val startIdx = phaseList.indexOf(after) + 1
         for (i in startIdx until phaseList.size) {
@@ -1190,8 +1190,8 @@ class AutomationEngine private constructor(context: Context) {
                 PatrolPhase.BINGO -> config.enableBingoTask && !isBingoCompleted
                 PatrolPhase.LOTTERY -> config.enableLotteryTask && !isLotteryCompleted
                 PatrolPhase.MISSION -> config.enableDailyMissionTask && !isMissionCompleted
-                PatrolPhase.RECEIVE_GIFT -> config.enableFriendGiftTask && !isReceiveGiftCompleted
                 PatrolPhase.FRIEND_GIFT -> config.enableFriendGiftTask && !isFriendGiftCompleted
+                PatrolPhase.RECEIVE_GIFT -> config.enableFriendGiftTask && !isReceiveGiftCompleted
                 PatrolPhase.COMPLETED -> false
             }
             if (isEnabled) return p
@@ -1679,8 +1679,8 @@ class AutomationEngine private constructor(context: Context) {
         // 儲存所有可點擊的看廣告/領取按鈕候選項目及其對應金幣數量: List<Pair<PopupActionTarget, Int>>
         val candidates = mutableListOf<Pair<PopupActionTarget, Int>>()
 
-        // 1. 搜尋彈窗區 (y = 65% ~ 90%) 中所有符合關鍵字的 OCR 項目，解析其金幣數值
-        val roiTop = (sh * 0.65f).toInt()
+        // 1. 搜尋彈窗區 (y = 58% ~ 90%) 中所有符合關鍵字的 OCR 項目，解析其金幣數值
+        val roiTop = (sh * 0.58f).toInt()
         val roiBottom = (sh * 0.90f).toInt()
         for (item in ocrItems) {
             val cy = item.bounds.centerY()
@@ -1703,11 +1703,11 @@ class AutomationEngine private constructor(context: Context) {
             }
         }
 
-        // 2. 偵測下半部彈窗區 (y = 66% ~ 88%) 的整條珊瑚粉紅按鈕 (如時間放置蘋果的『▶ 8 獲得』、步數/首頁的『紅利 [▶] 15/60 獲得』)
+        // 2. 偵測下半部彈窗區 (y = 60% ~ 90%) 的整條珊瑚粉紅按鈕 (如時間放置蘋果的『▶ 8 獲得』、步數/首頁的『紅利 [▶] 15/60 獲得』)
         val pinkPopupBtn = templateMatcher.findCoralPinkButton(
             screenBitmap = screenBitmap,
-            yStartRatio = 0.66f,
-            yEndRatio = 0.88f,
+            yStartRatio = 0.60f,
+            yEndRatio = 0.90f,
             label = "紅利粉紅看廣告鈕"
         )
         if (pinkPopupBtn != null &&
