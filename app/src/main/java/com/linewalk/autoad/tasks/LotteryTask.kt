@@ -18,13 +18,20 @@ class LotteryTask {
     fun isEnabled(config: AppConfig): Boolean = config.enableLotteryTask
 
     fun isLotteryDialogOpen(ocrItems: List<OcrItem>, sh: Int = 0): Boolean {
-        val maxTopY = if (sh > 0) sh * 0.30f else 600f
+        // 嚴格排除主畫面四大分頁特徵
+        val hasMainTabs = ocrItems.any { item ->
+            val cy = item.bounds.centerY()
+            val inRange = if (sh > 0) cy in (sh * 0.08f).toInt()..(sh * 0.18f).toInt() else false
+            val t = item.text
+            inRange && (t.contains("首頁") || t.contains("步數") || t.contains("時間") || t.contains("遊戲"))
+        }
+        if (hasMainTabs) return false
+
+        val maxTopY = if (sh > 0) sh * 0.16f else 350f
         return ocrItems.any { item ->
-            item.bounds.centerY() < maxTopY && (
-                item.text.contains("抽抽樂") ||
-                item.text.contains("BIG") ||
-                (item.text.contains("50張") && item.text.contains("抽"))
-            )
+            (item.bounds.centerY() < maxTopY && item.text.contains("抽抽樂")) ||
+            item.text.contains("BIG") ||
+            (item.text.contains("50張") && item.text.contains("抽"))
         }
     }
 

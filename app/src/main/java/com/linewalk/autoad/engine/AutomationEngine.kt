@@ -444,47 +444,7 @@ class AutomationEngine private constructor(context: Context) {
             return
         }
 
-        // B1. 優先檢查是否正在「每日賓果」彈窗
-        if (bingoTask.isBingoDialogOpen(ocrItems, sh)) {
-            handleBingoDialog(service, screenBitmap, ocrItems, sw, sh)
-            return
-        }
-
-        // B2. 檢查是否正在「抽抽樂」彈窗
-        if (lotteryTask.isLotteryDialogOpen(ocrItems, sh)) {
-            handleLotteryDialog(service, screenBitmap, ocrItems, sw, sh)
-            return
-        }
-
-        // B3. 檢查是否正在「任務」彈窗
-        if (missionTask.isMissionDialogOpen(ocrItems, sh, screenBitmap)) {
-            handleMissionDialog(service, screenBitmap, ocrItems, sw, sh)
-            return
-        }
-
-        // B4. 檢查是否正在「接收禮物」彈窗
-        if (receiveGiftTask.isReceiveGiftDialogOpen(ocrItems, sh)) {
-            handleReceiveGiftDialog(service, screenBitmap, ocrItems, sw, sh)
-            return
-        }
-
-        // B5. 檢查是否正在底部導覽列「好友」頁面
-        if (friendGiftTask.isFriendsPage(ocrItems, sh)) {
-            handleFriendsPage(service, screenBitmap, ocrItems, sw, sh)
-            return
-        }
-
-        // B6. 檢查是否彈出「玩遊戲賺點數 / 免費參加」推廣宣傳頁，自動點擊底部「跳過」
-        val promoSkip = findPlayGamePromoSkipButton(screenBitmap, ocrItems, sw, sh)
-        if (promoSkip != null) {
-            appendLog("🎮 偵測到【玩遊戲賺點數】推廣頁，自動點擊底部 [跳過]！")
-            FloatingOverlayService.clickWithOverlayPassthrough(promoSkip) {
-                service.clickRect(promoSkip)
-            }
-            return
-        }
-
-        // C. 檢查四大分頁下半部是否彈出領獎彈窗（優先點可用的『跳過廣告(糖果)』，其次點『紅利 15/60/x1 獲得』）！
+        // B. 檢查四大分頁下半部是否彈出領獎彈窗（優先點可用的『跳過廣告(糖果)』，其次點『紅利 15/60/x1 獲得』）！
         val popupAction = findPopupActionTarget(screenBitmap, ocrItems)
         if (popupAction != null) {
             executePopupAction(service, popupAction)
@@ -496,10 +456,52 @@ class AutomationEngine private constructor(context: Context) {
             return
         }
 
-        // C6. 判斷目前是否在乾淨的《LINE 散步趣》主畫面（涵蓋『首頁(移動)』『時間』『遊戲』『步數』四大分頁）
+        // C. 檢查是否彈出「玩遊戲賺點數 / 免費參加」推廣宣傳頁，自動點擊底部「跳過」
+        val promoSkip = findPlayGamePromoSkipButton(screenBitmap, ocrItems, sw, sh)
+        if (promoSkip != null) {
+            appendLog("🎮 偵測到【玩遊戲賺點數】推廣頁，自動點擊底部 [跳過]！")
+            FloatingOverlayService.clickWithOverlayPassthrough(promoSkip) {
+                service.clickRect(promoSkip)
+            }
+            return
+        }
+
+        // D. 【最高優先】判斷目前是否在乾淨的《LINE 散步趣》主畫面（涵蓋『首頁(移動)』『時間』『遊戲』『步數』四大分頁）
+        // 只要在主畫面，絕不被日常子彈窗誤判劫持，立即交由 handleMainScreenPatrol 進行分頁切換與常規巡邏！
         val onMainScreen = ocrRecognizer.isLineWalkMainScreenVisible(screenBitmap, ocrItems, templateMatcher)
         if (onMainScreen) {
             handleMainScreenPatrol(service, screenBitmap, ocrItems, sw, sh)
+            return
+        }
+
+        // E. 若不在乾淨主畫面，檢查各個日常任務子彈窗或好友分頁：
+        // E1. 優先檢查是否正在「每日賓果」彈窗
+        if (bingoTask.isBingoDialogOpen(ocrItems, sh)) {
+            handleBingoDialog(service, screenBitmap, ocrItems, sw, sh)
+            return
+        }
+
+        // E2. 檢查是否正在「抽抽樂」彈窗
+        if (lotteryTask.isLotteryDialogOpen(ocrItems, sh)) {
+            handleLotteryDialog(service, screenBitmap, ocrItems, sw, sh)
+            return
+        }
+
+        // E3. 檢查是否正在「任務」彈窗
+        if (missionTask.isMissionDialogOpen(ocrItems, sh, screenBitmap)) {
+            handleMissionDialog(service, screenBitmap, ocrItems, sw, sh)
+            return
+        }
+
+        // E4. 檢查是否正在「接收禮物」彈窗
+        if (receiveGiftTask.isReceiveGiftDialogOpen(ocrItems, sh)) {
+            handleReceiveGiftDialog(service, screenBitmap, ocrItems, sw, sh)
+            return
+        }
+
+        // E5. 檢查是否正在底部導覽列「好友」頁面
+        if (friendGiftTask.isFriendsPage(ocrItems, sh)) {
+            handleFriendsPage(service, screenBitmap, ocrItems, sw, sh)
             return
         }
 
@@ -1183,11 +1185,14 @@ class AutomationEngine private constructor(context: Context) {
                 (y in (sh * 0.14f).toInt()..(sh * 0.35f).toInt())
             }
         )
-        val isStillInSubDialog = missionTask.isMissionDialogOpen(ocrItems, sh, screenBitmap) ||
+        val onMainScreenDirect = ocrRecognizer.isLineWalkMainScreenVisible(screenBitmap, ocrItems, templateMatcher)
+        val isStillInSubDialog = !onMainScreenDirect && (
+            missionTask.isMissionDialogOpen(ocrItems, sh, screenBitmap) ||
             bingoTask.isBingoDialogOpen(ocrItems, sh) ||
             lotteryTask.isLotteryDialogOpen(ocrItems, sh) ||
             receiveGiftTask.isReceiveGiftDialogOpen(ocrItems, sh) ||
             friendGiftTask.isFriendsPage(ocrItems, sh)
+        )
 
         val fgPkgDirect = service.getForegroundPackageName()
         val isExternalDirect = fgPkgDirect != null && AppConfig.isRedirectPackage(fgPkgDirect)
@@ -1205,6 +1210,11 @@ class AutomationEngine private constructor(context: Context) {
 
         if (isStillInSubDialog && popupRetryTicks >= 2) {
             transitionTo(EngineState.IN_GAME_SCAN, "已領取獎勵，繼續彈窗內部巡邏...", "🔍 檢查彈窗中...")
+            return
+        }
+
+        if (onMainScreenDirect && popupRetryTicks >= 2) {
+            transitionTo(EngineState.IN_GAME_SCAN, "已回到主畫面，繼續常規巡邏...", "🔍 巡邏畫面目標中...")
             return
         }
 

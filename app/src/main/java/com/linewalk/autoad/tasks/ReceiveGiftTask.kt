@@ -32,6 +32,15 @@ class ReceiveGiftTask {
      * 判斷「禮物」彈窗是否開啟中（嚴格排除超商「禮物卡/禮物券」等廣告卡片！）
      */
     fun isReceiveGiftDialogOpen(ocrItems: List<OcrItem>, sh: Int): Boolean {
+        // 嚴格排除主畫面四大分頁特徵
+        val hasMainTabs = ocrItems.any { item ->
+            val cy = item.bounds.centerY()
+            val inRange = cy in (sh * 0.08f).toInt()..(sh * 0.18f).toInt()
+            val t = item.text
+            inRange && (t.contains("首頁") || t.contains("步數") || t.contains("時間") || t.contains("遊戲"))
+        }
+        if (hasMainTabs) return false
+
         // 嚴格排除好友排行榜、排行榜、好友清單等好友頁面特徵
         val isFriendsScreen = ocrItems.any { item ->
             val t = item.text
@@ -46,7 +55,7 @@ class ReceiveGiftTask {
             (t.contains("收到") && t.contains("禮物")) ||
             (t.contains("剩餘") && t.contains("天") && cy < sh * 0.85f) ||
             ((t == "禮物" || t == "禮物盒") &&
-             cy < sh * 0.25f && !t.contains("次數") && !t.contains("卡") && !t.contains("券") && !t.contains("超商"))
+             cy in (sh * 0.18f).toInt()..(sh * 0.30f).toInt() && !t.contains("次數") && !t.contains("卡") && !t.contains("券") && !t.contains("超商"))
         }
     }
 

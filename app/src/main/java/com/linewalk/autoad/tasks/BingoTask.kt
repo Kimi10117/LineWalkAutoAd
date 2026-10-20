@@ -18,19 +18,27 @@ class BingoTask {
     fun isEnabled(config: AppConfig): Boolean = config.enableBingoTask
 
     fun isBingoDialogOpen(ocrItems: List<OcrItem>, sh: Int = 10000): Boolean {
+        // 嚴格排除主畫面四大分頁特徵
+        val hasMainTabs = ocrItems.any { item ->
+            val cy = item.bounds.centerY()
+            val inRange = if (sh < 10000) cy in (sh * 0.08f).toInt()..(sh * 0.18f).toInt() else false
+            val t = item.text
+            inRange && (t.contains("首頁") || t.contains("步數") || t.contains("時間") || t.contains("遊戲"))
+        }
+        if (hasMainTabs) return false
+
         return ocrItems.any { item ->
             val cy = item.bounds.centerY()
             val t = item.text.trim()
-            (cy < sh * 0.35f && (
+            (cy < (if (sh < 10000) sh * 0.16f else 350f) && (
                 t.contains("每日賓果") ||
                 t.contains("今日賓果") ||
-                t.contains("賓果") ||
-                t.contains("開啟1格") ||
-                t.contains("開啟 1 格")
-            )) || (cy in (sh * 0.40f).toInt()..(sh * 0.88f).toInt() && (
+                t == "賓果"
+            )) || (cy in (if (sh < 10000) (sh * 0.40f).toInt()..(sh * 0.90f).toInt() else 400..900) && (
                 t.contains("BINGO") ||
                 t.contains("OPEN") ||
                 t.contains("今日上限") ||
+                t.contains("已達到今日上限") ||
                 t.contains("COMPLETE")
             ))
         }

@@ -25,6 +25,15 @@ class FriendGiftTask {
     }
 
     fun isFriendsPage(ocrItems: List<OcrItem>, sh: Int = 0): Boolean {
+        // 嚴格排除主畫面四大分頁特徵
+        val hasMainTabs = ocrItems.any { item ->
+            val cy = item.bounds.centerY()
+            val inRange = if (sh > 0) cy in (sh * 0.08f).toInt()..(sh * 0.18f).toInt() else false
+            val t = item.text
+            inRange && (t.contains("首頁") || t.contains("步數") || t.contains("時間") || t.contains("遊戲"))
+        }
+        if (hasMainTabs) return false
+
         val maxTopY = if (sh > 0) sh * 0.25f else 500f
         return ocrItems.any { item ->
             item.bounds.centerY() < maxTopY && (

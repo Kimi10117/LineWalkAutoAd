@@ -21,37 +21,45 @@ class MissionTask {
     /**
      * 判定是否正在「任務」彈窗中：
      * 支援多重特徵防禦（避免被狀態列、打孔相機或不同螢幕高度影響）：
-     * 1. 螢幕上方 35% 範圍內出現「任務」標題文字
-     * 2. 螢幕上方 35% 範圍內出現「特別」、「每日」或「每週」分頁文字
-     * 3. 偵測到頂部分頁深黑選中膠囊 (y in 0.16f..0.22f)
-     * 4. 畫面出現「已領取」或「挑戰」任務清單按鈕特徵
+     * 1. 嚴格排除主畫面頂部四大分頁（首頁/步數/時間/遊戲）
+     * 2. 螢幕上方出現「特別」、「每日」或「每週」任務專屬分頁文字
+     * 3. 頂部標題出現「任務」且具備選中膠囊或任務項目
      */
     fun isMissionDialogOpen(
         ocrItems: List<OcrItem>,
         sh: Int = 0,
         screenBitmap: Bitmap? = null
     ): Boolean {
-        val maxTopY = if (sh > 0) sh * 0.35f else 750f
-        val hasMissionTitle = ocrItems.any { item ->
-            item.bounds.centerY() < maxTopY && item.text.contains("任務")
+        // 嚴格排除主畫面四大分頁特徵
+        val hasMainTabs = ocrItems.any { item ->
+            val cy = item.bounds.centerY()
+            val inRange = if (sh > 0) cy in (sh * 0.08f).toInt()..(sh * 0.18f).toInt() else cy in 150..450
+            val t = item.text
+            inRange && (t.contains("首頁") || t.contains("步數") || t.contains("時間") || t.contains("遊戲"))
         }
+        if (hasMainTabs) return false
+
+        val maxTopY = if (sh > 0) sh * 0.35f else 750f
         val hasMissionTabs = ocrItems.any { item ->
             item.bounds.centerY() < maxTopY && (
                 item.text.contains("每日") || item.text.contains("每週") || item.text.contains("特別")
             )
         }
+        val hasMissionTitle = ocrItems.any { item ->
+            val cy = item.bounds.centerY()
+            val inTopHeader = if (sh > 0) cy < sh * 0.16f else cy < 350
+            inTopHeader && item.text.contains("任務")
+        }
         val hasMissionItems = ocrItems.any { item ->
             val cy = item.bounds.centerY()
-            val inRange = if (sh > 0) cy in (sh * 0.20f).toInt()..(sh * 0.90f).toInt() else cy > 400
+            val inRange = if (sh > 0) cy in (sh * 0.22f).toInt()..(sh * 0.90f).toInt() else cy > 400
             inRange && (
-                item.text.contains("已領取") || item.text.contains("挑戰") || item.text.contains("領取")
+                item.text.contains("已領取") || item.text.contains("挑戰")
             )
         }
         val hasBlackPill = screenBitmap != null && hasTabPill(screenBitmap)
 
-        return (hasMissionTitle && (hasMissionTabs || hasBlackPill || hasMissionItems)) ||
-               (hasMissionTabs && (hasBlackPill || hasMissionItems)) ||
-               (hasBlackPill && hasMissionItems)
+        return hasMissionTabs || (hasMissionTitle && (hasBlackPill || hasMissionItems))
     }
 
     /**
@@ -120,6 +128,15 @@ class MissionTask {
         val sh = screenBitmap.height
         val sw = screenBitmap.width
 
+        // 若在主畫面，絕不尋找任務領取按鈕
+        val hasMainTabs = ocrItems.any { item ->
+            val cy = item.bounds.centerY()
+            val inRange = if (sh > 0) cy in (sh * 0.08f).toInt()..(sh * 0.18f).toInt() else cy in 150..450
+            val t = item.text
+            inRange && (t.contains("首頁") || t.contains("步數") || t.contains("時間") || t.contains("遊戲"))
+        }
+        if (hasMainTabs) return null
+
         // 建立排除 Y 軸清單 (凡是 OCR 出現「挑戰」或「已領取」的區域，嚴格排除點擊)
         val excludedYRanges = ocrItems.filter { item ->
             val cy = item.bounds.centerY()
@@ -146,7 +163,14 @@ class MissionTask {
         }
 
         // 2. 2D 綠色連通像素區塊偵測 (LINE 亮綠 #06C755: g > 140 && g > r + 35 && g > b + 35)
-        // 搜尋右側按鈕區域 x in 0.65f..0.96f, y in 0.24f..0.88f
+        // 僅在確認具備任務分頁 (特別/每日/每週) 時才啟用綠色色塊備援，防止主畫面綠色風景/背景誤判
+        val hasMissionTabs = ocrItems.any { item ->
+            item.bounds.centerY() < sh * 0.35f && (
+                item.text.contains("每日") || item.text.contains("每週") || item.text.contains("特別")
+            )
+        }
+        if (!hasMissionTabs) return null
+
         val greenPts = mutableListOf<Point>()
         val yStart = (sh * 0.24f).toInt()
         val yEnd = (sh * 0.88f).toInt()
