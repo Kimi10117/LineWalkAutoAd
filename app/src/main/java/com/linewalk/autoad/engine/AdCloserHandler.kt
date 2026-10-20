@@ -336,15 +336,31 @@ class AdCloserHandler(
 
         val sh = screenBitmap.height
 
-        // 檢查是否在四大分頁的領獎下半部彈窗 (包含獲得票券！/獲得金幣！與取消按鈕或珊瑚粉紅按鈕)
-        val isBottomRewardPopup = ocrItems.any { item ->
-            val cy = item.bounds.centerY()
+        // 只要看見主畫面頂部四大分頁或底部導覽列，代表已完全回到主畫面！
+        val hasMainScreenMarkers = ocrItems.any { item ->
+            val cy = item.bounds.centerY().toFloat() / sh
+            val t = item.text.replace(" ", "")
+            (cy in 0.08f..0.18f && (t.contains("首頁") || t.contains("步數") || t.contains("時間") || t.contains("遊戲"))) ||
+            (cy > 0.85f && (t.contains("集點") || t.contains("好友") || t.contains("使用") || t.contains("精選")))
+        }
+        if (hasMainScreenMarkers) {
+            return true
+        }
+
+        // 檢查是否在四大分頁的真正領獎下半部彈窗 (必須同時具備彈窗標題與取消按鈕，嚴禁因底層廣告粉紅像素誤判)
+        val hasBottomModalTitle = ocrItems.any { item ->
+            val cy = item.bounds.centerY().toFloat() / sh
+            val t = item.text.replace(" ", "")
+            cy in 0.52f..0.75f &&
+                !t.contains("輕鬆") && !t.contains("簡單") && !t.contains("遊玩") && !t.contains("Sponsored") && !t.contains("AD") &&
+                (t.contains("獲得票券") || t.contains("獲得金幣"))
+        }
+        val hasBottomModalCancel = ocrItems.any { item ->
+            val cy = item.bounds.centerY().toFloat() / sh
             val t = item.text.trim()
-            cy > sh * 0.55f && (
-                t.contains("獲得票券") || t.contains("獲得金幣") || t == "取消"
-            )
-        } || templateMatcher.findCoralPinkButton(screenBitmap, 0.66f, 0.88f, "彈窗鈕") != null
-        if (isBottomRewardPopup) {
+            cy in 0.85f..0.97f && t == "取消"
+        }
+        if (hasBottomModalTitle && hasBottomModalCancel) {
             return true
         }
         // 檢查是否回到每日賓果、好友排行榜、任務、抽抽樂或禮物盒彈窗 (排除全家禮物卡等廣告字眼)

@@ -363,34 +363,38 @@ class OcrRecognizer {
     ): Boolean {
         val sh = screenBitmap.height
 
-        // 1. 若下半部出現了『紅利 [▶] 15/60 獲得』粉紅按鈕或『紅利 [▶] x 1 獲得』白底粉紅標籤按鈕，代表正開著領獎彈窗！
-        if (templateMatcher.findCoralPinkButton(screenBitmap, 0.66f, 0.88f, "彈窗粉紅鈕") != null ||
-            templateMatcher.findPopupBonusBadgeAdButton(screenBitmap) != null
-        ) {
-            return false
-        }
-
-        // 2. 若看完廣告後的中央領獎彈窗 (『獲得15張票券！ [關閉]』) 正開啟中，代表不在主畫面！
+        // 1. 若看完廣告後的中央領獎彈窗 (『獲得15張票券！ [關閉]』) 正開啟中，代表不在主畫面！
         if (findCenterRewardModalCloseButton(screenBitmap, items) != null) {
             return false
         }
 
-        // 3. 若畫面出現了彈窗或內部宣傳頁專屬字眼，代表不在乾淨主畫面！
-        val hasPopupOrPromoText = items.any { item ->
+        // 2. 檢查是否有真正的下半部領獎彈窗：
+        // 必須同時具備明確的領獎彈窗標題（如『獲得15張票券！』『獲得60枚金幣！』）與底部『取消』按鈕，且嚴格排除底層橫幅廣告關鍵字
+        val hasBottomModalTitle = items.any { item ->
             val cy = item.bounds.centerY().toFloat() / sh
+            val t = item.text.replace(" ", "")
+            cy in 0.52f..0.75f &&
+                !t.contains("輕鬆") && !t.contains("簡單") && !t.contains("遊玩") && !t.contains("Sponsored") && !t.contains("AD") &&
+                (t.contains("獲得票券！") || t.contains("獲得金幣！") || t.contains("獲得票券!") || t.contains("獲得金幣!") ||
+                 (t.contains("獲得") && (t.contains("票券") || t.contains("金幣")) && (t.contains("！") || t.contains("!"))))
+        }
+        val hasBottomModalCancel = items.any { item ->
+            val cy = item.bounds.centerY().toFloat() / sh
+            val t = item.text.trim()
+            cy in 0.85f..0.97f && t == "取消"
+        }
+        if (hasBottomModalTitle && hasBottomModalCancel) {
+            return false
+        }
+
+        // 3. 若畫面出現了全螢幕推廣遮罩頁（如邀請好友、服務條款），代表不在主畫面！
+        val hasModalPromoOverlay = items.any { item ->
             val t = item.text
             t.contains("想體驗更多遊戲") || t.contains("解鎖更多遊戲") ||
                 t.contains("探索最熱門遊戲") || t.contains("服務條款") || t.contains("條款與條件") ||
-                t.contains("邀請好友") || t.contains("10000") ||
-                t.contains("張票券") || t.contains("枚金幣") ||
-                (cy > 0.50f && (t.contains("跳過廣告") || t.contains("紅利") ||
-                    Regex("""\d+\s*獲得""").containsMatchIn(t) ||
-                    t.contains("x 1 獲得") || t.contains("x1 獲得") || t.contains("x1獲得") ||
-                    t.contains("獲得票券！") || t.contains("獲得金幣！") ||
-                    t == "關閉" || t == "確認" || t == "確定" ||
-                    t == "取消" || t.contains("同意並繼續")))
+                t.contains("邀請好友") || t.contains("同意並繼續")
         }
-        if (hasPopupOrPromoText) return false
+        if (hasModalPromoOverlay) return false
 
         // 4. 主畫面特徵判定（頂部四大分頁、遊戲分頁、狀態列資產數值、底部導覽列）
         var hasTopTabs = false
@@ -420,7 +424,8 @@ class OcrRecognizer {
             if (cy < 0.58f && (
                     t.contains("距離下次") || t.contains("今天的步數") ||
                     t.contains("獲得票券") || t.contains("獲得金幣") ||
-                    t.contains("達成條件") || t.contains("賓果") || t.contains("抽抽樂") || t.contains("糖果")
+                    t.contains("達成條件") || t.contains("賓果") || t.contains("抽抽樂") || t.contains("糖果") ||
+                    t.contains("速度")
                 )
             ) {
                 hasUpperStage = true
@@ -438,7 +443,7 @@ class OcrRecognizer {
         }
         hasTopTabs = topTabCount >= 1
 
-        // 具備頂部分頁、遊戲分頁特徵、底部導覽列，或頂部資產+內容，即為乾淨主畫面！
+        // 只要具備頂部分頁、底部導覽列、遊戲分頁特徵，或頂部資產+內容，即為乾淨主畫面！
         return hasTopTabs || hasGamePage || hasBottomNav || (hasTopCoins && hasUpperStage)
     }
 
@@ -570,7 +575,13 @@ class OcrRecognizer {
             "遊玩",
             "下載",
             "解鎖更多",
-            "想體驗"
+            "想體驗",
+            "Sponsored",
+            "adjoe",
+            "AD",
+            "無料",
+            "IRIAM",
+            "歓迎"
         )
 
         /** 遊戲內彈窗關閉、活動推銷略過與領獎確認文字（移除單字『好』以避免誤配『邀請好友』！） */

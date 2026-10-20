@@ -569,12 +569,20 @@ class AutomationEngine private constructor(context: Context) {
             return
         }
 
-        // D4. 檢查是否處於下半部領獎彈窗（若是，自動切換至 TRIGGER_AD_POPUP 點擊看廣告/領取）
-        val isBottomRewardPopup = ocrItems.any { item ->
-            val cy = item.bounds.centerY()
+        // D4. 檢查是否處於下半部真正領獎彈窗（必須同時具備彈窗標題與取消鈕，嚴禁因底層廣告粉紅像素誤判）
+        val hasBottomModalTitle = ocrItems.any { item ->
+            val cy = item.bounds.centerY().toFloat() / sh
+            val t = item.text.replace(" ", "")
+            cy in 0.52f..0.75f &&
+                !t.contains("輕鬆") && !t.contains("簡單") && !t.contains("遊玩") && !t.contains("Sponsored") && !t.contains("AD") &&
+                (t.contains("獲得票券") || t.contains("獲得金幣"))
+        }
+        val hasBottomModalCancel = ocrItems.any { item ->
+            val cy = item.bounds.centerY().toFloat() / sh
             val t = item.text.trim()
-            cy > sh * 0.55f && (t.contains("獲得票券") || t.contains("獲得金幣") || t == "取消")
-        } || templateMatcher.findCoralPinkButton(screenBitmap, 0.66f, 0.88f, "彈窗鈕") != null
+            cy in 0.85f..0.97f && t == "取消"
+        }
+        val isBottomRewardPopup = hasBottomModalTitle && hasBottomModalCancel
 
         if (isBottomRewardPopup) {
             nonGameScreenTicks = 0
@@ -584,7 +592,15 @@ class AutomationEngine private constructor(context: Context) {
         }
 
         // D5. 檢查是否處於可玩式互動廣告 / 應用商店推廣頁 / 全螢幕廣告 (如『開啟商店』、『DOWNLOAD』、『安裝』、『下載』、『Google Play』)
-        val hasPlayableOrStoreAdOcr = ocrItems.any { item ->
+        // 重要安全防護：若能看見主畫面頂部分頁 (首頁/步數/時間/遊戲) 或底部導覽列 (集點/好友/使用/精選)，代表處於主畫面，嚴禁將底層橫幅廣告誤判為全螢幕廣告！
+        val hasMainScreenMarkers = ocrItems.any { item ->
+            val cy = item.bounds.centerY().toFloat() / sh
+            val t = item.text.replace(" ", "")
+            (cy in 0.08f..0.18f && (t.contains("首頁") || t.contains("步數") || t.contains("時間") || t.contains("遊戲"))) ||
+            (cy > 0.85f && (t.contains("集點") || t.contains("好友") || t.contains("使用") || t.contains("精選")))
+        }
+
+        val hasPlayableOrStoreAdOcr = !hasMainScreenMarkers && ocrItems.any { item ->
             val t = item.text
             t.contains("開啟商店") ||
             t.contains("DOWNLOAD", ignoreCase = true) ||
@@ -597,7 +613,7 @@ class AutomationEngine private constructor(context: Context) {
             (t.contains("廣告") && (t.contains("秒") || t.contains("後") || item.bounds.centerY() < sh * 0.15f))
         }
 
-        val isGameScreen = adCloserHandler.isGameScreenVisible(service, screenBitmap, ocrItems)
+        val isGameScreen = hasMainScreenMarkers || adCloserHandler.isGameScreenVisible(service, screenBitmap, ocrItems)
         if (hasPlayableOrStoreAdOcr || (!isGameScreen && nonGameScreenTicks >= 2)) {
             nonGameScreenTicks = 0
             appendLog("📺 偵測到全螢幕廣告/可玩式廣告/商店宣傳頁，切換至廣告監控流程安全關閉！")
@@ -1231,12 +1247,20 @@ class AutomationEngine private constructor(context: Context) {
             }
         }
 
-        // 檢查是否處於四大分頁下半部領獎彈窗（獲得票券！/ 獲得金幣！/ 珊瑚粉紅按鈕 / 取消按鈕）
-        val isBottomRewardPopup = ocrItems.any { item ->
-            val cy = item.bounds.centerY()
+        // 檢查是否處於真正的四大分頁下半部領獎彈窗（必須具備彈窗標題與取消按鈕，嚴禁因底層廣告粉紅像素誤判）
+        val hasBottomModalTitle = ocrItems.any { item ->
+            val cy = item.bounds.centerY().toFloat() / sh
+            val t = item.text.replace(" ", "")
+            cy in 0.52f..0.75f &&
+                !t.contains("輕鬆") && !t.contains("簡單") && !t.contains("遊玩") && !t.contains("Sponsored") && !t.contains("AD") &&
+                (t.contains("獲得票券") || t.contains("獲得金幣"))
+        }
+        val hasBottomModalCancel = ocrItems.any { item ->
+            val cy = item.bounds.centerY().toFloat() / sh
             val t = item.text.trim()
-            cy > sh * 0.55f && (t.contains("獲得票券") || t.contains("獲得金幣") || t == "取消")
-        } || templateMatcher.findCoralPinkButton(screenBitmap, 0.66f, 0.88f, "彈窗鈕") != null
+            cy in 0.85f..0.97f && t == "取消"
+        }
+        val isBottomRewardPopup = hasBottomModalTitle && hasBottomModalCancel
 
         // 檢查是否點擊目標後已直接開啟全螢幕廣告、宣傳頁或外部跳轉網頁
         val directGeoX = templateMatcher.detectCornerGeometricX(
@@ -1502,6 +1526,30 @@ class AutomationEngine private constructor(context: Context) {
         val sw = screenBitmap.width
         val sh = screenBitmap.height
 
+        // 嚴格安全防護：若畫面為主畫面特徵（能看見頂部四大分頁或底部導覽列）且無下半部領獎彈窗標題與取消鈕，嚴禁尋找任何目標！
+        val hasMainScreenMarkers = ocrItems.any { item ->
+            val cy = item.bounds.centerY().toFloat() / sh
+            val t = item.text.replace(" ", "")
+            (cy in 0.08f..0.18f && (t.contains("首頁") || t.contains("步數") || t.contains("時間") || t.contains("遊戲"))) ||
+            (cy > 0.85f && (t.contains("集點") || t.contains("好友") || t.contains("使用") || t.contains("精選")))
+        }
+        val hasBottomModalTitle = ocrItems.any { item ->
+            val cy = item.bounds.centerY().toFloat() / sh
+            val t = item.text.replace(" ", "")
+            cy in 0.52f..0.75f &&
+                !t.contains("輕鬆") && !t.contains("簡單") && !t.contains("遊玩") && !t.contains("Sponsored") && !t.contains("AD") &&
+                (t.contains("獲得票券") || t.contains("獲得金幣"))
+        }
+        val hasBottomModalCancel = ocrItems.any { item ->
+            val cy = item.bounds.centerY().toFloat() / sh
+            val t = item.text.trim()
+            cy in 0.85f..0.97f && t == "取消"
+        }
+        // 若在主畫面且無彈窗標題與取消鈕，直接回傳 null，絕對禁止在主畫面下半部點擊任何按鈕！
+        if (hasMainScreenMarkers && !hasBottomModalTitle && !hasBottomModalCancel) {
+            return null
+        }
+
         // 0. 【最高優先】檢查彈窗內是否有可用的『跳過廣告』(糖果) 按鈕！
         // 若使用者擁有糖果，『跳過廣告』按鈕不會是反灰底色 (!isPopupButtonDisabledGray)，直接點擊即可免看廣告領獎！
         val skipAdCandyOcr = ocrRecognizer.findMatch(
@@ -1583,13 +1631,18 @@ class AutomationEngine private constructor(context: Context) {
             !ocrRecognizer.isAreaInCooldown(ocrItems, pinkPopupBtn.bounds.top - 20, pinkPopupBtn.bounds.bottom + 20) &&
             !templateMatcher.isPopupButtonDisabledGray(screenBitmap, pinkPopupBtn.bounds.centerY())
         ) {
+            // 必須確認按鈕附近有「獲得 / 看廣告 / 紅利」字樣，且嚴格排除廣告推廣字眼，絕不點擊底層橫幅廣告！
             val nearbyOcr = ocrItems.firstOrNull {
                 kotlin.math.abs(it.bounds.centerY() - pinkPopupBtn.bounds.centerY()) < (sh * 0.05f).toInt() &&
-                !it.text.contains("取消") && !it.text.endsWith("！")
+                !it.text.contains("取消") && !it.text.endsWith("！") &&
+                OcrRecognizer.GAME_AD_EXCLUDE_KEYWORDS.none { ex -> it.text.contains(ex, ignoreCase = true) } &&
+                (it.text.contains("獲得") || it.text.contains("看廣告") || it.text.contains("紅利"))
             }
-            val coins = if (nearbyOcr != null) parseRewardCoins(nearbyOcr.text).coerceAtLeast(1) else 15
-            // 實體珊瑚粉紅按鈕點擊命中率最高，加權 100 分確保優先於模糊零散文字
-            candidates.add(PopupActionTarget.WatchAd("${pinkPopupBtn.label}(${coins}幣)", pinkPopupBtn.bounds) to (coins + 100))
+            if (nearbyOcr != null) {
+                val coins = parseRewardCoins(nearbyOcr.text).coerceAtLeast(1)
+                // 實體珊瑚粉紅按鈕點擊命中率最高，加權 100 分確保優先於模糊零散文字
+                candidates.add(PopupActionTarget.WatchAd("${pinkPopupBtn.label}(${coins}幣)", pinkPopupBtn.bounds) to (coins + 100))
+            }
         }
 
         // 3. 偵測彈窗左側的珊瑚粉紅『紅利』小標籤 (特別針對『時間』分頁的白底黑框『紅利 [▶] x 1 獲得』按鈕！)
@@ -1598,7 +1651,15 @@ class AutomationEngine private constructor(context: Context) {
             !ocrRecognizer.isAreaInCooldown(ocrItems, badgePopupBtn.bounds.top - 20, badgePopupBtn.bounds.bottom + 20) &&
             !templateMatcher.isPopupButtonDisabledGray(screenBitmap, badgePopupBtn.bounds.centerY())
         ) {
-            candidates.add(PopupActionTarget.WatchAd(badgePopupBtn.label, badgePopupBtn.bounds) to (1 + 90))
+            val nearbyBonusOcr = ocrItems.firstOrNull {
+                kotlin.math.abs(it.bounds.centerY() - badgePopupBtn.bounds.centerY()) < (sh * 0.06f).toInt() &&
+                !it.text.contains("取消") &&
+                OcrRecognizer.GAME_AD_EXCLUDE_KEYWORDS.none { ex -> it.text.contains(ex, ignoreCase = true) } &&
+                (it.text.contains("紅利") || it.text.contains("獲得") || it.text.contains("x 1") || it.text.contains("x1"))
+            }
+            if (nearbyBonusOcr != null || hasBottomModalTitle || hasBottomModalCancel) {
+                candidates.add(PopupActionTarget.WatchAd(badgePopupBtn.label, badgePopupBtn.bounds) to (1 + 90))
+            }
         }
 
         // 4. 若 OCR 看到『紅利』標籤 (y = 64% ~ 86%)，加入其正下方的看廣告按鈕
