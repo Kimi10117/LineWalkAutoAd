@@ -383,6 +383,27 @@ class AutomationEngine private constructor(context: Context) {
             return
         }
 
+        // 0. 檢查是否誤入「輕鬆賺」(adjoe) 服務條款或遊戲推薦頁，自動點擊右上角 (X) 或按返回鍵退回遊戲！
+        val isAdjoeTermsOrOfferwall = ocrItems.any { item ->
+            val t = item.text.replace(" ", "")
+            t.contains("想體驗更多遊戲") ||
+            t.contains("解鎖更多遊戲") ||
+            t.contains("探索最熱門遊戲") ||
+            t.contains("開始玩吧") ||
+            (t.contains("輕鬆賺") && (t.contains("服務條款") || t.contains("條款與條件") || t.contains("使用條款") || t.contains("隱私權政策")))
+        }
+        if (isAdjoeTermsOrOfferwall) {
+            appendLog("🛡️ 偵測到【輕鬆賺】服務條款/推薦頁，自動點擊右上角 (X) 返回主畫面")
+            val closeXRect = Rect((sw * 0.85f).toInt(), (sh * 0.04f).toInt(), (sw * 0.98f).toInt(), (sh * 0.10f).toInt())
+            FloatingOverlayService.clickWithOverlayPassthrough(closeXRect) {
+                service.clickRect(closeXRect)
+            }
+            delay(400)
+            service.navigateBack()
+            updateDetail("🛡️ 正在退出【輕鬆賺】廣告頁面...", "🛡️ 退出廣告頁中...")
+            return
+        }
+
         // A. 最優先檢查：是否停留在看完廣告後的『獲得15張票券！ / 獲得金幣！』中央彈窗（下方有白色 [ 關閉 ] 按鈕）！
         val modalCloseBtn = ocrRecognizer.findCenterRewardModalCloseButton(screenBitmap, ocrItems)
         if (modalCloseBtn != null) {
@@ -920,12 +941,7 @@ class AutomationEngine private constructor(context: Context) {
 
                 val nextTab = nextRemainingTabs.first()
                 val remainOrderStr = nextRemainingTabs.joinToString("➔") { it.shortLabel }
-                val tabRect = Rect(
-                    (sw * (nextTab.xRatio - 0.05f)).toInt(),
-                    (sh * 0.103f).toInt(),
-                    (sw * (nextTab.xRatio + 0.05f)).toInt(),
-                    (sh * 0.128f).toInt()
-                )
+                val tabRect = getTabRect(nextTab, sw, sh, ocrItems)
                 appendLog("🔄【${currentTab.tabName}】已領完，依序切換至【${nextTab.tabName}】(待檢查:$remainOrderStr)")
                 currentTab = nextTab
                 FloatingOverlayService.clickWithOverlayPassthrough(tabRect) {

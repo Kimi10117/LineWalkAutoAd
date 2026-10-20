@@ -197,20 +197,39 @@ class OcrRecognizer {
             excludeKeywords = AD_CLOSE_EXCLUDE_KEYWORDS + listOf("關閉廣告"),
             maxTextLength = 6
         )
-        if (closeOcr != null) {
-            return "OCR[${closeOcr.text}]" to closeOcr.bounds
-        }
-
         // 2. 檢查是否有『獲得15張票券！』『獲得60枚金幣！』標題文字，或像素級中央彈窗特徵
         val hasRewardTitleOcr = items.any { item ->
             val cy = item.bounds.centerY().toFloat() / sh
-            val t = item.text
-            cy in 0.20f..0.42f && (
-                t.contains("張票券") || t.contains("枚金幣") ||
-                    (t.contains("獲得") && (t.contains("！") || t.contains("!")))
+            val t = item.text.replace(" ", "")
+            cy in 0.20f..0.42f &&
+                !t.contains("輕鬆") &&
+                !t.contains("簡單") &&
+                !t.contains("玩遊戲") &&
+                !t.contains("POINTS") &&
+                !t.contains("Sponsored") &&
+                !t.contains("AD") &&
+                !t.contains("廣告") &&
+                !t.contains("推薦") &&
+                !t.contains("條款") &&
+                (
+                    t.contains("張票券") ||
+                    t.contains("枚金幣") ||
+                    ((t.contains("票券") || t.contains("金幣")) && t.contains("獲得") && (t.contains("！") || t.contains("!")))
                 )
         }
-        if (hasRewardTitleOcr || isDimmedCenterModalOpen(screenBitmap)) {
+        val isDimmedModal = isDimmedCenterModalOpen(screenBitmap)
+
+        // 若找到 OCR 關閉按鈕，但畫面既無標題亦無黑幕壓暗，代表非領獎彈窗，嚴格防止誤點主畫面按鈕
+        if (closeOcr != null && (hasRewardTitleOcr || isDimmedModal)) {
+            return "OCR[${closeOcr.text}]" to closeOcr.bounds
+        }
+
+        // 備援：必須確認有領獎標題文字，且具備半透明遮罩或完整領獎標題驚嘆號，方能派發中央關閉點擊
+        if (hasRewardTitleOcr && (isDimmedModal || items.any {
+                val s = it.text.replace(" ", "")
+                s.contains("張票券！") || s.contains("枚金幣！") || s.contains("張票券!") || s.contains("枚金幣!")
+            })
+        ) {
             val fallbackCloseRect = Rect(
                 (sw * 0.35f).toInt(),
                 (sh * 0.668f).toInt(),
@@ -325,7 +344,9 @@ class OcrRecognizer {
         val hasPopupOrPromoText = items.any { item ->
             val cy = item.bounds.centerY().toFloat() / sh
             val t = item.text
-            t.contains("邀請好友") || t.contains("10000") ||
+            t.contains("想體驗更多遊戲") || t.contains("解鎖更多遊戲") ||
+                t.contains("探索最熱門遊戲") || t.contains("服務條款") || t.contains("條款與條件") ||
+                t.contains("邀請好友") || t.contains("10000") ||
                 t.contains("張票券") || t.contains("枚金幣") ||
                 (cy > 0.50f && (t.contains("跳過廣告") || t.contains("紅利") ||
                     t.contains("15 獲得") || t.contains("15獲得") ||
@@ -485,7 +506,24 @@ class OcrRecognizer {
             "安裝",
             "Amazon",
             "邀請",
-            "好友"
+            "好友",
+            "輕鬆賺",
+            "輕鬆",
+            "簡單賺",
+            "簡單",
+            "玩遊戲",
+            "LINE POINTS",
+            "POINTS",
+            "數獨",
+            "秘寶",
+            "挖挖哇",
+            "條款",
+            "服務條款",
+            "開始遊玩",
+            "遊玩",
+            "下載",
+            "解鎖更多",
+            "想體驗"
         )
 
         /** 遊戲內彈窗關閉、活動推銷略過與領獎確認文字（移除單字『好』以避免誤配『邀請好友』！） */
