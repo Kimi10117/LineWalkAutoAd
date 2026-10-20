@@ -115,12 +115,12 @@ class BingoTask {
         val sh = screenBitmap.height
         val sw = screenBitmap.width
 
-        // 1. 優先：依序檢查 4 大 BINGO 連線欄位 (1 BINGO: 18%, 3 BINGO: 39%, 5 BINGO: 61%, 8 BINGO: 82%) 之紅色膠囊按鈕
+        // 1. 優先：依序檢查 4 大 BINGO 連線欄位 (1 BINGO: 18%, 3 BINGO: 39%, 5 BINGO: 61%, 8 BINGO: 82%) 之紅色膠囊按鈕 [▶ Get]
         val colCenters = listOf(0.18f, 0.39f, 0.61f, 0.82f)
         for (cx in colCenters) {
-            val x1 = (sw * (cx - 0.09f)).toInt().coerceIn(0, sw - 1)
-            val x2 = (sw * (cx + 0.09f)).toInt().coerceIn(x1 + 1, sw)
-            val y1 = (sh * 0.81f).toInt().coerceIn(0, sh - 1)
+            val x1 = (sw * (cx - 0.08f)).toInt().coerceIn(0, sw - 1)
+            val x2 = (sw * (cx + 0.08f)).toInt().coerceIn(x1 + 1, sw)
+            val y1 = (sh * 0.78f).toInt().coerceIn(0, sh - 1)
             val y2 = (sh * 0.88f).toInt().coerceIn(y1 + 1, sh)
 
             val redPoints = mutableListOf<android.graphics.Point>()
@@ -132,8 +132,8 @@ class BingoTask {
                     val r = (c shr 16) and 0xFF
                     val g = (c shr 8) and 0xFF
                     val b = c and 0xFF
-                    // 紅色/珊瑚紅判定：R 顯著高於 G 與 B
-                    if (r > 155 && r > g + 35 && r > b + 35) {
+                    // 紅色膠囊按鈕：R 明顯高於 G 與 B (相差 > 30)
+                    if (r > 140 && r > g + 30 && r > b + 30) {
                         redPoints.add(android.graphics.Point(x, y))
                     }
                     x += 2
@@ -141,21 +141,21 @@ class BingoTask {
                 y += 2
             }
 
-            if (redPoints.size >= 15) {
+            if (redPoints.size >= 25) {
                 val minX = redPoints.minOf { it.x }
                 val maxX = redPoints.maxOf { it.x }
                 val minY = redPoints.minOf { it.y }
                 val maxY = redPoints.maxOf { it.y }
-                if (maxX - minX >= (sw * 0.10f).toInt() && maxY - minY in 12..(sh * 0.08f).toInt()) {
+                if (maxX - minX >= (sw * 0.08f).toInt() && maxY - minY in 12..(sh * 0.08f).toInt()) {
                     return Rect(minX, minY, maxX, maxY)
                 }
             }
         }
 
-        // 2. OCR 尋找「Get / get / GET / ▶Get / 領取」
+        // 2. OCR 備援：尋找「Get / ▶Get / 領取」，但必須嚴格驗證按鈕區域內含有充足紅色像素（排除已達成插綠旗之白底黑字『Get』標籤！）
         val match = ocrItems.firstOrNull { item ->
             val cy = item.bounds.centerY()
-            cy in (sh * 0.80f).toInt()..(sh * 0.88f).toInt() && (
+            cy in (sh * 0.78f).toInt()..(sh * 0.88f).toInt() && (
                 item.text.contains("Get", ignoreCase = true) ||
                 item.text.contains("Cet", ignoreCase = true) ||
                 item.text.contains("Qet", ignoreCase = true) ||
@@ -164,7 +164,28 @@ class BingoTask {
             ) && !item.text.contains("今日上限") && !item.text.contains("開啟")
         }
         if (match != null) {
-            return match.bounds
+            val b = match.bounds
+            val expandX = (sw * 0.03f).toInt()
+            val expandY = (sh * 0.01f).toInt()
+            val bx1 = (b.left - expandX).coerceAtLeast(0)
+            val bx2 = (b.right + expandX).coerceAtMost(sw)
+            val by1 = (b.top - expandY).coerceAtLeast(0)
+            val by2 = (b.bottom + expandY).coerceAtMost(sh)
+            var redCount = 0
+            for (y in by1 until by2 step 2) {
+                for (x in bx1 until bx2 step 2) {
+                    val c = screenBitmap.getPixel(x, y)
+                    val r = (c shr 16) and 0xFF
+                    val g = (c shr 8) and 0xFF
+                    val bl = c and 0xFF
+                    if (r > 140 && r > g + 30 && r > bl + 30) {
+                        redCount++
+                    }
+                }
+            }
+            if (redCount >= 25) {
+                return match.bounds
+            }
         }
 
         return null
