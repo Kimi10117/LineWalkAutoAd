@@ -437,7 +437,12 @@ class OcrRecognizer {
             }
 
             // 底部導覽列：集點 / 好友 / 使用 / 精選
-            if (cy > 0.85f && (t.contains("集點") || t.contains("好友") || t.contains("使用") || t.contains("精選"))) {
+            if (cy > 0.85f && (
+                t == "集點" ||
+                (t.contains("好友") && !t.contains("邀請") && !t.contains("被") && !t.contains("名單") && t.length <= 4) ||
+                (t.contains("使用") && !t.contains("條款") && t.length <= 4) ||
+                (t.contains("精選") && t.length <= 4)
+            )) {
                 hasBottomNav = true
             }
         }

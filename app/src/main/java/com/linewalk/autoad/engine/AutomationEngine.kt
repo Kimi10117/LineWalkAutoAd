@@ -559,13 +559,11 @@ class AutomationEngine private constructor(context: Context) {
         )
         if (geoX != null) {
             nonGameScreenTicks = 0
-            appendLog("📺 偵測到全螢幕宣傳頁/廣告角落關閉鈕 (${geoX.label})，切換至廣告監控流程安全關閉！")
-            adCloserHandler.onEnterAdMode()
-            transitionTo(
-                EngineState.AD_WATCHING,
-                "偵測到廣告/宣傳視窗 (${geoX.label})，安全等待與關閉中...",
-                "📺 廣告監控中..."
-            )
+            appendLog("✨ 偵測到全螢幕宣傳頁/彈窗角落關閉鈕 (${geoX.label})，自動點擊關閉！")
+            FloatingOverlayService.clickWithOverlayPassthrough(geoX.bounds) {
+                service.clickRect(geoX.bounds)
+            }
+            updateDetail("✨ 已點擊關閉按鈕 (${geoX.label})，返回遊戲...", "✨ 關閉彈窗中...")
             return
         }
 
@@ -597,7 +595,12 @@ class AutomationEngine private constructor(context: Context) {
             val cy = item.bounds.centerY().toFloat() / sh
             val t = item.text.replace(" ", "")
             (cy in 0.08f..0.18f && (t.contains("首頁") || t.contains("步數") || t.contains("時間") || t.contains("遊戲"))) ||
-            (cy > 0.85f && (t.contains("集點") || t.contains("好友") || t.contains("使用") || t.contains("精選")))
+            (cy > 0.85f && (
+                t == "集點" ||
+                (t.contains("好友") && !t.contains("邀請") && !t.contains("被") && !t.contains("名單") && t.length <= 4) ||
+                (t.contains("使用") && !t.contains("條款") && t.length <= 4) ||
+                (t.contains("精選") && t.length <= 4)
+            ))
         }
 
         val hasPlayableOrStoreAdOcr = !hasMainScreenMarkers && ocrItems.any { item ->
@@ -629,6 +632,11 @@ class AutomationEngine private constructor(context: Context) {
 
         if (!isGameScreen) {
             nonGameScreenTicks++
+            if (nonGameScreenTicks >= 3) {
+                appendLog("🛡️ 畫面非主畫面且持續無可點擊目標 ($nonGameScreenTicks ticks)，嘗試發送系統返回鍵關閉彈窗")
+                service.navigateBack()
+                nonGameScreenTicks = 0
+            }
         } else {
             nonGameScreenTicks = 0
         }
@@ -1536,7 +1544,12 @@ class AutomationEngine private constructor(context: Context) {
             val cy = item.bounds.centerY().toFloat() / sh
             val t = item.text.replace(" ", "")
             (cy in 0.08f..0.18f && (t.contains("首頁") || t.contains("步數") || t.contains("時間") || t.contains("遊戲"))) ||
-            (cy > 0.85f && (t.contains("集點") || t.contains("好友") || t.contains("使用") || t.contains("精選")))
+            (cy > 0.85f && (
+                t == "集點" ||
+                (t.contains("好友") && !t.contains("邀請") && !t.contains("被") && !t.contains("名單") && t.length <= 4) ||
+                (t.contains("使用") && !t.contains("條款") && t.length <= 4) ||
+                (t.contains("精選") && t.length <= 4)
+            ))
         }
         val hasBottomModalTitle = ocrItems.any { item ->
             val cy = item.bounds.centerY().toFloat() / sh

@@ -365,7 +365,12 @@ class AdCloserHandler(
             val cy = item.bounds.centerY().toFloat() / sh
             val t = item.text.replace(" ", "")
             (cy in 0.08f..0.18f && (t.contains("首頁") || t.contains("步數") || t.contains("時間") || t.contains("遊戲"))) ||
-            (cy > 0.85f && (t.contains("集點") || t.contains("好友") || t.contains("使用") || t.contains("精選")))
+            (cy > 0.85f && (
+                t == "集點" ||
+                (t.contains("好友") && !t.contains("邀請") && !t.contains("被") && !t.contains("名單") && t.length <= 4) ||
+                (t.contains("使用") && !t.contains("條款") && t.length <= 4) ||
+                (t.contains("精選") && t.length <= 4)
+            ))
         }
         if (hasMainScreenMarkers) {
             return true
