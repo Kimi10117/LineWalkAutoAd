@@ -21,10 +21,10 @@ class ReceiveGiftTask {
      */
     fun getHeaderGiftBoxRect(sw: Int, sh: Int): Rect {
         return Rect(
-            (sw * 0.82f).toInt(),
+            (sw * 0.835f).toInt(),
             (sh * 0.045f).toInt(),
-            (sw * 0.90f).toInt(),
-            (sh * 0.085f).toInt()
+            (sw * 0.885f).toInt(),
+            (sh * 0.080f).toInt()
         )
     }
 

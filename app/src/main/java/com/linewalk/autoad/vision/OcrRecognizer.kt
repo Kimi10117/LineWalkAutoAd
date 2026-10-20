@@ -565,7 +565,12 @@ class OcrRecognizer {
             "下載",
             "雙方",
             "Hide",
-            "Report"
+            "Report",
+            "動畫效果",
+            "關閉動畫",
+            "省電模式",
+            "應用程式設定",
+            "選單"
         )
 
         val AD_CLOSE_OCR_KEYWORDS = listOf(

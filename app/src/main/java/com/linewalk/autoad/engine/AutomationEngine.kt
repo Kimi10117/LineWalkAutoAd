@@ -383,6 +383,29 @@ class AutomationEngine private constructor(context: Context) {
             return
         }
 
+        // 0A. 檢查是否誤入「選單」(設定) 畫面，自動點擊右上角 (X) 或按返回鍵關閉選單退回主畫面！
+        val isMenuScreen = ocrItems.any { item ->
+            val t = item.text.replace(" ", "")
+            val cy = item.bounds.centerY().toFloat() / sh
+            (cy < 0.12f && (t == "選單" || t.contains("選單"))) ||
+            t.contains("應用程式設定") ||
+            t.contains("關閉動畫效果") ||
+            t.contains("省電模式") ||
+            t.contains("位置資訊設定") ||
+            t.contains("目前版本")
+        }
+        if (isMenuScreen) {
+            appendLog("⚙️ 偵測到【選單/設定】畫面，自動點擊右上角 (X) 返回主畫面")
+            val closeMenuRect = Rect((sw * 0.86f).toInt(), (sh * 0.045f).toInt(), (sw * 0.96f).toInt(), (sh * 0.09f).toInt())
+            FloatingOverlayService.clickWithOverlayPassthrough(closeMenuRect) {
+                service.clickRect(closeMenuRect)
+            }
+            delay(350)
+            service.navigateBack()
+            updateDetail("⚙️ 正在關閉【選單】畫面...", "⚙️ 關閉選單中...")
+            return
+        }
+
         // 0. 檢查是否誤入「輕鬆賺」(adjoe) 服務條款或遊戲推薦頁，自動點擊右上角 (X) 或按返回鍵退回遊戲！
         val isAdjoeTermsOrOfferwall = ocrItems.any { item ->
             val t = item.text.replace(" ", "")
@@ -516,7 +539,10 @@ class AutomationEngine private constructor(context: Context) {
         val geoX = templateMatcher.detectCornerGeometricX(
             screenBitmap = screenBitmap,
             blacklistedCoord = { x, y ->
-                FloatingOverlayService.isInsideOverlay(x, y) || y < sh * 0.08f || (y in (sh * 0.14f).toInt()..(sh * 0.35f).toInt())
+                FloatingOverlayService.isInsideOverlay(x, y) ||
+                (y < sh * 0.088f && x > sw * 0.72f) ||
+                y < sh * 0.045f ||
+                (y in (sh * 0.14f).toInt()..(sh * 0.35f).toInt())
             }
         )
         if (geoX != null) {
@@ -1116,7 +1142,11 @@ class AutomationEngine private constructor(context: Context) {
         // 檢查是否點擊目標後已直接開啟全螢幕廣告、宣傳頁或外部跳轉網頁
         val directGeoX = templateMatcher.detectCornerGeometricX(
             screenBitmap = screenBitmap,
-            blacklistedCoord = FloatingOverlayService::isInsideOverlay
+            blacklistedCoord = { x, y ->
+                FloatingOverlayService.isInsideOverlay(x, y) ||
+                (y < sh * 0.088f && x > sw * 0.72f) ||
+                y < sh * 0.045f
+            }
         )
         val fgPkgDirect = service.getForegroundPackageName()
         val isExternalDirect = fgPkgDirect != null && AppConfig.isRedirectPackage(fgPkgDirect)

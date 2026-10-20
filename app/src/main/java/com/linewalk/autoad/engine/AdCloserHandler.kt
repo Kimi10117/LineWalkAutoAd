@@ -76,8 +76,15 @@ class AdCloserHandler(
         return ((System.currentTimeMillis() - adStartTimeMs) / 1000L).toInt()
     }
 
+    private var currentScreenWidth: Int = 0
+    private var currentScreenHeight: Int = 0
+
     private fun isInvalidOrBlacklisted(x: Int, y: Int): Boolean {
         if (FloatingOverlayService.isInsideOverlay(x, y)) return true
+        // 嚴格黑名單：主畫面頂部狀態列圖示區（齒輪設定/廣播 x > 0.72, y < 0.088）嚴禁作為廣告 X 點擊！
+        if (currentScreenHeight > 0 && currentScreenWidth > 0) {
+            if (y < currentScreenHeight * 0.088f && x > currentScreenWidth * 0.72f) return true
+        }
         return blacklistedPoints.any { pt ->
             hypot((pt.x - x).toDouble(), (pt.y - y).toDouble()) < BLACKLIST_RADIUS_PX
         }
@@ -90,6 +97,8 @@ class AdCloserHandler(
     ): AdStepResult {
         val sw = screenBitmap.width
         val sh = screenBitmap.height
+        currentScreenWidth = sw
+        currentScreenHeight = sh
         val elapsedSec = getElapsedSeconds()
 
         // 1A. 防迷路檢查：若誤觸跳轉到 Google Play 商店或外部瀏覽器/Chrome Custom Tabs，立即按 BACK 並標記跳轉恢復
@@ -112,7 +121,23 @@ class AdCloserHandler(
             return AdStepResult.RedirectRecovered(fgPkg ?: "InAppBrowser")
         }
 
-        // 1A-2. Meta 輪播廣告 / 外部跳轉安全防死循環返回機制：
+        // 1A-2. 檢查是否誤入「選單」(設定) 畫面，自動按返回鍵退回散步趣遊戲介面
+        val isMenuScreen = ocrItems.any { item ->
+            val t = item.text.replace(" ", "")
+            val cy = item.bounds.centerY().toFloat() / sh
+            (cy < 0.12f && (t == "選單" || t.contains("選單"))) ||
+            t.contains("應用程式設定") ||
+            t.contains("關閉動畫效果") ||
+            t.contains("省電模式") ||
+            t.contains("位置資訊設定") ||
+            t.contains("目前版本")
+        }
+        if (isMenuScreen) {
+            service.navigateBack()
+            return AdStepResult.ReturnedToGame(null, "已關閉選單回到散步趣介面")
+        }
+
+        // 1A-3. Meta 輪播廣告 / 外部跳轉安全防死循環返回機制：
         // 若剛剛剛從外部瀏覽器/Custom Tabs 透過返回鍵回到廣告畫面：
         // 由於點擊該廣告角落或畫面會再度觸發跳轉外部網頁，因此切勿再點擊畫面！
         // 直接對廣告 Activity 發送系統返回鍵 (navigateBack)，安全關閉廣告退回遊戲！
@@ -162,8 +187,8 @@ class AdCloserHandler(
             }
         }
 
-        // 2C. 若廣告已播放足夠時間 (至少 6 秒) 且已回到《LINE 散步趣》介面，判定已完成這支廣告！
-        if (elapsedSec >= 6 && isGameScreenVisible(service, screenBitmap, ocrItems)) {
+        // 2C. 若已回到《LINE 散步趣》介面（且至少過了 1 秒避免同一影格殘留），判定已完成這支廣告！
+        if (elapsedSec >= 1 && isGameScreenVisible(service, screenBitmap, ocrItems)) {
             return AdStepResult.ReturnedToGame(null, "已回到散步趣介面")
         }
 
@@ -257,10 +282,10 @@ class AdCloserHandler(
                 service.navigateBack()
             } else {
                 val fallbackRect = Rect(
-                    (sw * 0.90f).toInt(),
-                    (sh * 0.08f).toInt(),
+                    (sw * 0.88f).toInt(),
+                    (sh * 0.095f).toInt(),
                     (sw * 0.94f).toInt(),
-                    (sh * 0.11f).toInt()
+                    (sh * 0.135f).toInt()
                 )
                 recordAndClick(service, fallbackRect)
             }
