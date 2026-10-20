@@ -225,25 +225,41 @@ class FriendGiftTask {
     }
 
     /**
-     * 底部導覽列「好友」按鈕 (第 2 顆)
+     * 底部導覽列「好友」按鈕 (第 2 顆，優先比對 OCR「好友」，備援相對幾何座標)
      */
-    fun getBottomFriendsTabRect(sw: Int, sh: Int): Rect {
+    fun getBottomFriendsTabRect(sw: Int, sh: Int, ocrItems: List<OcrItem> = emptyList()): Rect {
+        val ocrMatch = ocrItems.firstOrNull { item ->
+            val cy = item.bounds.centerY().toFloat() / sh
+            val cx = item.bounds.centerX().toFloat() / sw
+            cy > 0.85f && cx in 0.20f..0.55f && item.text.contains("好友")
+        }
+        if (ocrMatch != null) {
+            return ocrMatch.bounds
+        }
         return Rect(
-            (sw * 0.28f).toInt(),
-            (sh * 0.93f).toInt(),
-            (sw * 0.48f).toInt(),
+            (sw * 0.25f).toInt(),
+            (sh * 0.91f).toInt(),
+            (sw * 0.50f).toInt(),
             (sh * 0.985f).toInt()
         )
     }
 
     /**
-     * 底部導覽列「集點」(首頁) 按鈕 (第 1 顆)
+     * 底部導覽列「集點」(首頁) 按鈕 (第 1 顆，優先比對 OCR「集點」，備援相對幾何座標)
      */
-    fun getBottomMainTabRect(sw: Int, sh: Int): Rect {
+    fun getBottomMainTabRect(sw: Int, sh: Int, ocrItems: List<OcrItem> = emptyList()): Rect {
+        val ocrMatch = ocrItems.firstOrNull { item ->
+            val cy = item.bounds.centerY().toFloat() / sh
+            val cx = item.bounds.centerX().toFloat() / sw
+            cy > 0.85f && cx < 0.30f && (item.text.contains("集點") || item.text.contains("首頁"))
+        }
+        if (ocrMatch != null) {
+            return ocrMatch.bounds
+        }
         return Rect(
-            (sw * 0.03f).toInt(),
-            (sh * 0.93f).toInt(),
-            (sw * 0.23f).toInt(),
+            (sw * 0.02f).toInt(),
+            (sh * 0.91f).toInt(),
+            (sw * 0.26f).toInt(),
             (sh * 0.985f).toInt()
         )
     }

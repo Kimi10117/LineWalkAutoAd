@@ -145,7 +145,7 @@ class AutomationEngine private constructor(context: Context) {
     private var isReceiveGiftCompleted = false
     private var isFriendGiftCompleted = false
     private val checkedMissionTabs = mutableSetOf<String>()
-    private val missionTabSequence = listOf("特別", "每日", "每週")
+    private val missionTabSequence = listOf("特別", "每日")
     private var friendGiftEmptyTicks = 0
     private var currentPhaseEmptyTicks = 0
     private var nonGameScreenTicks = 0
@@ -782,8 +782,13 @@ class AutomationEngine private constructor(context: Context) {
         // 2. 當前分頁已無可領取項目，將當前分頁加入已檢查清單
         checkedMissionTabs.add(activeTab)
 
-        // 3. 尋找下一個尚未檢查的分頁 (特別 ➔ 每日 ➔ 每週)
-        val nextTab = missionTabSequence.firstOrNull { it !in checkedMissionTabs }
+        // 3. 判斷是否還有未檢查的分頁：標準為「特別」與「每日」（若畫面上 OCR 出現「每週」則額外加入）
+        val availableTabs = mutableListOf("特別", "每日")
+        if (ocrItems.any { it.bounds.centerY() in (sh * 0.15f).toInt()..(sh * 0.24f).toInt() && it.text.contains("每週") }) {
+            availableTabs.add("每週")
+        }
+
+        val nextTab = availableTabs.firstOrNull { it !in checkedMissionTabs }
         if (nextTab != null) {
             appendLog("🔄【任務】$activeTab 分頁已無可領取項目，切換至【$nextTab】分頁檢查...")
             val tabRect = missionTask.getTabRect(nextTab, sw, sh, ocrItems)
@@ -794,15 +799,15 @@ class AutomationEngine private constructor(context: Context) {
             return
         }
 
-        // 4. 所有分頁 (特別、每日、每週) 皆已檢查完畢，關閉視窗
+        // 4. 所有分頁 (特別、每日) 皆已檢查完畢，確實標記完成並關閉視窗！
         isMissionCompleted = true
-        appendLog("✅【任務】所有分頁（特別、每日、每週）皆已檢查領取完畢，關閉視窗")
+        appendLog("✅【任務】所有分頁（${availableTabs.joinToString()}）皆已檢查完畢，關閉視窗")
         val closeBtn = missionTask.getCloseButtonBounds(sw, sh)
         FloatingOverlayService.clickWithOverlayPassthrough(closeBtn) {
             service.clickRect(closeBtn)
         }
         currentPhase = getNextPhase(PatrolPhase.MISSION)
-        updateDetail("✅ 任務已檢查完畢，準備進入下一項...", "✅ 任務完成")
+        updateDetail("✅ 任務已檢查完畢，推進至下一階段...", "✅ 任務完成")
     }
 
     private suspend fun handleReceiveGiftDialog(
@@ -892,7 +897,7 @@ class AutomationEngine private constructor(context: Context) {
         // 4. 連續兩次滾動皆無新禮物按鈕 -> 代表所有好友皆已贈送完畢！
         isFriendGiftCompleted = true
         appendLog("🎉【好友送禮】所有好友禮物皆已贈送完畢！自動點擊底部「集點」返回首頁")
-        val mainTabBtn = friendGiftTask.getBottomMainTabRect(sw, sh)
+        val mainTabBtn = friendGiftTask.getBottomMainTabRect(sw, sh, ocrItems)
         FloatingOverlayService.clickWithOverlayPassthrough(mainTabBtn) {
             service.clickRect(mainTabBtn)
         }
@@ -1147,7 +1152,7 @@ class AutomationEngine private constructor(context: Context) {
                     return
                 }
                 appendLog("🎁 點擊底部導覽列【好友】按鈕...")
-                val friendsTab = friendGiftTask.getBottomFriendsTabRect(sw, sh)
+                val friendsTab = friendGiftTask.getBottomFriendsTabRect(sw, sh, ocrItems)
                 FloatingOverlayService.clickWithOverlayPassthrough(friendsTab) {
                     service.clickRect(friendsTab)
                 }

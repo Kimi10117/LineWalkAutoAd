@@ -42,7 +42,7 @@ class MissionTask {
         val maxTopY = if (sh > 0) sh * 0.35f else 750f
         val hasMissionTabs = ocrItems.any { item ->
             item.bounds.centerY() < maxTopY && (
-                item.text.contains("每日") || item.text.contains("每週") || item.text.contains("特別")
+                item.text.contains("每日") || item.text.contains("特別") || item.text.contains("每週")
             )
         }
         val hasMissionTitle = ocrItems.any { item ->
@@ -50,16 +50,9 @@ class MissionTask {
             val inTopHeader = if (sh > 0) cy < sh * 0.16f else cy < 350
             inTopHeader && item.text.contains("任務")
         }
-        val hasMissionItems = ocrItems.any { item ->
-            val cy = item.bounds.centerY()
-            val inRange = if (sh > 0) cy in (sh * 0.22f).toInt()..(sh * 0.90f).toInt() else cy > 400
-            inRange && (
-                item.text.contains("已領取") || item.text.contains("挑戰")
-            )
-        }
         val hasBlackPill = screenBitmap != null && hasTabPill(screenBitmap)
 
-        return hasMissionTabs || (hasMissionTitle && (hasBlackPill || hasMissionItems))
+        return (hasMissionTitle && !hasMainTabs) || hasMissionTabs || hasBlackPill
     }
 
     /**
@@ -88,7 +81,7 @@ class MissionTask {
 
     /**
      * 偵測當前畫面選中的分頁名稱：
-     * 透過深黑色膠囊按鈕 (特別: x ≈ 0.20, 每日: x ≈ 0.50, 每週: x ≈ 0.80) 之平均 X 座標判定
+     * LINE 散步趣任務彈窗標準為雙分頁「特別」(左側 x ≈ 0.20~0.30) 與「每日」(右側 x ≈ 0.55~0.70)
      */
     fun detectCurrentActiveTab(screenBitmap: Bitmap): String {
         val sw = screenBitmap.width
@@ -110,9 +103,8 @@ class MissionTask {
         if (blackXs.size >= 15) {
             val avgXRatio = blackXs.average().toFloat() / sw
             return when {
-                avgXRatio < 0.35f -> "特別"
-                avgXRatio < 0.65f -> "每日"
-                else -> "每週"
+                avgXRatio < 0.40f -> "特別"
+                else -> "每日"
             }
         }
         return "特別"
@@ -234,12 +226,12 @@ class MissionTask {
         }
 
         val xRatio = when (tabName) {
-            "特別" -> 0.20f
+            "特別" -> 0.25f
             "每週" -> 0.80f
-            else -> 0.50f // "每日"
+            else -> 0.65f // "每日"：雙分頁佈局下中心點約 0.65f
         }
         val yCenter = (sh * 0.188f).toInt()
-        val halfW = (sw * 0.12f).toInt()
+        val halfW = (sw * 0.14f).toInt()
         val halfH = (sh * 0.025f).toInt()
         return Rect(
             (sw * xRatio).toInt() - halfW,
@@ -250,14 +242,14 @@ class MissionTask {
     }
 
     /**
-     * 任務彈窗右上角關閉 (X) 按鈕熱區 (x: 0.86~0.97, y: 0.09~0.15)
+     * 任務彈窗右上角關閉 (X) 按鈕熱區 (x: 0.84~0.95, y: 0.075~0.14)
      */
     fun getCloseButtonBounds(sw: Int, sh: Int): Rect {
         return Rect(
-            (sw * 0.86f).toInt(),
-            (sh * 0.09f).toInt(),
-            (sw * 0.97f).toInt(),
-            (sh * 0.15f).toInt()
+            (sw * 0.84f).toInt(),
+            (sh * 0.075f).toInt(),
+            (sw * 0.95f).toInt(),
+            (sh * 0.14f).toInt()
         )
     }
 
