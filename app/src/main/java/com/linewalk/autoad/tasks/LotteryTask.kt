@@ -49,35 +49,41 @@ class LotteryTask {
         val sh = screenBitmap.height
         val sw = screenBitmap.width
 
-        // 1. 【第一優先】：搜尋「50張 抽1次」紅色按鈕 (x in 0.05f..0.52f, y in 0.38f..0.58f)
-        val fiftyDrawOcr = ocrItems.firstOrNull { item ->
+        // 0. 檢查 50 抽 (左側區域) 是否處於冷卻倒數中（包含『回復還需』、『還需』、『回復』、時間格式『\d{1,2}:\d{2}』或『剩0次』）
+        val isFiftyInCooldown = ocrItems.any { item ->
             val cy = item.bounds.centerY()
             val cx = item.bounds.centerX()
-            val t = item.text.replace(" ", "")
-            cy in (sh * 0.38f).toInt()..(sh * 0.58f).toInt() &&
-            cx < (sw * 0.55f).toInt() &&
-            (t.contains("50張") || (t.contains("50") && t.contains("抽"))) &&
-            !t.contains("5張") // 雙重防呆
-        }
-        if (fiftyDrawOcr != null) {
-            val cy = fiftyDrawOcr.bounds.centerY()
-            if (!templateMatcher.isPopupButtonDisabledGray(screenBitmap, cy)) {
-                return Pair("50張抽一次", fiftyDrawOcr.bounds)
-            }
+            cx < (sw * 0.55f).toInt() && cy in (sh * 0.38f).toInt()..(sh * 0.58f).toInt() && (
+                item.text.contains("回復還需") ||
+                item.text.contains("還需") ||
+                item.text.contains("回復") ||
+                item.text.contains("剩0次") ||
+                item.text.replace(" ", "") == "0次" ||
+                Regex("""\d{1,2}:\d{2}""").containsMatchIn(item.text)
+            )
         }
 
-        // 備援：2D 紅色按鈕聚類偵測 (x: 0.05f..0.52f, y: 0.38f..0.55f)
-        val leftRedBtn = findFiftyDrawByColor(screenBitmap)
-        if (leftRedBtn != null && !templateMatcher.isPopupButtonDisabledGray(screenBitmap, leftRedBtn.centerY())) {
-            // 檢查是否已無次數 (若按鈕區塊內 OCR 包含 "0次" 或 "0 次")
-            val isZeroTimes = ocrItems.any { item ->
+        // 1. 【第一優先】：50 抽 (僅在未冷卻且票券/次數充足時搜尋「50張 抽1次」紅色按鈕)
+        if (!isFiftyInCooldown) {
+            val fiftyDrawOcr = ocrItems.firstOrNull { item ->
                 val cy = item.bounds.centerY()
                 val cx = item.bounds.centerX()
-                cy in (sh * 0.38f).toInt()..(sh * 0.58f).toInt() &&
+                val t = item.text.replace(" ", "")
+                cy in (sh * 0.43f).toInt()..(sh * 0.56f).toInt() &&
                 cx < (sw * 0.55f).toInt() &&
-                (item.text.replace(" ", "").contains("剩0次") || item.text.replace(" ", "") == "0次")
+                (t.contains("50張") || (t.contains("50") && t.contains("抽"))) &&
+                !t.contains("5張") && !t.contains("回復") && !t.contains("還需")
             }
-            if (!isZeroTimes) {
+            if (fiftyDrawOcr != null) {
+                val cy = fiftyDrawOcr.bounds.centerY()
+                if (!templateMatcher.isPopupButtonDisabledGray(screenBitmap, cy)) {
+                    return Pair("50張抽一次", fiftyDrawOcr.bounds)
+                }
+            }
+
+            // 備援：2D 紅色按鈕聚類偵測 (限定按鈕實際高度 y in 0.44f..0.54f，絕對排除 y < 0.44f 的 BIG 紅色抽獎箱！)
+            val leftRedBtn = findFiftyDrawByColor(screenBitmap)
+            if (leftRedBtn != null && !templateMatcher.isPopupButtonDisabledGray(screenBitmap, leftRedBtn.centerY())) {
                 return Pair("50張抽一次(紅色按鈕)", leftRedBtn)
             }
         }
@@ -99,6 +105,12 @@ class LotteryTask {
             }
         }
 
+        // 備援：2D 黃色按鈕聚類偵測 (x: 0.52f..0.98f, y: 0.49f..0.58f，黃底白字『▶ 免費抽1次』)
+        val freeYellowBtn = findFreeDrawByColor(screenBitmap)
+        if (freeYellowBtn != null && !templateMatcher.isPopupButtonDisabledGray(screenBitmap, freeYellowBtn.centerY())) {
+            return Pair("免費看廣告抽一次(黃色按鈕)", freeYellowBtn)
+        }
+
         // 3. 【嚴格防呆】：若任何候選含有 "5張"，絕對回傳 null！
         return null
     }
@@ -107,10 +119,11 @@ class LotteryTask {
         val sw = screenBitmap.width
         val sh = screenBitmap.height
         val redPts = mutableListOf<android.graphics.Point>()
-        val yStart = (sh * 0.38f).toInt()
-        val yEnd = (sh * 0.55f).toInt()
+        // 嚴格限定在 50 抽按鈕本體高度 (y in 0.44f..0.54f)，避開 y < 0.44f 的 BIG 抽抽樂紅色抽獎本體箱！
+        val yStart = (sh * 0.44f).toInt()
+        val yEnd = (sh * 0.54f).toInt()
         val xStart = (sw * 0.05f).toInt()
-        val xEnd = (sw * 0.52f).toInt()
+        val xEnd = (sw * 0.50f).toInt()
 
         for (y in yStart..yEnd step 3) {
             for (x in xStart..xEnd step 3) {
@@ -118,7 +131,7 @@ class LotteryTask {
                 val r = (c shr 16) and 0xFF
                 val g = (c shr 8) and 0xFF
                 val b = c and 0xFF
-                // 50 抽按鈕為紅色或深珊瑚粉紅
+                // 50 抽按鈕為紅色膠囊按鈕
                 if (r > 180 && (r - g > 60) && (r - b > 60)) {
                     redPts.add(android.graphics.Point(x, y))
                 }
@@ -130,7 +143,43 @@ class LotteryTask {
             val maxX = redPts.maxOf { it.x }
             val minY = redPts.minOf { it.y }
             val maxY = redPts.maxOf { it.y }
-            return Rect(minX, minY, maxX, maxY)
+            if (maxX - minX >= (sw * 0.30f).toInt() && maxY - minY in 12..(sh * 0.08f).toInt()) {
+                return Rect(minX, minY, maxX, maxY)
+            }
+        }
+        return null
+    }
+
+    private fun findFreeDrawByColor(screenBitmap: Bitmap): Rect? {
+        val sw = screenBitmap.width
+        val sh = screenBitmap.height
+        val yellowPts = mutableListOf<android.graphics.Point>()
+        val yStart = (sh * 0.49f).toInt()
+        val yEnd = (sh * 0.58f).toInt()
+        val xStart = (sw * 0.52f).toInt()
+        val xEnd = (sw * 0.98f).toInt()
+
+        for (y in yStart..yEnd step 3) {
+            for (x in xStart..xEnd step 3) {
+                val c = screenBitmap.getPixel(x, y)
+                val r = (c shr 16) and 0xFF
+                val g = (c shr 8) and 0xFF
+                val b = c and 0xFF
+                // 黃色膠囊按鈕: r > 190 && g in 110..195 && b < 50
+                if (r > 190 && g in 110..195 && b < 50) {
+                    yellowPts.add(android.graphics.Point(x, y))
+                }
+            }
+        }
+
+        if (yellowPts.size >= 60) {
+            val minX = yellowPts.minOf { it.x }
+            val maxX = yellowPts.maxOf { it.x }
+            val minY = yellowPts.minOf { it.y }
+            val maxY = yellowPts.maxOf { it.y }
+            if (maxX - minX >= (sw * 0.28f).toInt() && maxY - minY in 12..(sh * 0.08f).toInt()) {
+                return Rect(minX, minY, maxX, maxY)
+            }
         }
         return null
     }

@@ -1246,6 +1246,17 @@ class AutomationEngine private constructor(context: Context) {
             return
         }
 
+        // 若已彈出抽獎/領獎完成彈窗（如『獲得金幣！ [關閉]』），直接點擊 [關閉] 並返回主畫面/子視窗繼續巡邏！
+        val modalCloseBtn = ocrRecognizer.findCenterRewardModalCloseButton(screenBitmap, ocrItems)
+        if (modalCloseBtn != null) {
+            appendLog("✨ 點擊抽獎/領獎完成彈窗: ${modalCloseBtn.first}")
+            FloatingOverlayService.clickWithOverlayPassthrough(modalCloseBtn.second) {
+                service.clickRect(modalCloseBtn.second)
+            }
+            transitionTo(EngineState.IN_GAME_SCAN, "已關閉領獎彈窗，繼續巡邏...", "✨ 關閉領獎彈窗...")
+            return
+        }
+
         val popupAction = findPopupActionTarget(screenBitmap, ocrItems)
         if (popupAction != null) {
             executePopupAction(service, popupAction)
