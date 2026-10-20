@@ -439,6 +439,23 @@ class AutomationEngine private constructor(context: Context) {
             return
         }
 
+        // A0. 優先檢查：是否停留在抽抽樂中獎結果彈窗，且有綠色看廣告獲票按鈕 [▶ 🎫 x1 獲得]！
+        val lotteryRewardAdBtn = lotteryTask.findLotteryRewardAdButton(screenBitmap, ocrItems)
+        if (lotteryRewardAdBtn != null) {
+            emptyTicksOnCurrentTab = 0
+            appendLog("🎰【抽抽樂中獎】點擊綠色按鈕看廣告再獲得 1 張票券 [▶ 🎫 x1 獲得]")
+            FloatingOverlayService.clickWithOverlayPassthrough(lotteryRewardAdBtn) {
+                service.clickRect(lotteryRewardAdBtn)
+            }
+            adCloserHandler.onEnterAdMode()
+            transitionTo(
+                EngineState.AD_WATCHING,
+                "點擊抽抽樂獎勵看廣告再獲得票券 [x1 獲得]...",
+                "🎰 廣告獲票中..."
+            )
+            return
+        }
+
         // A. 最優先檢查：是否停留在看完廣告後的『獲得15張票券！ / 獲得金幣！』中央彈窗（下方有白色 [ 關閉 ] 按鈕）！
         val modalCloseBtn = ocrRecognizer.findCenterRewardModalCloseButton(screenBitmap, ocrItems)
         if (modalCloseBtn != null) {
@@ -713,7 +730,32 @@ class AutomationEngine private constructor(context: Context) {
         sw: Int,
         sh: Int
     ) {
-        // 依使用者規則尋找：【優先50抽】➔【次選免費抽】➔【嚴禁點5張】
+        // 0. 最高優先：檢查是否出現抽獎結果彈窗上的綠色按鈕 [▶ 🎫 x1 獲得]！
+        val rewardAdBtn = lotteryTask.findLotteryRewardAdButton(screenBitmap, ocrItems)
+        if (rewardAdBtn != null) {
+            currentPhaseEmptyTicks = 0
+            appendLog("🎰【抽抽樂中獎】點擊綠色看廣告獲票按鈕 [▶ 🎫 x1 獲得]！")
+            FloatingOverlayService.clickWithOverlayPassthrough(rewardAdBtn) {
+                service.clickRect(rewardAdBtn)
+            }
+            adCloserHandler.onEnterAdMode()
+            transitionTo(EngineState.AD_WATCHING, "已點擊 [x1 獲得]，觀看廣告獲得票券中...", "🎰 廣告獲票中...")
+            return
+        }
+
+        // 0B. 若處於抽獎結果彈窗但無看廣告按鈕（已看過廣告或僅有一般結果），點擊彈窗底部的「關閉」按鈕
+        val resultCloseBtn = lotteryTask.findLotteryResultCloseButton(screenBitmap, ocrItems)
+        if (resultCloseBtn != null) {
+            currentPhaseEmptyTicks = 0
+            appendLog("🎰【抽抽樂結果】點擊彈窗底部的 [關閉] 按鈕")
+            FloatingOverlayService.clickWithOverlayPassthrough(resultCloseBtn) {
+                service.clickRect(resultCloseBtn)
+            }
+            delay(350)
+            return
+        }
+
+        // 1. 依使用者規則尋找：【優先50抽】➔【次選免費抽】➔【嚴禁點5張】
         val drawTarget = lotteryTask.findTargetDrawButton(screenBitmap, ocrItems, templateMatcher)
         if (drawTarget != null) {
             currentPhaseEmptyTicks = 0
@@ -725,7 +767,7 @@ class AutomationEngine private constructor(context: Context) {
                 adCloserHandler.onEnterAdMode()
                 transitionTo(EngineState.AD_WATCHING, "已點擊 ${drawTarget.first}，觀看廣告抽獎...", "🎰 廣告抽獎中...")
             } else {
-                delay(600)
+                delay(400)
                 popupRetryTicks = 0
                 transitionTo(EngineState.TRIGGER_AD_POPUP, "已點擊 ${drawTarget.first}，等待抽獎結果彈窗...", "🎰 抽獎中...")
             }
@@ -782,12 +824,8 @@ class AutomationEngine private constructor(context: Context) {
         // 2. 當前分頁已無可領取項目，將當前分頁加入已檢查清單
         checkedMissionTabs.add(activeTab)
 
-        // 3. 判斷是否還有未檢查的分頁：標準為「特別」與「每日」（若畫面上 OCR 出現「每週」則額外加入）
-        val availableTabs = mutableListOf("特別", "每日")
-        if (ocrItems.any { it.bounds.centerY() in (sh * 0.15f).toInt()..(sh * 0.24f).toInt() && it.text.contains("每週") }) {
-            availableTabs.add("每週")
-        }
-
+        // 3. 判斷是否還有未檢查的分頁：LINE 散步趣任務彈窗固定只有「特別」與「每日」兩個分頁！
+        val availableTabs = listOf("特別", "每日")
         val nextTab = availableTabs.firstOrNull { it !in checkedMissionTabs }
         if (nextTab != null) {
             appendLog("🔄【任務】$activeTab 分頁已無可領取項目，切換至【$nextTab】分頁檢查...")
@@ -796,18 +834,20 @@ class AutomationEngine private constructor(context: Context) {
                 service.clickRect(tabRect)
             }
             updateDetail("🔄 切換至【$nextTab】任務分頁...", "🔄 切換分頁...")
+            delay(400)
             return
         }
 
         // 4. 所有分頁 (特別、每日) 皆已檢查完畢，確實標記完成並關閉視窗！
         isMissionCompleted = true
-        appendLog("✅【任務】所有分頁（${availableTabs.joinToString()}）皆已檢查完畢，關閉視窗")
+        appendLog("✅【任務】所有分頁（特別、每日）皆已檢查完畢，關閉視窗並推進至下一階段！")
         val closeBtn = missionTask.getCloseButtonBounds(sw, sh)
         FloatingOverlayService.clickWithOverlayPassthrough(closeBtn) {
             service.clickRect(closeBtn)
         }
         currentPhase = getNextPhase(PatrolPhase.MISSION)
         updateDetail("✅ 任務已檢查完畢，推進至下一階段...", "✅ 任務完成")
+        delay(500)
     }
 
     private suspend fun handleReceiveGiftDialog(
@@ -1070,15 +1110,15 @@ class AutomationEngine private constructor(context: Context) {
 
                 // 本分頁目前沒有亮起的可領取獎勵按鈕
                 emptyTicksOnCurrentTab++
-                if (emptyTicksOnCurrentTab < 4) {
+                if (emptyTicksOnCurrentTab < 2) {
                     updateDetail(
-                        "🔍 正在檢查【${currentTab.tabName}】是否有可領取獎勵 ($emptyTicksOnCurrentTab/4)...",
-                        "🔍 檢查[${currentTab.shortLabel}] ($emptyTicksOnCurrentTab/4)..."
+                        "🔍 正在檢查【${currentTab.tabName}】是否有可領取獎勵 ($emptyTicksOnCurrentTab/2)...",
+                        "🔍 檢查[${currentTab.shortLabel}] ($emptyTicksOnCurrentTab/2)..."
                     )
                     return
                 }
 
-                // 連續 4 次確認本分頁已無可領取項目
+                // 確認本分頁已無可領取項目
                 emptyTicksOnCurrentTab = 0
                 confirmedEmptyTabs.add(currentTab)
 
@@ -1248,6 +1288,22 @@ class AutomationEngine private constructor(context: Context) {
             appendLog("⏳ 點擊後進入廣告載入中狀態，自動轉入廣告監控流程！")
             adCloserHandler.onEnterAdMode()
             transitionTo(EngineState.AD_WATCHING, "廣告正在載入中，請稍候...", "⏳ 廣告載入中...")
+            return
+        }
+
+        // 優先檢查：是否為抽抽樂中獎結果彈窗上的綠色獲票按鈕 [▶ 🎫 x1 獲得]！
+        val lotteryRewardBtn = lotteryTask.findLotteryRewardAdButton(screenBitmap, ocrItems)
+        if (lotteryRewardBtn != null) {
+            appendLog("🎰 偵測到抽抽樂中獎結果！點擊綠色按鈕看廣告再獲得 1 張票券 [▶ 🎫 x1 獲得]")
+            FloatingOverlayService.clickWithOverlayPassthrough(lotteryRewardBtn) {
+                service.clickRect(lotteryRewardBtn)
+            }
+            adCloserHandler.onEnterAdMode()
+            transitionTo(
+                EngineState.AD_WATCHING,
+                "點擊抽抽樂獎勵看廣告再獲得票券 [x1 獲得]...",
+                "🎰 廣告獲票中..."
+            )
             return
         }
 

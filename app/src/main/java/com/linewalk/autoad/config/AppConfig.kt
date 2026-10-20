@@ -56,10 +56,10 @@ class AppConfig(context: Context) {
         get() = prefs.getBoolean(KEY_CLAIM_NORMAL_NO_AD, true)
         set(value) = prefs.edit().putBoolean(KEY_CLAIM_NORMAL_NO_AD, value).apply()
 
-    /** 主循環掃描間隔毫秒數 (預設 2200ms) */
+    /** 主循環掃描間隔毫秒數 (預設 1200ms) */
     var loopIntervalMs: Long
-        get() = prefs.getLong(KEY_LOOP_INTERVAL_MS, 2200L)
-        set(value) = prefs.edit().putLong(KEY_LOOP_INTERVAL_MS, value.coerceIn(1200L, 10000L)).apply()
+        get() = prefs.getLong(KEY_LOOP_INTERVAL_MS, 1200L).coerceIn(1000L, 1800L)
+        set(value) = prefs.edit().putLong(KEY_LOOP_INTERVAL_MS, value.coerceIn(1000L, 1800L)).apply()
 
     /** 廣告單次最長等待秒數，超過則觸發防卡死返回鍵 (預設 32 秒) */
     var maxAdWaitSeconds: Int

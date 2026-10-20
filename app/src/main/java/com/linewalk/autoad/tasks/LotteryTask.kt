@@ -31,7 +31,10 @@ class LotteryTask {
         return ocrItems.any { item ->
             (item.bounds.centerY() < maxTopY && item.text.contains("抽抽樂")) ||
             item.text.contains("BIG") ||
-            (item.text.contains("50張") && item.text.contains("抽"))
+            (item.text.contains("50張") && item.text.contains("抽")) ||
+            item.text.contains("中獎囉") ||
+            item.text.contains("中獎") ||
+            item.text.contains("Thank you for watching")
         }
     }
 
@@ -194,6 +197,87 @@ class LotteryTask {
             (sw * 0.96f).toInt(),
             (sh * 0.145f).toInt()
         )
+    }
+
+    /**
+     * 偵測抽抽樂抽獎後的結果彈窗綠色看廣告獲票按鈕：[▶ 🎫 x1 獲得]
+     * - 背景為 LINE 鮮綠色 (#06C856 / g > 140 && g > r + 35 && g > b + 35)
+     * - 位於畫面中下部 (y ≈ 0.60f ~ 0.76f)
+     * - 優先像素聚類，備援 OCR 搜尋 (含 "獲得" 或 "x1")
+     */
+    fun findLotteryRewardAdButton(screenBitmap: Bitmap, ocrItems: List<OcrItem>): Rect? {
+        val sw = screenBitmap.width
+        val sh = screenBitmap.height
+
+        // 1. 優先：綠色膠囊按鈕像素聚類偵測 (y: 0.60f..0.76f, x: 0.12f..0.88f)
+        val greenPts = mutableListOf<android.graphics.Point>()
+        val yStart = (sh * 0.60f).toInt()
+        val yEnd = (sh * 0.76f).toInt()
+        val xStart = (sw * 0.12f).toInt()
+        val xEnd = (sw * 0.88f).toInt()
+
+        for (y in yStart..yEnd step 3) {
+            for (x in xStart..xEnd step 3) {
+                val c = screenBitmap.getPixel(x, y)
+                val r = (c shr 16) and 0xFF
+                val g = (c shr 8) and 0xFF
+                val b = c and 0xFF
+                if (g > 140 && g > r + 35 && g > b + 35) {
+                    greenPts.add(android.graphics.Point(x, y))
+                }
+            }
+        }
+
+        if (greenPts.size >= 50) {
+            val minX = greenPts.minOf { it.x }
+            val maxX = greenPts.maxOf { it.x }
+            val minY = greenPts.minOf { it.y }
+            val maxY = greenPts.maxOf { it.y }
+            if (maxX - minX >= (sw * 0.35f).toInt() && maxY - minY in 15..(sh * 0.12f).toInt()) {
+                return Rect(minX, minY, maxX, maxY)
+            }
+        }
+
+        // 2. 備援：OCR 比對 (y: 0.60f..0.76f，文字含 "獲得" 或 "x1"，排除 "分享" 或 "關閉")
+        val ocrMatch = ocrItems.firstOrNull { item ->
+            val cy = item.bounds.centerY()
+            val t = item.text.replace(" ", "")
+            cy in yStart..yEnd &&
+            (t.contains("獲得") || t.contains("x1") || t.contains("1張") || t.contains("再獲得")) &&
+            !t.contains("分享") && !t.contains("關閉")
+        }
+        if (ocrMatch != null) {
+            return ocrMatch.bounds
+        }
+
+        return null
+    }
+
+    /**
+     * 偵測抽抽樂抽獎結果彈窗底部的「關閉」按鈕 (y ≈ 0.75f ~ 0.88f)
+     */
+    fun findLotteryResultCloseButton(screenBitmap: Bitmap, ocrItems: List<OcrItem>): Rect? {
+        val sw = screenBitmap.width
+        val sh = screenBitmap.height
+        val ocrMatch = ocrItems.firstOrNull { item ->
+            val cy = item.bounds.centerY()
+            val t = item.text.trim()
+            cy in (sh * 0.75f).toInt()..(sh * 0.88f).toInt() && (t == "關閉" || t.contains("關閉"))
+        }
+        if (ocrMatch != null) {
+            return ocrMatch.bounds
+        }
+        // 若畫面確定有抽獎結果標題 (中獎囉！)，提供幾何預設關閉按鈕
+        val hasResultTitle = ocrItems.any { it.text.contains("中獎") || it.text.contains("中獎囉") }
+        if (hasResultTitle) {
+            return Rect(
+                (sw * 0.15f).toInt(),
+                (sh * 0.78f).toInt(),
+                (sw * 0.85f).toInt(),
+                (sh * 0.85f).toInt()
+            )
+        }
+        return null
     }
 
     /**

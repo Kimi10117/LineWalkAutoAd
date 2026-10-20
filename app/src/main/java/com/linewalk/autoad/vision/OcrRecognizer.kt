@@ -187,6 +187,17 @@ class OcrRecognizer {
         val sw = screenBitmap.width
         val sh = screenBitmap.height
 
+        // 若畫面上存在抽抽樂看廣告獲票鈕 [x1 獲得]，絕不直接點擊關閉，放行讓玩家看廣告領獎！
+        val hasLotteryAdOcr = items.any { item ->
+            val cy = item.bounds.centerY().toFloat() / sh
+            val t = item.text.replace(" ", "")
+            cy in 0.60f..0.76f && (t.contains("x1獲得") || (t.contains("x1") && t.contains("獲得")) || (t.contains("1張") && t.contains("獲得"))) &&
+            !t.contains("分享") && !t.contains("關閉")
+        }
+        if (hasLotteryAdOcr) {
+            return null
+        }
+
         // 1. OCR 搜尋彈窗下半部 (y = 0.52..0.82) 的『關閉 / 確認 / 確定 / 收下 / OK』
         val closeOcr = findMatch(
             items = items,
