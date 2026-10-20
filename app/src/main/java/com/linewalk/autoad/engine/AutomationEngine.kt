@@ -134,6 +134,7 @@ class AutomationEngine private constructor(context: Context) {
     private var rewardClaimRetryTicks = 0
     private var currentTab: MainTab = MainTab.MOVE
     private var needsInitialTabSync = true
+    private var tabSwitchRetries = 0
     private var emptyTicksOnCurrentTab = 0
     private val confirmedEmptyTabs = mutableSetOf<MainTab>()
 
@@ -174,6 +175,7 @@ class AutomationEngine private constructor(context: Context) {
         currentPhaseEmptyTicks = 0
         currentTab = tabPriorityOrder.firstOrNull { it.isEnabled(config) } ?: MainTab.MOVE
         needsInitialTabSync = true
+        tabSwitchRetries = 0
 
         currentPhase = if (tabPriorityOrder.any { it.isEnabled(config) }) {
             PatrolPhase.MAIN_TABS
@@ -541,6 +543,7 @@ class AutomationEngine private constructor(context: Context) {
             blacklistedCoord = { x, y ->
                 FloatingOverlayService.isInsideOverlay(x, y) ||
                 (y < sh * 0.088f && x > sw * 0.72f) ||
+                (y in (sh * 0.088f).toInt()..(sh * 0.160f).toInt() && x > sw * 0.78f) ||
                 y < sh * 0.045f ||
                 (y in (sh * 0.14f).toInt()..(sh * 0.35f).toInt())
             }
@@ -830,8 +833,8 @@ class AutomationEngine private constructor(context: Context) {
         }
 
         if (ocrMatch != null) {
-            val padX = max(20, (sw * 0.03f).toInt())
-            val padY = max(8, (sh * 0.008f).toInt())
+            val padX = max(24, (sw * 0.04f).toInt())
+            val padY = max(12, (sh * 0.015f).toInt())
             return Rect(
                 (ocrMatch.bounds.left - padX).coerceIn(0, sw),
                 (ocrMatch.bounds.top - padY).coerceIn(0, sh),
@@ -840,7 +843,7 @@ class AutomationEngine private constructor(context: Context) {
             )
         }
 
-        // Fallback: 幾何座標 (每個分頁佔 25% 寬度，高 10%~13.6%)
+        // Fallback: 幾何座標 (每個分頁佔 25% 寬度，高 10.5%~14.2%)
         val left = when (tab) {
             MainTab.MOVE -> (sw * 0.02f).toInt()
             MainTab.STEP -> (sw * 0.26f).toInt()
@@ -853,9 +856,30 @@ class AutomationEngine private constructor(context: Context) {
             MainTab.TIME -> (sw * 0.74f).toInt()
             MainTab.GAME -> (sw * 0.98f).toInt()
         }
-        val top = (sh * 0.100f).toInt()
-        val bottom = (sh * 0.136f).toInt()
+        val top = (sh * 0.105f).toInt()
+        val bottom = (sh * 0.142f).toInt()
         return Rect(left, top, right, bottom)
+    }
+
+    /**
+     * 結合黑色指示條與畫面特徵 OCR 雙重判定當前真正停留在哪一個主要分頁
+     */
+    private fun detectTabFromScreen(screenBitmap: android.graphics.Bitmap, ocrItems: List<OcrItem>): MainTab? {
+        templateMatcher.detectActiveMainTabIndex(screenBitmap)?.let { idx ->
+            MainTab.fromIndex(idx)?.let { return it }
+        }
+        val sh = screenBitmap.height
+        for (item in ocrItems) {
+            val t = item.text.replace(" ", "")
+            val cy = item.bounds.centerY().toFloat() / sh
+            if (cy < 0.60f) {
+                if (t.contains("距離下次") || t.contains("集滿量表") || t.contains("移動距離")) return MainTab.MOVE
+                if (t.contains("放置") || t.contains("時間累積") || t.contains("累積時間")) return MainTab.TIME
+                if (t.contains("今天的步數") || t.contains("步數累積") || t.contains("步數瓶")) return MainTab.STEP
+                if (t.contains("秘寶挖挖哇") || t.contains("接龍高手") || t.contains("數獨達人") || t.contains("簡單賺金幣")) return MainTab.GAME
+            }
+        }
+        return null
     }
 
     private suspend fun handleMainScreenPatrol(
@@ -880,27 +904,33 @@ class AutomationEngine private constructor(context: Context) {
                 // 依優先順序（1.移動 ➔ 2.時間 ➔ 3.遊戲 ➔ 4.步數）決定當前應檢查的最高優先分頁
                 val desiredTab = remainingTabs.first()
 
-                templateMatcher.detectActiveMainTabIndex(screenBitmap)?.let { idx ->
-                    MainTab.fromIndex(idx)?.let { detectedTab ->
-                        currentTab = detectedTab
-                        if (currentTab == desiredTab) {
-                            needsInitialTabSync = false
-                        }
+                detectTabFromScreen(screenBitmap, ocrItems)?.let { detectedTab ->
+                    currentTab = detectedTab
+                    if (currentTab == desiredTab) {
+                        needsInitialTabSync = false
+                        tabSwitchRetries = 0
                     }
                 }
 
                 // 若當前停留在其他分頁（如遊戲分頁），必須先切換分頁，絕不在錯誤分頁上執行任務！
                 if (needsInitialTabSync || currentTab != desiredTab) {
                     emptyTicksOnCurrentTab = 0
+                    tabSwitchRetries++
                     val tabRect = getTabRect(desiredTab, sw, sh, ocrItems)
-                    appendLog("🔄 依優先順序切換至【${desiredTab.tabName}】(目前在【${currentTab.tabName}】)...")
+                    appendLog("🔄 依優先順序切換至【${desiredTab.tabName}】(目前在【${currentTab.tabName}】，嘗試:$tabSwitchRetries/3)...")
                     FloatingOverlayService.clickWithOverlayPassthrough(tabRect) {
                         service.clickRect(tabRect)
                     }
                     updateDetail(
-                        "🔄 正在切換至【${desiredTab.tabName}】...",
+                        "🔄 正在切換至【${desiredTab.tabName}】($tabSwitchRetries/3)...",
                         "🔄 切換至[${desiredTab.shortLabel}]..."
                     )
+                    if (tabSwitchRetries >= 4) {
+                        appendLog("⚠️ 切換至【${desiredTab.tabName}】逾時，強制同步分頁狀態並開始檢查")
+                        currentTab = desiredTab
+                        needsInitialTabSync = false
+                        tabSwitchRetries = 0
+                    }
                     delay(600)
                     return
                 }
@@ -969,14 +999,17 @@ class AutomationEngine private constructor(context: Context) {
                 val remainOrderStr = nextRemainingTabs.joinToString("➔") { it.shortLabel }
                 val tabRect = getTabRect(nextTab, sw, sh, ocrItems)
                 appendLog("🔄【${currentTab.tabName}】已領完，依序切換至【${nextTab.tabName}】(待檢查:$remainOrderStr)")
-                currentTab = nextTab
+                needsInitialTabSync = true
+                tabSwitchRetries = 0
                 FloatingOverlayService.clickWithOverlayPassthrough(tabRect) {
                     service.clickRect(tabRect)
                 }
                 updateDetail(
-                    "🔄 已切換至【${nextTab.tabName}】，正在檢查獎勵...",
+                    "🔄 正在切換至【${nextTab.tabName}】...",
                     "🔄 切換至[${nextTab.shortLabel}]檢查中..."
                 )
+                delay(600)
+                return
             }
 
             PatrolPhase.BINGO -> {
@@ -1099,8 +1132,8 @@ class AutomationEngine private constructor(context: Context) {
             val nextTab = nextRemainingTabs.first()
             val remainOrderStr = nextRemainingTabs.joinToString("➔") { it.shortLabel }
             appendLog("🔄【${currentTab.tabName}】冷卻中，依序切換至【${nextTab.tabName}】(待檢查: $remainOrderStr)")
-            currentTab = nextTab
             needsInitialTabSync = true
+            tabSwitchRetries = 0
         }
 
         transitionTo(EngineState.IN_GAME_SCAN, "已點擊 [取消]，切換至下一分頁/任務...", "🔍 切換巡邏中...")
@@ -1145,9 +1178,17 @@ class AutomationEngine private constructor(context: Context) {
             blacklistedCoord = { x, y ->
                 FloatingOverlayService.isInsideOverlay(x, y) ||
                 (y < sh * 0.088f && x > sw * 0.72f) ||
-                y < sh * 0.045f
+                (y in (sh * 0.088f).toInt()..(sh * 0.160f).toInt() && x > sw * 0.78f) ||
+                y < sh * 0.045f ||
+                (y in (sh * 0.14f).toInt()..(sh * 0.35f).toInt())
             }
         )
+        val isStillInSubDialog = missionTask.isMissionDialogOpen(ocrItems, sh, screenBitmap) ||
+            bingoTask.isBingoDialogOpen(ocrItems, sh) ||
+            lotteryTask.isLotteryDialogOpen(ocrItems, sh) ||
+            receiveGiftTask.isReceiveGiftDialogOpen(ocrItems, sh) ||
+            friendGiftTask.isFriendsPage(ocrItems, sh)
+
         val fgPkgDirect = service.getForegroundPackageName()
         val isExternalDirect = fgPkgDirect != null && AppConfig.isRedirectPackage(fgPkgDirect)
         val hasBrowserTitleDirect = ocrItems.any { item ->
@@ -1155,10 +1196,15 @@ class AutomationEngine private constructor(context: Context) {
             cy < sh * 0.16f && (item.text.contains("正在載入") || item.text.contains(".com") || item.text.contains("http"))
         }
         val isGameScreen = adCloserHandler.isGameScreenVisible(service, screenBitmap, ocrItems)
-        if (directGeoX != null || isExternalDirect || hasBrowserTitleDirect || (!isGameScreen && popupRetryTicks >= 2)) {
+        if (!isStillInSubDialog && (directGeoX != null || isExternalDirect || hasBrowserTitleDirect || (!isGameScreen && popupRetryTicks >= 2))) {
             appendLog("📺 點擊目標後已直接進入全螢幕廣告/宣傳頁，啟動廣告監控流程！")
             adCloserHandler.onEnterAdMode()
             transitionTo(EngineState.AD_WATCHING, "已進入廣告畫面，安全監控中...", "📺 廣告監控中...")
+            return
+        }
+
+        if (isStillInSubDialog && popupRetryTicks >= 2) {
+            transitionTo(EngineState.IN_GAME_SCAN, "已領取獎勵，繼續彈窗內部巡邏...", "🔍 檢查彈窗中...")
             return
         }
 

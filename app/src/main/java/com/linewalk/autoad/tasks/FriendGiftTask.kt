@@ -140,7 +140,7 @@ class FriendGiftTask {
         val sh = screenBitmap.height
         val sw = screenBitmap.width
 
-        // 1. 【第一優先】OCR 辨識「也送給自己」/「送給自己」/「送禮物也送自己」/「送自己」
+        // 1. 【第一優先】OCR 辨識「也送給自己」/「送給自己」/「送禮物也送自己」/「看廣告」/「▶」
         val selfGiftOcr = ocrItems.firstOrNull { item ->
             val cy = item.bounds.centerY()
             cy in (sh * 0.35f).toInt()..(sh * 0.75f).toInt() && (
@@ -148,6 +148,9 @@ class FriendGiftTask {
                 item.text.contains("送給自己") ||
                 item.text.contains("送禮物也送自己") ||
                 item.text.contains("送自己") ||
+                item.text.contains("看廣告") ||
+                item.text.contains("廣告") ||
+                item.text.contains("▶") ||
                 (item.text.contains("送") && item.text.contains("自己"))
             )
         }

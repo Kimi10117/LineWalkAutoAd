@@ -166,6 +166,7 @@ class AutoAdAccessibilityService : AccessibilityService() {
 
             val path = Path().apply {
                 moveTo(targetX, targetY)
+                lineTo(targetX, targetY)
             }
             val stroke = GestureDescription.StrokeDescription(path, 0L, durationMs)
             val gesture = GestureDescription.Builder().addStroke(stroke).build()
@@ -178,12 +179,14 @@ class AutoAdAccessibilityService : AccessibilityService() {
                     }
 
                     override fun onCancelled(gestureDescription: GestureDescription?) {
+                        Log.w(TAG, "手勢點擊被取消: ($targetX, $targetY)")
                         if (cont.isActive) cont.resume(false)
                     }
                 },
                 null
             )
             if (!dispatched && cont.isActive) {
+                Log.w(TAG, "dispatchGesture 回傳 false: ($targetX, $targetY)")
                 cont.resume(false)
             }
         }

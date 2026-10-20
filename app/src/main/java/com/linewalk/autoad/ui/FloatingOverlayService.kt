@@ -33,6 +33,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 
@@ -48,6 +49,7 @@ class FloatingOverlayService : Service() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     private var rootView: View? = null
+    private var layoutParams: WindowManager.LayoutParams? = null
     private var isCollapsed = false
 
     override fun onCreate() {
@@ -280,6 +282,7 @@ class FloatingOverlayService : Service() {
             }
         }
 
+        layoutParams = wmParams
         rootView = container
         windowManager.addView(container, wmParams)
         container.post { updateOverlayBoundsOnScreen() }
@@ -294,6 +297,19 @@ class FloatingOverlayService : Service() {
                 container.post { updateOverlayBoundsOnScreen() }
             }
         }
+    }
+
+    fun setPassthrough(enable: Boolean) {
+        val v = rootView ?: return
+        val lp = layoutParams ?: return
+        if (enable) {
+            lp.flags = lp.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+        } else {
+            lp.flags = lp.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+        }
+        try {
+            windowManager.updateViewLayout(v, lp)
+        } catch (_: Exception) {}
     }
 
     private fun launchTemplateCropper() {
@@ -383,20 +399,26 @@ class FloatingOverlayService : Service() {
             return !overlayScreenBounds.isEmpty && overlayScreenBounds.contains(x, y)
         }
 
-        /** 若目標點擊座標剛好被使用者拖曳的懸浮窗蓋住，暫時隱藏懸浮窗 120ms 再執行點擊，確保手勢直達底層遊戲 */
+        /** 若目標點擊座標剛好被使用者拖曳的懸浮窗蓋住，設定 FLAG_NOT_TOUCHABLE 並暫時隱藏懸浮窗，確保手勢 100% 直達底層遊戲 */
         suspend fun clickWithOverlayPassthrough(targetRect: Rect, clickBlock: suspend () -> Unit) {
             val inst = activeInstance
             val v = inst?.rootView
             val overlaps = !overlayScreenBounds.isEmpty && Rect.intersects(overlayScreenBounds, targetRect)
-            if (overlaps && v != null && v.visibility == View.VISIBLE) {
-                v.visibility = View.INVISIBLE
-                delay(90L)
+            if (overlaps && inst != null && v != null) {
+                withContext(Dispatchers.Main) {
+                    inst.setPassthrough(true)
+                    v.visibility = View.INVISIBLE
+                }
+                delay(100L)
                 try {
                     clickBlock()
-                    delay(90L)
+                    delay(120L)
                 } finally {
-                    v.visibility = View.VISIBLE
-                    v.post { inst.updateOverlayBoundsOnScreen() }
+                    withContext(Dispatchers.Main) {
+                        inst.setPassthrough(false)
+                        v.visibility = View.VISIBLE
+                        v.post { inst.updateOverlayBoundsOnScreen() }
+                    }
                 }
             } else {
                 clickBlock()

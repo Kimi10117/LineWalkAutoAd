@@ -176,18 +176,57 @@ class TemplateMatcher {
     }
 
     /**
-     * 偵測《LINE 散步趣》頂部分頁列 (y = 0.115f..0.123f) 目前停留在哪一個分頁：
+     * 辨識《LINE 散步趣》主畫面頂部目前選取中的主要分頁 (0~3)：
      * - 0: 首頁 (移動, xRatio = 0.125f)
      * - 1: 步數 (xRatio = 0.375f)
      * - 2: 時間 (放置, xRatio = 0.625f)
      * - 3: 遊戲 (xRatio = 0.875f)
-     * 選取中的分頁在該區段具有實心深色圖示與粗體字 (darkRatio >= 0.08f)，未選取分頁則為 0.0f。
+     * 1. 優先透過當前選取分頁底部的黑色粗實線指示條 (y ≈ 0.138f..0.152f, 佔分頁寬度 25%) 進行 100% 準確判斷。
+     * 2. 次要透過文字深色粗體 (darkRatio >= 0.10f) 進行備援判斷。
      */
     fun detectActiveMainTabIndex(screenBitmap: Bitmap): Int? {
         val w = screenBitmap.width
         val h = screenBitmap.height
+
+        // 1. 最優先且最精準：LINE 散步趣頂部分頁底部的黑色粗實線選取指示條 (y ≈ 0.138f..0.152f)
+        val yBarStart = (h * 0.138f).toInt().coerceIn(0, h - 1)
+        val yBarEnd = (h * 0.152f).toInt().coerceIn(yBarStart + 1, h - 1)
+        val quarterW = w / 4
+
+        for (y in yBarStart..yBarEnd) {
+            val segCounts = IntArray(4)
+            for (tabIdx in 0..3) {
+                val startX = tabIdx * quarterW
+                val endX = if (tabIdx == 3) w else (tabIdx + 1) * quarterW
+                var darkInSeg = 0
+                for (x in startX until endX step 2) {
+                    if (FloatingOverlayService.isInsideOverlay(x, y)) continue
+                    val c = screenBitmap.getPixel(x, y)
+                    val r = (c shr 16) and 0xFF
+                    val g = (c shr 8) and 0xFF
+                    val b = c and 0xFF
+                    if (r < 60 && g < 60 && b < 60) {
+                        darkInSeg++
+                    }
+                }
+                segCounts[tabIdx] = darkInSeg
+            }
+
+            val minPointsThreshold = (quarterW / 2 * 0.35f).toInt().coerceAtLeast(8)
+            val maxTab = segCounts.indices.maxByOrNull { segCounts[it] } ?: -1
+            if (maxTab >= 0 && segCounts[maxTab] >= minPointsThreshold) {
+                val secondMax = segCounts.indices
+                    .filter { it != maxTab }
+                    .maxOfOrNull { segCounts[it] } ?: 0
+                if (segCounts[maxTab] > secondMax * 2) {
+                    return maxTab
+                }
+            }
+        }
+
+        // 2. 次要備援：分頁文字深色粗體偵測 (y ≈ 0.115f..0.126f)
         val yStart = (h * 0.115f).toInt().coerceIn(0, h - 1)
-        val yEnd = (h * 0.123f).toInt().coerceIn(yStart + 1, h - 1)
+        val yEnd = (h * 0.126f).toInt().coerceIn(yStart + 1, h - 1)
         val tabCenters = floatArrayOf(0.125f, 0.375f, 0.625f, 0.875f)
 
         var bestIndex = -1
@@ -197,12 +236,11 @@ class TemplateMatcher {
             val cx = tabCenters[idx]
             val xStart = (w * (cx - 0.045f)).toInt().coerceIn(0, w - 1)
             val xEnd = (w * (cx + 0.045f)).toInt().coerceIn(xStart + 1, w - 1)
-            // 若懸浮控制窗剛好遮住頂部分頁列，懸浮窗的深色底色會被誤判為深色選取圖示，此時回傳 null 交由引擎依點擊狀態追蹤
             if (FloatingOverlayService.isInsideOverlay((xStart + xEnd) / 2, (yStart + yEnd) / 2) ||
                 FloatingOverlayService.isInsideOverlay(xStart, yStart) ||
                 FloatingOverlayService.isInsideOverlay(xEnd, yEnd)
             ) {
-                return null
+                continue
             }
             var darkCount = 0
             var total = 0
@@ -229,7 +267,7 @@ class TemplateMatcher {
             }
         }
 
-        return if (bestIndex >= 0 && bestRatio >= 0.08f) bestIndex else null
+        return if (bestIndex >= 0 && bestRatio >= 0.10f) bestIndex else null
     }
 
     suspend fun findBestTemplateMatch(
