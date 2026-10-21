@@ -173,10 +173,24 @@ class FloatingOverlayService : Service() {
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
             ).apply {
-                topMargin = (6 * density).toInt()
+                topMargin = (4 * density).toInt()
             }
             layoutParams = params
         }
+
+        val detailTv = TextView(this).apply {
+            text = ""
+            setTextColor(Color.parseColor("#CBD5E1"))
+            textSize = 11f
+            isSingleLine = false
+            maxLines = 2
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            maxWidth = (260 * density).toInt()
+            val padB = (4 * density).toInt()
+            setPadding(0, 0, 0, padB)
+            visibility = View.GONE
+        }
+        bodyLayout.addView(detailTv)
 
         val btnRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -320,7 +334,9 @@ class FloatingOverlayService : Service() {
                 if (status.isRunning) {
                     statusDot.setImageResource(R.drawable.ic_status_dot_green)
                     bgDrawable.setStroke((2 * density).toInt(), Color.parseColor("#10B981"))
-                    val shortDetail = status.overlaySafeDetail
+                    titleTv.text = "${status.state.shortTitle} (${status.adsCompletedCount})"
+
+                    val cleanDetail = status.overlaySafeDetail
                         .replace("[完成]", "")
                         .replace("[巡邏]", "")
                         .replace("[防護]", "")
@@ -329,15 +345,37 @@ class FloatingOverlayService : Service() {
                         .replace("[點擊]", "")
                         .replace("[載入]", "")
                         .replace("[倒數]", "")
+                        .replace("[監控]", "")
+                        .replace("[推廣]", "")
+                        .replace("[遊戲]", "")
+                        .replace("[目標]", "")
+                        .replace("[抽獎]", "")
+                        .replace("[任務]", "")
+                        .replace("[切換]", "")
+                        .replace("[禮物]", "")
+                        .replace("[清單]", "")
+                        .replace("[糖果]", "")
+                        .replace("[金幣]", "")
+                        .replace("[關閉]", "")
+                        .replace("[介面]", "")
+                        .replace("[提示]", "")
+                        .replace("[警報]", "")
+                        .replace("[成功]", "")
                         .replace("...", "")
                         .trim()
-                    val detailSuffix = if (shortDetail.isNotEmpty()) " · $shortDetail" else ""
-                    titleTv.text = "${status.state.shortTitle} (${status.adsCompletedCount})$detailSuffix"
+
+                    if (cleanDetail.isNotEmpty()) {
+                        detailTv.text = cleanDetail
+                        detailTv.visibility = View.VISIBLE
+                    } else {
+                        detailTv.visibility = View.GONE
+                    }
                     styleIconBtn(toggleBtn, R.drawable.ic_pause, "#DC2626", "暫停")
                 } else {
                     statusDot.setImageResource(R.drawable.ic_status_dot_slate)
                     bgDrawable.setStroke((2 * density).toInt(), Color.parseColor("#334155"))
                     titleTv.text = "散步趣助手 · 待命"
+                    detailTv.visibility = View.GONE
                     styleIconBtn(toggleBtn, R.drawable.ic_play_arrow, "#059669", "開始")
                 }
                 container.post { updateOverlayBoundsOnScreen() }
