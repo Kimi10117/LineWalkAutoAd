@@ -1,7 +1,6 @@
 package com.linewalk.autoad.tasks
 
 import android.graphics.Bitmap
-import android.graphics.Point
 import android.graphics.Rect
 import com.linewalk.autoad.config.AppConfig
 import com.linewalk.autoad.vision.OcrItem
@@ -157,7 +156,7 @@ class MissionTask {
             return claimOcr.bounds
         }
 
-        // 2. 2D 綠色連通像素區塊偵測 (LINE 亮綠 #06C755: g > 130 && g > r + 30 && g > b + 30)
+        // 2. 2D 連續實心綠行分析 (LINE 亮綠 #06C755: g > 130 && g > r + 30 && g > b + 30)
         // 僅在確認具備任務分頁 (特別/每日/每週) 時才啟用綠色色塊備援
         val hasMissionTabs = ocrItems.any { item ->
             item.bounds.centerY() < sh * 0.35f && (
@@ -166,71 +165,75 @@ class MissionTask {
         }
         if (!hasMissionTabs) return null
 
-        val greenPts = mutableListOf<Point>()
         val yStart = (sh * 0.24f).toInt()
         val yEnd = (sh * 0.88f).toInt()
         val xStart = (sw * 0.65f).toInt()
         val xEnd = (sw * 0.96f).toInt()
+        val stepY = 2
+        val stepX = 2
+        val roiSampledWidth = (xEnd - xStart) / stepX
+        val minSolidRowGreen = (roiSampledWidth * 0.35f).toInt()
 
-        for (y in yStart..yEnd step 3) {
+        val solidRows = mutableListOf<Int>()
+        for (y in yStart..yEnd step stepY) {
             if (excludedYRanges.any { range -> y in range }) continue
-            for (x in xStart..xEnd step 3) {
+            var greenCount = 0
+            for (x in xStart..xEnd step stepX) {
                 val c = screenBitmap.getPixel(x, y)
                 val r = (c shr 16) and 0xFF
                 val g = (c shr 8) and 0xFF
                 val b = c and 0xFF
                 if (g > 130 && (g - r > 30) && (g - b > 30)) {
-                    greenPts.add(Point(x, y))
+                    greenCount++
                 }
+            }
+            if (greenCount >= minSolidRowGreen) {
+                solidRows.add(y)
             }
         }
 
-        if (greenPts.size < 25) return null
+        // 尋找連續綠色行段落（實心按鈕通常連續 >= 6 行，空心「挑戰」僅 1 像素上下邊框直接被排除）
+        val runs = mutableListOf<MutableList<Int>>()
+        var curRun = mutableListOf<Int>()
+        for (y in solidRows) {
+            if (curRun.isEmpty() || y - curRun.last() <= stepY * 2) {
+                curRun.add(y)
+            } else {
+                runs.add(curRun)
+                curRun = mutableListOf(y)
+            }
+        }
+        if (curRun.isNotEmpty()) {
+            runs.add(curRun)
+        }
 
-        // 聚合成候選按鈕群組
-        val sortedByY = greenPts.sortedBy { it.y }.toMutableList()
-        while (sortedByY.isNotEmpty()) {
-            val firstY = sortedByY.first().y
-            val cluster = sortedByY.filter { it.y - firstY <= (sh * 0.08f).toInt() }
-            sortedByY.removeAll(cluster)
-
-            if (cluster.size >= 25) {
-                val minX = cluster.minOf { it.x }
-                val maxX = cluster.maxOf { it.x }
-                val minY = cluster.minOf { it.y }
-                val maxY = cluster.maxOf { it.y }
-                val btnW = maxX - minX
-                val btnH = maxY - minY
-
-                if (btnW in (sw * 0.12f).toInt()..(sw * 0.35f).toInt() && btnH >= 15) {
-                    // 嚴格驗證實心綠色按鈕：
-                    // 1. 綠色採樣填滿率 >= 45% (實心按鈕通常 60%~80%，空心「挑戰」僅 ~20%)
-                    val totalSampledInBox = ((btnW / 3) + 1) * ((btnH / 3) + 1)
-                    val inBoxCount = cluster.count { it.x in minX..maxX && it.y in minY..maxY }
-                    val fillRatio = inBoxCount.toFloat() / totalSampledInBox.coerceAtLeast(1)
-
-                    // 2. 檢查左右兩端背景色 (實心按鈕兩端皆為綠色，空心「挑戰」兩端為純白背景)
-                    val midY = (minY + maxY) / 2
-                    val leftPixel = screenBitmap.getPixel((minX + btnW * 0.20f).toInt(), midY)
-                    val rightPixel = screenBitmap.getPixel((maxX - btnW * 0.20f).toInt(), midY)
-                    val isLeftGreen = isGreenPixel(leftPixel)
-                    val isRightGreen = isGreenPixel(rightPixel)
-
-                    if (fillRatio >= 0.45f && isLeftGreen && isRightGreen) {
-                        return Rect(minX, minY, maxX, maxY)
+        for (run in runs) {
+            val yMin = run.first()
+            val yMax = run.last()
+            val runHeight = yMax - yMin
+            // 實心膠囊按鈕高度應佔螢幕 2.0% ~ 8% 且至少連續取樣 6 行
+            if (run.size >= 6 && runHeight in (sh * 0.020f).toInt()..(sh * 0.08f).toInt()) {
+                var xMin = Int.MAX_VALUE
+                var xMax = Int.MIN_VALUE
+                for (y in run) {
+                    for (x in xStart..xEnd step stepX) {
+                        val c = screenBitmap.getPixel(x, y)
+                        val r = (c shr 16) and 0xFF
+                        val g = (c shr 8) and 0xFF
+                        val b = c and 0xFF
+                        if (g > 130 && (g - r > 30) && (g - b > 30)) {
+                            if (x < xMin) xMin = x
+                            if (x > xMax) xMax = x
+                        }
                     }
+                }
+                if (xMax > xMin && (xMax - xMin) in (sw * 0.12f).toInt()..(sw * 0.35f).toInt()) {
+                    return Rect(xMin, yMin, xMax, yMax)
                 }
             }
         }
 
         return null
-    }
-
-    private fun isGreenPixel(color: Int): Boolean {
-        val r = (color shr 16) and 0xFF
-        val g = (color shr 8) and 0xFF
-        val b = color and 0xFF
-        return g > 130 && (g - r > 30) && (g - b > 30)
     }
 
     /**
