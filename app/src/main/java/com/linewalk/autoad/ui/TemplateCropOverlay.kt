@@ -65,7 +65,7 @@ class TemplateCropOverlay(
         }
 
         val guideText = TextView(context).apply {
-            text = "✂️ 請在下方畫面用手指拖曳框選目標圖示（例如：單一顆發亮的滿水瓶），再選擇分類並點儲存："
+            text = "請在下方畫面用手指拖曳框選目標圖示（例如：單一顆發亮的滿水瓶），再選擇分類並點儲存："
             setTextColor(Color.WHITE)
             textSize = 13.5f
         }
@@ -96,7 +96,7 @@ class TemplateCropOverlay(
         }
 
         val cancelBtn = Button(context).apply {
-            text = "✖ 取消"
+            text = "取消"
             setTextColor(Color.WHITE)
             setBackgroundColor(Color.parseColor("#64748B"))
             setOnClickListener {
@@ -105,7 +105,7 @@ class TemplateCropOverlay(
         }
 
         val saveBtn = Button(context).apply {
-            text = "💾 儲存框選範本"
+            text = "儲存範本"
             setTextColor(Color.WHITE)
             setBackgroundColor(Color.parseColor("#06C755"))
             setOnClickListener {
@@ -120,7 +120,7 @@ class TemplateCropOverlay(
                     cropped.recycle()
                     Toast.makeText(
                         context,
-                        "✅ 已儲存至【${selectedCategory.displayName}】！",
+                        "已成功儲存至【${selectedCategory.displayName}】！",
                         Toast.LENGTH_SHORT
                     ).show()
                     dismiss(selectedCategory)

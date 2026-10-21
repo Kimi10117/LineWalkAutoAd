@@ -20,10 +20,12 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.widget.Button
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import com.linewalk.autoad.R
 import com.linewalk.autoad.engine.AutomationEngine
 import com.linewalk.autoad.service.AutoAdAccessibilityService
@@ -107,16 +109,20 @@ class FloatingOverlayService : Service() {
 
     @SuppressLint("ClickableViewAccessibility")
     private fun createFloatingWidget() {
+        val density = resources.displayMetrics.density
+
         val bgDrawable = GradientDrawable().apply {
-            setColor(Color.parseColor("#E61E293B"))
-            cornerRadius = 26f
-            setStroke(3, Color.parseColor("#06C755"))
+            setColor(Color.parseColor("#F00F172A"))
+            cornerRadius = 24f * density / 2f
+            setStroke((2 * density).toInt(), Color.parseColor("#334155"))
         }
 
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             background = bgDrawable
-            setPadding(22, 16, 22, 16)
+            val padH = (14 * density).toInt()
+            val padV = (10 * density).toInt()
+            setPadding(padH, padV, padH, padV)
             addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
                 updateOverlayBoundsOnScreen()
             }
@@ -127,20 +133,36 @@ class FloatingOverlayService : Service() {
             gravity = Gravity.CENTER_VERTICAL
         }
 
+        val statusDot = ImageView(this).apply {
+            setImageResource(R.drawable.ic_status_dot_slate)
+            val dotSize = (8 * density).toInt()
+            layoutParams = LinearLayout.LayoutParams(dotSize, dotSize).apply {
+                marginEnd = (8 * density).toInt()
+            }
+        }
+
         val titleTv = TextView(this).apply {
-            text = "🟢 散步趣助手 (待命)"
+            text = "散步趣助手 · 待命"
             setTextColor(Color.WHITE)
             textSize = 12.5f
             typeface = Typeface.DEFAULT_BOLD
         }
 
-        val collapseBtn = TextView(this).apply {
-            text = "  [➖]"
-            setTextColor(Color.parseColor("#94A3B8"))
-            textSize = 12f
+        val headerSpacer = View(this).apply {
+            layoutParams = LinearLayout.LayoutParams(0, 0, 1.0f)
         }
 
+        val collapseBtn = ImageView(this).apply {
+            setImageResource(R.drawable.ic_minimize)
+            val pad = (4 * density).toInt()
+            setPadding(pad, pad, pad, pad)
+            val btnSize = (22 * density).toInt()
+            layoutParams = LinearLayout.LayoutParams(btnSize, btnSize)
+        }
+
+        headerRow.addView(statusDot)
         headerRow.addView(titleTv)
+        headerRow.addView(headerSpacer)
         headerRow.addView(collapseBtn)
         container.addView(headerRow)
 
@@ -149,11 +171,11 @@ class FloatingOverlayService : Service() {
         }
 
         val detailTv = TextView(this).apply {
-            text = "準備就緒 (首次可點 ✂️ 框選目標)"
-            setTextColor(Color.parseColor("#CBD5E1"))
+            text = "準備就緒 (點擊取樣框選圖示)"
+            setTextColor(Color.parseColor("#94A3B8"))
             textSize = 11f
-            maxWidth = 540
-            setPadding(0, 4, 0, 8)
+            maxWidth = (240 * density).toInt()
+            setPadding(0, (4 * density).toInt(), 0, (8 * density).toInt())
         }
         bodyLayout.addView(detailTv)
 
@@ -162,40 +184,48 @@ class FloatingOverlayService : Service() {
             gravity = Gravity.CENTER_VERTICAL
         }
 
-        fun styleMiniBtn(btn: Button, bgColor: String) {
+        fun styleIconBtn(btn: Button, iconRes: Int, bgColor: String, textStr: String = "") {
+            btn.text = textStr
             btn.setTextColor(Color.WHITE)
-            btn.textSize = 11f
+            btn.textSize = 11.5f
+            btn.typeface = Typeface.DEFAULT_BOLD
             btn.isAllCaps = false
             btn.minHeight = 0
             btn.minimumHeight = 0
             btn.minWidth = 0
             btn.minimumWidth = 0
-            btn.setPadding(20, 10, 20, 10)
+
+            val icon = ContextCompat.getDrawable(this, iconRes)?.mutate()
+            val iconSize = (14 * density).toInt()
+            icon?.setBounds(0, 0, iconSize, iconSize)
+            btn.setCompoundDrawables(icon, null, null, null)
+            btn.compoundDrawablePadding = if (textStr.isNotEmpty()) (4 * density).toInt() else 0
+
+            val hPad = if (textStr.isNotEmpty()) (12 * density).toInt() else (8 * density).toInt()
+            val vPad = (6 * density).toInt()
+            btn.setPadding(hPad, vPad, hPad, vPad)
             btn.background = GradientDrawable().apply {
                 setColor(Color.parseColor(bgColor))
-                cornerRadius = 14f
+                cornerRadius = 14f * density / 2f
             }
         }
 
         val toggleBtn = Button(this).apply {
-            text = "▶ 開始"
-            styleMiniBtn(this, "#06C755")
+            styleIconBtn(this, R.drawable.ic_play_arrow, "#059669", "開始")
             setOnClickListener {
                 engine.toggle()
             }
         }
 
         val cropBtn = Button(this).apply {
-            text = "✂️ 取樣"
-            styleMiniBtn(this, "#FFB300")
+            styleIconBtn(this, R.drawable.ic_crop, "#D97706", "取樣")
             setOnClickListener {
                 launchTemplateCropper()
             }
         }
 
         val homeBtn = Button(this).apply {
-            text = "⚙️"
-            styleMiniBtn(this, "#475569")
+            styleIconBtn(this, R.drawable.ic_settings, "#334155", "")
             setOnClickListener {
                 val intent = Intent(this@FloatingOverlayService, MainActivity::class.java).apply {
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
@@ -205,8 +235,7 @@ class FloatingOverlayService : Service() {
         }
 
         val closeOverlayBtn = Button(this).apply {
-            text = "✖"
-            styleMiniBtn(this, "#E53935")
+            styleIconBtn(this, R.drawable.ic_close, "#475569", "")
             setOnClickListener {
                 engine.stop("使用者關閉懸浮窗")
                 stopSelf()
@@ -217,7 +246,7 @@ class FloatingOverlayService : Service() {
             LinearLayout.LayoutParams.WRAP_CONTENT,
             LinearLayout.LayoutParams.WRAP_CONTENT
         ).apply {
-            marginStart = 10
+            marginStart = (8 * density).toInt()
         }
 
         btnRow.addView(toggleBtn)
@@ -230,7 +259,7 @@ class FloatingOverlayService : Service() {
         collapseBtn.setOnClickListener {
             isCollapsed = !isCollapsed
             bodyLayout.visibility = if (isCollapsed) View.GONE else View.VISIBLE
-            collapseBtn.text = if (isCollapsed) "  [➕]" else "  [➖]"
+            collapseBtn.setImageResource(if (isCollapsed) R.drawable.ic_expand else R.drawable.ic_minimize)
             container.post { updateOverlayBoundsOnScreen() }
         }
 
@@ -289,11 +318,18 @@ class FloatingOverlayService : Service() {
 
         serviceScope.launch {
             engine.uiStatus.collectLatest { status ->
-                val badge = if (status.isRunning) "🟢" else "⏸"
-                titleTv.text = "$badge ${status.state.shortTitle} (完成:${status.adsCompletedCount})"
+                if (status.isRunning) {
+                    statusDot.setImageResource(R.drawable.ic_status_dot_green)
+                    bgDrawable.setStroke((2 * density).toInt(), Color.parseColor("#10B981"))
+                    titleTv.text = "散步趣助手 · ${status.state.shortTitle} (${status.adsCompletedCount})"
+                    styleIconBtn(toggleBtn, R.drawable.ic_pause, "#DC2626", "暫停")
+                } else {
+                    statusDot.setImageResource(R.drawable.ic_status_dot_slate)
+                    bgDrawable.setStroke((2 * density).toInt(), Color.parseColor("#334155"))
+                    titleTv.text = "散步趣助手 · ${status.state.shortTitle} (${status.adsCompletedCount})"
+                    styleIconBtn(toggleBtn, R.drawable.ic_play_arrow, "#059669", "開始")
+                }
                 detailTv.text = status.overlaySafeDetail
-                toggleBtn.text = if (status.isRunning) "⏸ 暫停" else "▶ 開始"
-                styleMiniBtn(toggleBtn, if (status.isRunning) "#E53935" else "#06C755")
                 container.post { updateOverlayBoundsOnScreen() }
             }
         }
@@ -348,7 +384,7 @@ class FloatingOverlayService : Service() {
                     rootView?.visibility = View.VISIBLE
                     rootView?.post { updateOverlayBoundsOnScreen() }
                     if (savedCategory != null) {
-                        engine.appendLog("✂️ 新增圖示範本: ${savedCategory.displayName}")
+                        engine.appendLog("[取樣] 新增圖示範本: ${savedCategory.displayName}")
                     }
                 }
             ).show()

@@ -35,6 +35,7 @@ class MainActivity : AppCompatActivity() {
         setContentView(binding.root)
 
         engine = AutomationEngine.getInstance(this)
+        binding.tvAppTitle.text = "散步趣助手 v${com.linewalk.autoad.BuildConfig.VERSION_NAME} (LINE 散步趣專用)"
         setupTaskCheckboxes()
         setupClickListeners()
         observeEngineStatus()
@@ -95,7 +96,7 @@ class MainActivity : AppCompatActivity() {
             startActivity(intent)
             Toast.makeText(
                 this,
-                "👉 請點選畫面最右上角的「⋮」選單 ➔ 點擊「允許受限制的設定」",
+                "請點選畫面最右上角的「⋮」選單 ➔ 點擊「允許受限制的設定」",
                 Toast.LENGTH_LONG
             ).show()
         }
@@ -167,14 +168,14 @@ class MainActivity : AppCompatActivity() {
         // 若無障礙已經成功開啟，自動隱藏受限制設定教學盒讓畫面更清爽；若尚未開啟則顯示提醒
         binding.layoutRestrictedHint.visibility = if (accConnected) View.GONE else View.VISIBLE
 
-        val accText = if (accConnected) "✅ 無障礙服務：已啟用連線" else "❌ 無障礙服務：尚未啟用（必開）"
-        val overlayText = if (overlayGranted) "✅ 懸浮窗權限：已授權" else "❌ 懸浮窗權限：尚未授權（必開）"
+        val accText = if (accConnected) "[已連線] 無障礙服務：運作中" else "[未啟用] 無障礙服務：尚未開啟（必開）"
+        val overlayText = if (overlayGranted) "[已授權] 懸浮窗權限：正常" else "[未授權] 懸浮窗權限：尚未授權（必開）"
         binding.tvPermissionStatus.text = "$accText\n$overlayText"
 
         val counts = engine.templateStorage.getTemplateCounts()
         val summaryText = TemplateCategory.entries.joinToString("\n") { cat ->
             val count = counts[cat] ?: 0
-            val statusMark = if (count > 0) "🟢 已存 $count 張" else "⚪ 尚未取樣"
+            val statusMark = if (count > 0) "[已取樣] $count 張" else "[未取樣] 0 張"
             "• ${cat.displayName}：$statusMark"
         }
         binding.tvTemplateSummary.text = summaryText
@@ -193,7 +194,7 @@ class MainActivity : AppCompatActivity() {
                         val header = "目前狀態：${status.state.title} | 累計完成：${status.adsCompletedCount} 次 | 觸發任務：${status.tasksTriggeredCount} 次\n" +
                             "--------------------------------------------\n"
                         val body = if (status.recentLogs.isEmpty()) {
-                            "尚無執行紀錄，請啟動懸浮窗並按 [▶ 開始]"
+                            "尚無執行紀錄，請啟動懸浮窗並按 [開始]"
                         } else {
                             status.recentLogs.reversed().joinToString("\n")
                         }
