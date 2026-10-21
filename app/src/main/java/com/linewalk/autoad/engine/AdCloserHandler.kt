@@ -50,6 +50,7 @@ class AdCloserHandler(
     private var lastClickedPoint: Point? = null
     private var lastBackActionTimeMs: Long = 0L
     private var lastFallbackCornerTimeMs: Long = 0L
+    private var fallbackCornerCycle: Int = 0
     private val clickedHistory = mutableListOf<Point>()
     private val blacklistedPoints = mutableListOf<Point>()
 
@@ -64,6 +65,7 @@ class AdCloserHandler(
             lastClickedPoint = null
             lastBackActionTimeMs = 0L
             lastFallbackCornerTimeMs = 0L
+            fallbackCornerCycle = 0
             clickedHistory.clear()
             blacklistedPoints.clear()
         }
@@ -307,76 +309,120 @@ class AdCloserHandler(
             }
         }
 
-        // 8B. 主動安全返回策略與右上角 X 熱區點擊（大幅加速廣告關閉速度，告別 60 秒乾等）：
-        // - 若該廣告曾觸發跳轉外部網頁 (redirectCount > 0)，每次 tick 優先發送返回鍵關閉廣告
+        // 8B. 主動安全返回策略與右上角/內容角/Google Play 徽章 X 熱區點擊（大幅加速廣告關閉速度，告別 60 秒乾等）：
+        // - 若該廣告曾觸發跳轉外部網頁 (redirectCount > 0)，每次 tick 優先發送雙重返回鍵關閉廣告
         // - 若廣告無倒數計時（例如可玩式互動廣告、應用商店推廣頁、Meta 輪播、靜態廣告或互動式 end-card），且已播放超過 5 秒：
-        //   使用時間戳記間隔控制（徹底根除離散秒數被跳過的競態條件 bug）：
-        //   - 每間隔 3.5 秒發送系統返回鍵 (service.navigateBack())！
-        //   - 若返回鍵未關閉廣告，每間隔 4.0 秒嘗試點擊右上角標準關閉熱區！
+        //   使用時間戳記間隔控制：
+        //   - 每間隔 3.0 秒依序輪替點擊各關閉熱區（包含頂部 Google Play 徽章、螢幕右上角、16:9內容右上角、左上角），且熱區不加入黑名單！
+        //   - 每間隔 3.0 秒發送系統雙重返回鍵 (service.doubleNavigateBack())！
         val now = System.currentTimeMillis()
         if (remainingSec == null && elapsedSec >= 5) {
             if (redirectCount > 0) {
-                service.navigateBack()
+                service.doubleNavigateBack()
                 lastBackActionTimeMs = now
-                return AdStepResult.WatchdogBackTriggered(elapsedSec, "重定向返回鍵")
+                return AdStepResult.WatchdogBackTriggered(elapsedSec, "重定向雙重返回鍵")
             }
 
-            // 優先發送系統返回鍵（Google AdMob / LY Corp / Unity 等各家 SDK 在結束頁/靜態頁的標準關閉手勢）
-            if (now - lastBackActionTimeMs >= 3500L) {
-                service.navigateBack()
-                lastBackActionTimeMs = now
-                return AdStepResult.WatchdogBackTriggered(elapsedSec, "系統返回鍵")
+            if (now - lastFallbackCornerTimeMs >= 3000L) {
+                val (label, targetRect) = getNextFallbackTarget(sw, sh, ocrItems)
+                lastFallbackCornerTimeMs = now
+                recordAndClick(service, targetRect, allowBlacklist = false)
+                return AdStepResult.ClickedCloseOrSkip(label, targetRect)
             }
 
-            // 備援：若返回鍵剛按過且間隔達標，嘗試點擊右上角關閉熱區 (涵蓋標準頂部與黑邊頂部區域)
-            if (now - lastFallbackCornerTimeMs >= 4000L && now - lastBackActionTimeMs >= 1500L) {
-                val fallbackCorner = Rect(
-                    (sw * 0.88f).toInt(),
-                    (sh * 0.050f).toInt(),
-                    (sw * 0.96f).toInt(),
-                    (sh * 0.110f).toInt()
-                )
-                if (!isInvalidOrBlacklisted(fallbackCorner.centerX(), fallbackCorner.centerY())) {
-                    lastFallbackCornerTimeMs = now
-                    recordAndClick(service, fallbackCorner)
-                    return AdStepResult.ClickedCloseOrSkip("右上角標準關閉熱區", fallbackCorner)
-                }
+            if (now - lastBackActionTimeMs >= 3000L) {
+                service.doubleNavigateBack()
+                lastBackActionTimeMs = now
+                return AdStepResult.WatchdogBackTriggered(elapsedSec, "雙重返回鍵")
             }
         }
 
-        // 9. 防卡死 Watchdog：若單支廣告超過最大等待秒數 (預設 32 秒)，持續發送返回鍵與右上角點擊
+        // 9. 防卡死 Watchdog：若單支廣告超過最大等待秒數 (預設 32 秒)，持續循環點擊各關閉熱區與發送返回鍵
         if (elapsedSec >= config.maxAdWaitSeconds) {
-            if (now - lastBackActionTimeMs >= 2000L) {
-                service.navigateBack()
-                lastBackActionTimeMs = now
-                return AdStepResult.WatchdogBackTriggered(elapsedSec, "逾時強效返回鍵")
-            } else {
-                val fallbackRect = Rect(
-                    (sw * 0.88f).toInt(),
-                    (sh * 0.050f).toInt(),
-                    (sw * 0.96f).toInt(),
-                    (sh * 0.110f).toInt()
-                )
-                if (!isInvalidOrBlacklisted(fallbackRect.centerX(), fallbackRect.centerY())) {
-                    recordAndClick(service, fallbackRect)
-                }
-                return AdStepResult.WatchdogBackTriggered(elapsedSec, "逾時強效關閉")
-            }
+            val (label, targetRect) = getNextFallbackTarget(sw, sh, ocrItems)
+            lastFallbackCornerTimeMs = now
+            recordAndClick(service, targetRect, allowBlacklist = false)
+            service.doubleNavigateBack()
+            lastBackActionTimeMs = now
+            return AdStepResult.WatchdogBackTriggered(elapsedSec, "強效關閉[$label+返回]")
         }
 
         return AdStepResult.ScanningAd(elapsedSec)
     }
 
-    private suspend fun recordAndClick(service: AutoAdAccessibilityService, rect: Rect) {
+    private fun getNextFallbackTarget(
+        sw: Int,
+        sh: Int,
+        ocrItems: List<OcrItem>
+    ): Pair<String, Rect> {
+        val targets = mutableListOf<Pair<String, Rect>>()
+
+        // 1. 若頂部出現 Google Play 徽章 (▶| Google Play)，點擊該徽章觸發跳過或喚出關閉機制
+        val gpBadge = ocrItems.firstOrNull { item ->
+            val cy = item.bounds.centerY().toFloat() / sh
+            val cx = item.bounds.centerX().toFloat() / sw
+            cy < 0.18f && cx < 0.40f && (
+                item.text.contains("Google Play", ignoreCase = true) ||
+                (item.text.contains("Google", ignoreCase = true) && item.text.contains("Play", ignoreCase = true))
+            )
+        }
+        if (gpBadge != null) {
+            targets.add("頂部GooglePlay按鈕" to gpBadge.bounds)
+        }
+
+        // 2. 螢幕右上角關閉熱區 (標準全螢幕廣告)
+        targets.add("螢幕右上角熱區" to Rect(
+            (sw * 0.88f).toInt(),
+            (sh * 0.045f).toInt(),
+            (sw * 0.97f).toInt(),
+            (sh * 0.110f).toInt()
+        ))
+
+        // 3. 內容右上角關閉熱區 (專門應對 16:9 / 4:3 劇院黑邊廣告，點擊黑邊下方的內容角落)
+        targets.add("內容右上角熱區" to Rect(
+            (sw * 0.88f).toInt(),
+            (sh * 0.165f).toInt(),
+            (sw * 0.97f).toInt(),
+            (sh * 0.230f).toInt()
+        ))
+
+        // 4. 螢幕左上角關閉熱區 (部分全螢幕廣告 X 在左上)
+        targets.add("螢幕左上角熱區" to Rect(
+            (sw * 0.03f).toInt(),
+            (sh * 0.045f).toInt(),
+            (sw * 0.15f).toInt(),
+            (sh * 0.110f).toInt()
+        ))
+
+        // 5. 內容左上角關閉熱區
+        targets.add("內容左上角熱區" to Rect(
+            (sw * 0.03f).toInt(),
+            (sh * 0.165f).toInt(),
+            (sw * 0.15f).toInt(),
+            (sh * 0.230f).toInt()
+        ))
+
+        val target = targets[fallbackCornerCycle % targets.size]
+        fallbackCornerCycle++
+        return target
+    }
+
+    private suspend fun recordAndClick(
+        service: AutoAdAccessibilityService,
+        rect: Rect,
+        allowBlacklist: Boolean = true
+    ) {
         val pt = Point(rect.centerX(), rect.centerY())
         lastClickedPoint = pt
         clickedHistory.add(pt)
-        // 若同一區域 (半徑 65px 內) 在同支廣告中已被點擊滿 2 次卻仍未關閉廣告，自動加入黑名單避免重複誤觸靜音鍵或假 X
-        val nearbyClicks = clickedHistory.count { p ->
-            hypot((p.x - pt.x).toDouble(), (p.y - pt.y).toDouble()) < BLACKLIST_RADIUS_PX
-        }
-        if (nearbyClicks >= 2) {
-            blacklistedPoints.add(pt)
+        if (allowBlacklist) {
+            // 若同一區域 (半徑 65px 內) 在同支廣告中已被點擊滿 2 次卻仍未關閉廣告，自動加入黑名單避免重複誤觸靜音鍵或假 X
+            val nearbyClicks = clickedHistory.count { p ->
+                hypot((p.x - pt.x).toDouble(), (p.y - pt.y).toDouble()) < BLACKLIST_RADIUS_PX
+            }
+            if (nearbyClicks >= 2) {
+                blacklistedPoints.add(pt)
+            }
         }
         closeClickCount++
         service.clickRect(rect, maxJitterPx = 2)

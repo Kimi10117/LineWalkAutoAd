@@ -132,6 +132,7 @@ class AutomationEngine private constructor(context: Context) {
 
     private var popupRetryTicks = 0
     private var rewardClaimRetryTicks = 0
+    private var adWatchdogCooldownTicks = 0
     private var currentTab: MainTab = MainTab.MOVE
     private var needsInitialTabSync = true
     private var tabSwitchRetries = 0
@@ -625,8 +626,11 @@ class AutomationEngine private constructor(context: Context) {
             (t.contains("廣告") && (t.contains("秒") || t.contains("後") || item.bounds.centerY() < sh * 0.15f))
         }
 
+        if (adWatchdogCooldownTicks > 0) {
+            adWatchdogCooldownTicks--
+        }
         val isGameScreen = hasMainScreenMarkers || adCloserHandler.isGameScreenVisible(service, screenBitmap, ocrItems)
-        if (hasPlayableOrStoreAdOcr || (!isGameScreen && nonGameScreenTicks >= 2)) {
+        if (adWatchdogCooldownTicks == 0 && (hasPlayableOrStoreAdOcr || (!isGameScreen && nonGameScreenTicks >= 2))) {
             nonGameScreenTicks = 0
             appendLog("📺 偵測到全螢幕廣告/可玩式廣告/商店宣傳頁，切換至廣告監控流程安全關閉！")
             adCloserHandler.onEnterAdMode()
@@ -1577,8 +1581,12 @@ class AutomationEngine private constructor(context: Context) {
                     "🛡️ 嘗試 ${res.actionLabel} 關閉廣告 (${res.elapsedSec}s)...",
                     "🛡️ 嘗試關閉 (${res.elapsedSec}s)..."
                 )
-                if (res.elapsedSec >= config.maxAdWaitSeconds + 15) {
-                    transitionTo(EngineState.IN_GAME_SCAN, "逾時重置回巡邏狀態", "🔍 重新巡邏中...")
+                if (res.elapsedSec >= config.maxAdWaitSeconds + 8) {
+                    appendLog("🚨 廣告等待達 ${res.elapsedSec}s 逾時仍未關閉，強制喚醒散步趣拉回前景！")
+                    service.bringAppToFront("com.linecorp.LGWALK")
+                    delay(800)
+                    adWatchdogCooldownTicks = 4
+                    transitionTo(EngineState.IN_GAME_SCAN, "逾時強制拉回散步趣主畫面，繼續巡邏...", "🔍 重新巡邏中...")
                 }
             }
 

@@ -236,6 +236,36 @@ class AutoAdAccessibilityService : AccessibilityService() {
         return performGlobalAction(GLOBAL_ACTION_BACK)
     }
 
+    /**
+     * 連續兩次快速觸發系統返回鍵 (用於全螢幕沉浸式廣告或需要「再按一次返回以退出」的頑固視窗)。
+     */
+    suspend fun doubleNavigateBack(): Boolean {
+        val first = performGlobalAction(GLOBAL_ACTION_BACK)
+        kotlinx.coroutines.delay(180)
+        val second = performGlobalAction(GLOBAL_ACTION_BACK)
+        return first || second
+    }
+
+    /**
+     * 強制將指定的應用程式（如《LINE 散步趣》com.linecorp.LGWALK）喚醒拉回前景。
+     * 用於廣告播放逾時（如超過 40 秒卡死在無關閉鈕的惡意廣告頁面）時強制恢復主畫面。
+     */
+    fun bringAppToFront(targetPackage: String = "com.linecorp.LGWALK"): Boolean {
+        return try {
+            val intent = packageManager.getLaunchIntentForPackage(targetPackage)?.apply {
+                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            }
+            if (intent != null) {
+                startActivity(intent)
+                true
+            } else {
+                false
+            }
+        } catch (_: Exception) {
+            false
+        }
+    }
+
     companion object {
         private const val TAG = "AutoAdAccService"
 
