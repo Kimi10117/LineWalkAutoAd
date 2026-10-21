@@ -6,10 +6,24 @@ import com.linewalk.autoad.config.AppConfig
 import com.linewalk.autoad.vision.OcrItem
 
 /**
+ * 領取禮物按鈕目標類型：
+ * @property isAd true 代表綠色外框播放按鈕 [▶] (需要觀看廣告領取)；false 代表實心綠色按鈕 [ 領取 ] (免看廣告直接領取)
+ * @property label 識別標籤，用於日誌記錄
+ * @property bounds 按鈕點擊區域
+ */
+data class ClaimGiftTarget(
+    val isAd: Boolean,
+    val label: String,
+    val bounds: Rect
+)
+
+/**
  * 接收好友禮物任務 (ReceiveGiftTask)：
- * - 點擊主畫面右上角禮物盒圖示 (x ≈ 0.86, y ≈ 0.065) 開啟「禮物」視窗
- * - 檢查禮物清單內是否有待接收禮物（右側帶有綠色播放鍵 [▶] 的按鈕）
- * - 逐一觀看廣告領取好友贈送的禮物
+ * - 點擊右上角禮物盒圖示 (x ≈ 0.86, y ≈ 0.065) 開啟「禮物」抽屜視窗 (支援在主畫面或好友頁面直接點擊開啟)
+ * - 支援兩種領取按鈕：
+ *   1. 【最高優先】實心綠色按鈕 [ 領取 ]（「一起送達的禮物」，免看廣告，點擊立即領取）
+ *   2. 【次要優先】綠色播放按鈕 [ ▶ ]（「收到...送來的禮物」，需觀看廣告領取）
+ * - 領取完當前畫面後支援向下滾動清單搜尋更多禮物
  * - 全部領取完畢後，點擊右上角 (X) 關閉視窗 (x ≈ 0.90, y ≈ 0.23)
  */
 class ReceiveGiftTask {
@@ -17,7 +31,7 @@ class ReceiveGiftTask {
     fun isEnabled(config: AppConfig): Boolean = config.enableFriendGiftTask
 
     /**
-     * 主畫面右上角「禮物盒」圖示座標 (揚聲器與齒輪設定之間，常帶有紅點通知)
+     * 右上角「禮物盒」圖示座標 (揚聲器與齒輪設定之間，常帶有紅點通知，主頁與好友頁皆通用)
      */
     fun getHeaderGiftBoxRect(sw: Int, sh: Int): Rect {
         return Rect(
@@ -29,48 +43,65 @@ class ReceiveGiftTask {
     }
 
     /**
-     * 判斷「禮物」彈窗是否開啟中（嚴格排除超商「禮物卡/禮物券」等廣告卡片！）
-     * 注意：因「禮物」彈窗為下半部抽屜式視窗，頂部的四大分頁特徵仍可能隱約可見，故不可因頂部分頁存在而判定為非禮物彈窗！
+     * 判斷「禮物」抽屜彈窗是否開啟中
+     * 注意：因「禮物」抽屜覆蓋於下半部，背景（好友排行榜或主畫面）頂部仍可能在OCR中被偵測到，
+     * 故只要確認畫面具備「禮物」抽屜的標題或清單內容，且非送禮確認彈窗，即判定為禮物抽屜開啟！
      */
     fun isReceiveGiftDialogOpen(ocrItems: List<OcrItem>, sh: Int): Boolean {
-        // 嚴格排除好友排行榜、排行榜、好友清單等好友頁面特徵與送禮彈窗
-        val isFriendsScreen = ocrItems.any { item ->
+        // 嚴格排除好友送禮相關彈窗（如『要向...贈送金幣嗎？』『也送給自己』『剩餘贈送次數』『贈送完畢』）
+        val hasSendGiftModal = ocrItems.any { item ->
             val t = item.text.replace(" ", "")
-            t.contains("好友排行榜") || t.contains("排行榜") || t.contains("好友清單") ||
-            t.contains("青銅級") || t.contains("查看階層") ||
-            t.contains("也送給自己") || t.contains("贈送金幣") || t.contains("剩餘贈送次數") ||
-            (t.contains("要向") && t.contains("金幣"))
+            t.contains("也送給自己") || t.contains("剩餘贈送次數") ||
+            (t.contains("要向") && t.contains("金幣")) ||
+            t.contains("贈送完畢") || (t.contains("已贈送") && t.contains("金幣"))
         }
-        if (isFriendsScreen) return false
+        if (hasSendGiftModal) return false
 
-        return ocrItems.any { item ->
-            val cy = item.bounds.centerY()
-            val t = item.text.trim()
-            t.contains("送來的禮物") ||
-            (t.contains("收到") && t.contains("禮物")) ||
-            (t.contains("今天") && t.contains("止") && cy < sh * 0.88f) ||
-            (t.contains("剩餘") && t.contains("天") && cy < sh * 0.88f) ||
-            ((t == "禮物" || t == "禮物盒") &&
-             cy in (sh * 0.18f).toInt()..(sh * 0.32f).toInt() && !t.contains("次數") && !t.contains("卡") && !t.contains("券") && !t.contains("超商"))
+        // 檢查是否具有「禮物」抽屜專屬內容特徵：
+        val hasDrawerContent = ocrItems.any { item ->
+            val cy = item.bounds.centerY().toFloat() / sh
+            val t = item.text.replace(" ", "")
+            cy in 0.25f..0.88f && (
+                t.contains("送來的禮物") ||
+                t.contains("一起送達") ||
+                (t.contains("收到") && t.contains("禮物"))
+            )
         }
+        if (hasDrawerContent) return true
+
+        // 檢查「禮物」抽屜標題 (y in 0.18f..0.32f) 與內部截止/領取文字
+        val hasDrawerTitle = ocrItems.any { item ->
+            val cy = item.bounds.centerY().toFloat() / sh
+            val t = item.text.trim()
+            cy in 0.18f..0.32f && (t == "禮物" || t == "禮物盒")
+        }
+        val hasDrawerSubText = ocrItems.any { item ->
+            val cy = item.bounds.centerY().toFloat() / sh
+            val t = item.text.replace(" ", "")
+            cy in 0.28f..0.92f && (t.contains("止") || t.contains("剩下") || t == "領取")
+        }
+
+        return hasDrawerTitle && hasDrawerSubText
     }
 
     /**
-     * 尋找禮物清單中下一個待領取的綠色播放按鈕 [▶] (x ≈ 0.60f..0.95f, y ≈ 0.25f..0.88f)
-     * 採用 2D 獨立按鈕垂直分組聚類 (支援清單中有多個待收禮物，優先點選最上方一筆)，並提供多重 OCR 備援！
+     * 尋找禮物清單中下一個待領取的按鈕 (x ≈ 0.60f..0.95f, y ≈ 0.25f..0.92f)
+     * 優先順序：
+     * 1. 【最高優先】實心綠色按鈕 [ 領取 ] (免看廣告，直接領取)
+     * 2. 【次要優先】綠框播放按鈕 [ ▶ ] (需看廣告領取)
      */
     fun findNextClaimGiftButton(
         screenBitmap: Bitmap,
         ocrItems: List<OcrItem>
-    ): Rect? {
+    ): ClaimGiftTarget? {
         val sh = screenBitmap.height
         val sw = screenBitmap.width
 
-        // 1. 【第一優先】：2D 顏色區域辨識搜尋右側綠色播放按鈕 (x ≈ 0.60f..0.95f, y ≈ 0.25f..0.88f)
+        // 1. 【2D 顏色區域辨識】：搜尋右側按鈕區域 (x ≈ 0.60f..0.95f, y ≈ 0.25f..0.92f)
         val x1 = (sw * 0.60f).toInt().coerceIn(0, sw - 1)
         val x2 = (sw * 0.95f).toInt().coerceIn(x1 + 1, sw)
         val y1 = (sh * 0.25f).toInt().coerceIn(0, sh - 1)
-        val y2 = (sh * 0.88f).toInt().coerceIn(y1 + 1, sh)
+        val y2 = (sh * 0.92f).toInt().coerceIn(y1 + 1, sh)
 
         val greenPoints = mutableListOf<android.graphics.Point>()
         var y = y1
@@ -81,8 +112,8 @@ class ReceiveGiftTask {
                 val r = (c shr 16) and 0xFF
                 val g = (c shr 8) and 0xFF
                 val b = c and 0xFF
-                // LINE 亮綠色：G 顯著高於 R 與 B (膠囊外框與內部綠色播放三角形)
-                if (g > 140 && g > r + 30 && g > b + 30) {
+                // LINE 亮綠色：G 顯著高於 R 與 B
+                if (g > 140 && g > r + 25 && g > b + 25) {
                     greenPoints.add(android.graphics.Point(x, y))
                 }
                 x += 2
@@ -90,97 +121,171 @@ class ReceiveGiftTask {
             y += 2
         }
 
+        val solidClaims = mutableListOf<Rect>()
+        val adPlays = mutableListOf<Rect>()
+
         if (greenPoints.isNotEmpty()) {
             val sortedByY = greenPoints.sortedBy { it.y }
             var currentCluster = mutableListOf<android.graphics.Point>()
             var prevY = sortedByY.first().y
 
             for (pt in sortedByY) {
-                // 相鄰綠色點若垂直間隔 <= 15px，視為同一個按鈕
                 if (pt.y - prevY <= 15) {
                     currentCluster.add(pt)
                 } else {
-                    val btn = evaluateGiftButtonCluster(currentCluster, sw, sh)
-                    if (btn != null) {
-                        return btn
-                    }
+                    evaluateAndAddCluster(currentCluster, sw, sh, solidClaims, adPlays)
                     currentCluster = mutableListOf(pt)
                 }
                 prevY = pt.y
             }
-            val btn = evaluateGiftButtonCluster(currentCluster, sw, sh)
-            if (btn != null) {
-                return btn
+            evaluateAndAddCluster(currentCluster, sw, sh, solidClaims, adPlays)
+        }
+
+        // 2. 【OCR 輔助搜尋】：
+        // 2A. 尋找「領取」OCR 按鈕 (x > 0.60f, y in 0.25f..0.92f, 嚴格排除「已領取」)
+        val directClaimOcr = ocrItems.filter { item ->
+            val cy = item.bounds.centerY().toFloat() / sh
+            val cx = item.bounds.centerX().toFloat() / sw
+            val t = item.text.trim()
+            cy in 0.25f..0.92f && cx > 0.60f && (t == "領取" || (t.contains("領取") && !t.contains("已")))
+        }.sortedBy { it.bounds.top }
+
+        for (item in directClaimOcr) {
+            val b = item.bounds
+            val padX = (sw * 0.05f).toInt()
+            val padY = (sh * 0.01f).toInt()
+            val expanded = Rect(
+                (b.left - padX).coerceAtLeast((sw * 0.65f).toInt()),
+                b.top - padY,
+                (b.right + padX).coerceAtMost((sw * 0.92f).toInt()),
+                b.bottom + padY
+            )
+            if (solidClaims.none { it.contains(expanded.centerX(), expanded.centerY()) }) {
+                solidClaims.add(expanded)
             }
         }
 
-        // 2. 【OCR 備援 1】：尋找「收到...送來的禮物」文字行，按鈕就在同高度右側 (x ≈ 0.65f..0.92f)
-        val giftTextItem = ocrItems.firstOrNull { item ->
+        // 2B. 尋找「一起送達的禮物」OCR 行 (按鈕就在右側)
+        val togetherGiftOcr = ocrItems.filter { item ->
+            val cy = item.bounds.centerY().toFloat() / sh
+            val t = item.text.replace(" ", "")
+            cy in 0.25f..0.92f && t.contains("一起送達")
+        }.sortedBy { it.bounds.top }
+
+        for (item in togetherGiftOcr) {
             val cy = item.bounds.centerY()
-            val t = item.text
-            cy in (sh * 0.28f).toInt()..(sh * 0.85f).toInt() &&
-            (t.contains("送來的禮物") || (t.contains("收到") && t.contains("禮物")))
-        }
-        if (giftTextItem != null) {
-            val cy = giftTextItem.bounds.centerY()
-            val btnHalfW = (sw * 0.13f).toInt()
-            val btnHalfH = (sh * 0.022f).toInt()
+            val btnHalfW = (sw * 0.12f).toInt()
+            val btnHalfH = (sh * 0.020f).toInt()
             val btnCenterX = (sw * 0.785f).toInt()
-            return Rect(btnCenterX - btnHalfW, cy - btnHalfH, btnCenterX + btnHalfW, cy + btnHalfH)
+            val togetherRect = Rect(btnCenterX - btnHalfW, cy - btnHalfH, btnCenterX + btnHalfW, cy + btnHalfH)
+            if (solidClaims.none { it.contains(togetherRect.centerX(), togetherRect.centerY()) }) {
+                solidClaims.add(togetherRect)
+            }
         }
 
-        // 3. 【OCR 備援 2】：尋找「今天...止」或「剩餘...天」截止文字，綠色播放按鈕就在其正上方約 30~50px
-        val deadlineItem = ocrItems.firstOrNull { item ->
+        // 【最優先回傳】：若有實心「領取」按鈕 (免看廣告)，優先點擊！
+        if (solidClaims.isNotEmpty()) {
+            val firstDirect = solidClaims.minByOrNull { it.top }!!
+            return ClaimGiftTarget(
+                isAd = false,
+                label = "直接領取(免廣告)",
+                bounds = firstDirect
+            )
+        }
+
+        // 2C. 尋找「▶」播放按鈕 OCR
+        val playOcr = ocrItems.filter { item ->
+            val cy = item.bounds.centerY().toFloat() / sh
+            val cx = item.bounds.centerX().toFloat() / sw
+            cy in 0.25f..0.92f && cx > 0.60f && (item.text.contains("▶") || item.text.contains(">"))
+        }.sortedBy { it.bounds.top }
+
+        for (item in playOcr) {
+            if (adPlays.none { it.contains(item.bounds.centerX(), item.bounds.centerY()) }) {
+                adPlays.add(item.bounds)
+            }
+        }
+
+        // 2D. 尋找「收到...送來的禮物」文字行 (按鈕就在右側)
+        val friendGiftTextOcr = ocrItems.filter { item ->
+            val cy = item.bounds.centerY().toFloat() / sh
+            val t = item.text
+            cy in 0.25f..0.92f && (t.contains("送來的禮物") || (t.contains("收到") && t.contains("禮物")))
+        }.sortedBy { it.bounds.top }
+
+        for (item in friendGiftTextOcr) {
             val cy = item.bounds.centerY()
-            val cx = item.bounds.centerX()
-            cy in (sh * 0.30f).toInt()..(sh * 0.88f).toInt() &&
-            cx > sw * 0.55f &&
+            val btnHalfW = (sw * 0.12f).toInt()
+            val btnHalfH = (sh * 0.020f).toInt()
+            val btnCenterX = (sw * 0.785f).toInt()
+            val playRect = Rect(btnCenterX - btnHalfW, cy - btnHalfH, btnCenterX + btnHalfW, cy + btnHalfH)
+            if (adPlays.none { it.contains(playRect.centerX(), playRect.centerY()) }) {
+                adPlays.add(playRect)
+            }
+        }
+
+        // 2E. 尋找「今天...止」或「剩下...天」截止文字，綠色播放按鈕就在其正上方約 30~50px
+        val deadlineItem = ocrItems.firstOrNull { item ->
+            val cy = item.bounds.centerY().toFloat() / sh
+            val cx = item.bounds.centerX().toFloat() / sw
+            cy in 0.30f..0.92f && cx > sw * 0.55f &&
             ((item.text.contains("今天") && item.text.contains("止")) ||
-             item.text.contains("剩餘") || item.text.contains("天"))
+             item.text.contains("剩餘") || item.text.contains("剩下") || item.text.contains("天"))
         }
         if (deadlineItem != null) {
             val cx = deadlineItem.bounds.centerX()
             val cy = deadlineItem.bounds.centerY()
-            val btnHalfW = (sw * 0.13f).toInt()
-            val btnHalfH = (sh * 0.022f).toInt()
+            val btnHalfW = (sw * 0.12f).toInt()
+            val btnHalfH = (sh * 0.020f).toInt()
             val btnCenterY = cy - (sh * 0.038f).toInt()
-            return Rect(cx - btnHalfW, btnCenterY - btnHalfH, cx + btnHalfW, btnCenterY + btnHalfH)
+            val deadlineBtn = Rect(cx - btnHalfW, btnCenterY - btnHalfH, cx + btnHalfW, btnCenterY + btnHalfH)
+            if (adPlays.none { it.contains(deadlineBtn.centerX(), deadlineBtn.centerY()) }) {
+                adPlays.add(deadlineBtn)
+            }
         }
 
-        // 4. 【OCR 備援 3】：直接搜尋帶有「▶」播放符號的項目
-        val playItem = ocrItems.firstOrNull { item ->
-            val cy = item.bounds.centerY()
-            val cx = item.bounds.centerX()
-            cy in (sh * 0.28f).toInt()..(sh * 0.85f).toInt() &&
-            cx > sw * 0.60f &&
-            (item.text.contains("▶") || item.text.contains(">"))
-        }
-        if (playItem != null) {
-            return playItem.bounds
+        // 【次選回傳】：若有綠色播放按鈕 (需看廣告)，依序點擊觀看廣告領取！
+        if (adPlays.isNotEmpty()) {
+            val firstAd = adPlays.minByOrNull { it.top }!!
+            return ClaimGiftTarget(
+                isAd = true,
+                label = "看廣告領取(▶)",
+                bounds = firstAd
+            )
         }
 
         return null
     }
 
-    private fun evaluateGiftButtonCluster(
+    private fun evaluateAndAddCluster(
         cluster: List<android.graphics.Point>,
         sw: Int,
-        sh: Int
-    ): Rect? {
-        if (cluster.size < 30) return null
+        sh: Int,
+        solidClaims: MutableList<Rect>,
+        adPlays: MutableList<Rect>
+    ) {
+        if (cluster.size < 30) return
         val minX = cluster.minOf { it.x }
         val maxX = cluster.maxOf { it.x }
         val minY = cluster.minOf { it.y }
         val maxY = cluster.maxOf { it.y }
         val width = maxX - minX
         val height = maxY - minY
-        // 驗證按鈕寬度 (約螢幕寬度的 16% ~ 36%) 與高度 (約螢幕高度的 1.8% ~ 7.0%)
-        if (width in (sw * 0.16f).toInt()..(sw * 0.36f).toInt() &&
+        // 驗證按鈕寬度 (約螢幕寬度的 15% ~ 38%) 與高度 (約螢幕高度的 1.8% ~ 7.0%)
+        if (width in (sw * 0.15f).toInt()..(sw * 0.38f).toInt() &&
             height in (sh * 0.018f).toInt()..(sh * 0.070f).toInt()
         ) {
-            return Rect(minX, minY, maxX, maxY)
+            val rect = Rect(minX, minY, maxX, maxY)
+            val totalSamples = ((width / 2) * (height / 2)).coerceAtLeast(1)
+            val density = cluster.size.toFloat() / totalSamples
+            // 實心「領取」按鈕內部全填滿亮綠色 (密度高達 90% 以上或點數 > 400)
+            val isSolid = density > 0.55f || cluster.size > 400
+            if (isSolid) {
+                solidClaims.add(rect)
+            } else {
+                adPlays.add(rect)
+            }
         }
-        return null
     }
 
     /**

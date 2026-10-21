@@ -150,6 +150,7 @@ class AutomationEngine private constructor(context: Context) {
     private val checkedMissionTabs = mutableSetOf<String>()
     private val missionTabSequence = listOf("特別", "每日", "每週")
     private var friendGiftEmptyTicks = 0
+    private var friendGiftReturnHomeTicks = 0
     private var currentPhaseEmptyTicks = 0
     private var nonGameScreenTicks = 0
 
@@ -178,6 +179,7 @@ class AutomationEngine private constructor(context: Context) {
         isFriendGiftCompleted = false
         checkedMissionTabs.clear()
         friendGiftEmptyTicks = 0
+        friendGiftReturnHomeTicks = 0
         friendGiftTask.resetSession()
         currentPhaseEmptyTicks = 0
         currentTab = tabPriorityOrder.firstOrNull { it.isEnabled(config) } ?: MainTab.MOVE
@@ -907,34 +909,55 @@ class AutomationEngine private constructor(context: Context) {
         sw: Int,
         sh: Int
     ) {
-        val claimBtn = receiveGiftTask.findNextClaimGiftButton(screenBitmap, ocrItems)
-        if (claimBtn != null) {
+        val claimTarget = receiveGiftTask.findNextClaimGiftButton(screenBitmap, ocrItems)
+        if (claimTarget != null) {
             currentPhaseEmptyTicks = 0
-            appendLog("[禮物]【接收禮物】點擊領取好友送來的禮物 (綠色播放鈕)！")
-            FloatingOverlayService.clickWithOverlayPassthrough(claimBtn) {
-                service.clickRect(claimBtn)
+            val isAd = claimTarget.isAd
+            val label = claimTarget.label
+            val rect = claimTarget.bounds
+
+            appendLog("[禮物]【接收禮物】點擊【$label】(座標: ${rect.centerX()}, ${rect.centerY()})！")
+            FloatingOverlayService.clickWithOverlayPassthrough(rect) {
+                service.clickRect(rect)
             }
-            delay(500)
-            popupRetryTicks = 0
-            transitionTo(EngineState.TRIGGER_AD_POPUP, "已點擊領取禮物，等待廣告或確認視窗...", "[禮物] 領取禮物中...")
+
+            if (isAd) {
+                updateDetail("[收禮] 點擊【$label】，觀看廣告中...", "[廣告] 廣告監控中...")
+                delay(500)
+                popupRetryTicks = 0
+                transitionTo(EngineState.TRIGGER_AD_POPUP, "已點擊看廣告領取禮物，等待廣告...", "[禮物] 領取禮物中...")
+            } else {
+                updateDetail("[收禮] 已點擊【$label】，直接領取獎勵！", "[收禮] 直接領取完成")
+                delay(600)
+            }
             return
         }
 
         currentPhaseEmptyTicks++
-        if (currentPhaseEmptyTicks < 2) {
-            updateDetail("[收禮] 檢查是否有好友送來的禮物 ($currentPhaseEmptyTicks/2)...", "[收禮] 檢查禮物中...")
+        if (currentPhaseEmptyTicks == 1) {
+            appendLog("[清單]【接收禮物】向下滾動禮物清單搜尋更多待領禮物...")
+            updateDetail("[清單] 滾動禮物清單搜尋更多禮物...", "[清單] 滾動禮物清單...")
+            service.performSwipe(
+                startX = sw * 0.50f,
+                startY = sh * 0.75f,
+                endX = sw * 0.50f,
+                endY = sh * 0.35f,
+                durationMs = 380L
+            )
+            delay(600)
             return
         }
 
         currentPhaseEmptyTicks = 0
         isReceiveGiftCompleted = true
-        appendLog("[完成]【接收禮物】檢查完畢，點擊右上角 (X) 關閉視窗")
+        appendLog("[完成]【接收禮物】全部禮物領取完畢，點擊右上角 (X) 關閉視窗")
         val closeBtn = receiveGiftTask.getCloseButtonBounds(sw, sh)
         FloatingOverlayService.clickWithOverlayPassthrough(closeBtn) {
             service.clickRect(closeBtn)
         }
         currentPhase = getNextPhase(PatrolPhase.RECEIVE_GIFT)
-        updateDetail("[完成] 好友禮物已接收完畢，準備進入下一項...", "[完成] 收禮完成")
+        updateDetail("[完成] 好友禮物已全部接收完畢！", "[完成] 收禮完成")
+        delay(600)
     }
 
     private suspend fun handleFriendsPage(
@@ -944,14 +967,42 @@ class AutomationEngine private constructor(context: Context) {
         sw: Int,
         sh: Int
     ) {
+        // 0. 最優先檢查：是否跳出送禮結束的「贈送完畢」彈窗（已贈送金幣給你自己和XXX。[關閉]）！
+        val completedCloseBtn = friendGiftTask.findSentCompletedCloseButton(screenBitmap, ocrItems)
+        if (completedCloseBtn != null) {
+            appendLog("[禮物]【好友送禮】偵測到「贈送完畢」彈窗，點擊 [關閉] 繼續送禮！")
+            FloatingOverlayService.clickWithOverlayPassthrough(completedCloseBtn) {
+                service.clickRect(completedCloseBtn)
+            }
+            updateDetail("[禮物] 關閉贈送完畢視窗，準備送下一位...", "[禮物] 關閉彈窗")
+            delay(500)
+            return
+        }
+
         if (isFriendGiftCompleted) {
-            // 已完成好友送禮，直接點擊底部「集點」(首頁) 離開好友頁面！
+            if (config.enableFriendGiftTask && !isReceiveGiftCompleted) {
+                currentPhase = PatrolPhase.RECEIVE_GIFT
+                appendLog("[禮物]【好友送禮】已完成，點擊右上角【禮物盒】開啟收禮視窗！")
+                val giftBoxRect = receiveGiftTask.getHeaderGiftBoxRect(sw, sh)
+                FloatingOverlayService.clickWithOverlayPassthrough(giftBoxRect) {
+                    service.clickRect(giftBoxRect)
+                }
+                updateDetail("[禮物] 送禮已完成，開啟【禮物】視窗接收禮物...", "[禮物] 開啟禮物盒...")
+                delay(600)
+                return
+            }
+
+            // 若不需要接收禮物或收禮已完成，點擊底部「集點」返回首頁
+            friendGiftReturnHomeTicks++
             val mainTabBtn = friendGiftTask.getBottomMainTabRect(sw, sh, ocrItems)
-            appendLog("[完成] 好友送禮已完成，點擊底部「集點」返回首頁")
+            appendLog("[完成] 好友送禮已完成，點擊底部「集點」返回首頁 ($friendGiftReturnHomeTicks)")
             FloatingOverlayService.clickWithOverlayPassthrough(mainTabBtn) {
                 service.clickRect(mainTabBtn)
             }
-            delay(500)
+            if (friendGiftReturnHomeTicks >= 3) {
+                currentPhase = getNextPhase(PatrolPhase.RECEIVE_GIFT)
+            }
+            delay(600)
             return
         }
 
@@ -1010,14 +1061,26 @@ class AutomationEngine private constructor(context: Context) {
 
         // 4. 連續兩次滾動皆無新禮物按鈕 -> 代表所有好友皆已贈送完畢！
         isFriendGiftCompleted = true
-        appendLog("[完成]【好友送禮】所有好友禮物皆已贈送完畢！自動點擊底部「集點」返回首頁")
-        val mainTabBtn = friendGiftTask.getBottomMainTabRect(sw, sh, ocrItems)
-        FloatingOverlayService.clickWithOverlayPassthrough(mainTabBtn) {
-            service.clickRect(mainTabBtn)
+        if (config.enableFriendGiftTask && !isReceiveGiftCompleted) {
+            currentPhase = PatrolPhase.RECEIVE_GIFT
+            appendLog("[完成]【好友送禮】所有好友禮物皆已贈送完畢！直接點擊右上角【禮物盒】開啟收禮視窗！")
+            val giftBoxRect = receiveGiftTask.getHeaderGiftBoxRect(sw, sh)
+            FloatingOverlayService.clickWithOverlayPassthrough(giftBoxRect) {
+                service.clickRect(giftBoxRect)
+            }
+            updateDetail("[禮物] 開啟【禮物】視窗接收禮物中...", "[禮物] 接收禮物中...")
+            delay(600)
+            return
+        } else {
+            appendLog("[完成]【好友送禮】所有好友禮物皆已贈送完畢！自動點擊底部「集點」返回首頁")
+            val mainTabBtn = friendGiftTask.getBottomMainTabRect(sw, sh, ocrItems)
+            FloatingOverlayService.clickWithOverlayPassthrough(mainTabBtn) {
+                service.clickRect(mainTabBtn)
+            }
+            currentPhase = getNextPhase(PatrolPhase.FRIEND_GIFT)
+            updateDetail("[完成] 好友送禮全部完成，返回首頁中...", "[完成] 好友送禮完成")
+            delay(600)
         }
-        currentPhase = getNextPhase(PatrolPhase.FRIEND_GIFT)
-        updateDetail("[完成] 好友送禮全部完成，返回首頁中...", "[完成] 好友送禮完成")
-        delay(600)
     }
 
     private fun getTabRect(tab: MainTab, sw: Int, sh: Int, ocrItems: List<OcrItem>): Rect {

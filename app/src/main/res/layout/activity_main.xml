@@ -42,7 +42,7 @@
                     android:background="@drawable/bg_version_pill"
                     android:paddingHorizontal="8dp"
                     android:paddingVertical="2dp"
-                    android:text="v1.15.15"
+                    android:text="v1.15.20"
                     android:textColor="#FFFFFF"
                     android:textSize="11sp"
                     android:textStyle="bold" />

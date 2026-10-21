@@ -25,11 +25,12 @@ class FriendGiftTask {
     }
 
     fun isFriendsPage(ocrItems: List<OcrItem>, sh: Int = 0): Boolean {
-        // 0. 若畫面上出現送禮確認彈窗（如『要向...贈送金幣嗎？』『也送給自己』『剩餘贈送次數』），必定屬於好友頁面！
+        // 0. 若畫面上出現送禮確認彈窗（如『要向...贈送金幣嗎？』『也送給自己』『剩餘贈送次數』『贈送完畢』），必定屬於好友頁面！
         val hasSendGiftModal = ocrItems.any { item ->
             val t = item.text.replace(" ", "")
             t.contains("也送給自己") || t.contains("贈送金幣") || t.contains("剩餘贈送次數") ||
-            (t.contains("要向") && t.contains("金幣"))
+            (t.contains("要向") && t.contains("金幣")) ||
+            t.contains("贈送完畢") || (t.contains("已贈送") && t.contains("金幣"))
         }
         if (hasSendGiftModal) return true
 
@@ -285,42 +286,77 @@ class FriendGiftTask {
     }
 
     /**
-     * 底部導覽列「好友」按鈕 (第 2 顆，優先比對 OCR「好友」，備援相對幾何座標)
+     * 檢查送禮完成確認彈窗（如『贈送完畢』『已贈送金幣給你自己和...』，下方有 [關閉] 按鈕）
      */
-    fun getBottomFriendsTabRect(sw: Int, sh: Int, ocrItems: List<OcrItem> = emptyList()): Rect {
-        val ocrMatch = ocrItems.firstOrNull { item ->
+    fun findSentCompletedCloseButton(
+        screenBitmap: Bitmap,
+        ocrItems: List<OcrItem>
+    ): Rect? {
+        val sh = screenBitmap.height
+        val sw = screenBitmap.width
+
+        // 1. 檢查是否存在「贈送完畢」或「已贈送金幣」特徵
+        val hasSentCompletedText = ocrItems.any { item ->
+            val cy = item.bounds.centerY().toFloat() / sh
+            val t = item.text.replace(" ", "")
+            cy in 0.20f..0.50f && (
+                t.contains("贈送完畢") ||
+                t.contains("已贈送") ||
+                (t.contains("贈送") && t.contains("自己"))
+            )
+        }
+        if (!hasSentCompletedText) return null
+
+        // 2. OCR 搜尋彈窗下半部 [關閉] 按鈕 (y in 0.65f..0.82f, x in 0.15f..0.85f)
+        val closeOcr = ocrItems.firstOrNull { item ->
             val cy = item.bounds.centerY().toFloat() / sh
             val cx = item.bounds.centerX().toFloat() / sw
-            cy > 0.85f && cx in 0.20f..0.55f && item.text.contains("好友")
+            val t = item.text.trim()
+            cy in 0.65f..0.82f && cx in 0.20f..0.80f && (
+                t == "關閉" || t.contains("關閉") || t == "確認" || t == "確定" || t == "OK"
+            )
         }
-        if (ocrMatch != null) {
-            return ocrMatch.bounds
+        if (closeOcr != null) {
+            val cy = closeOcr.bounds.centerY()
+            val halfH = (sh * 0.025f).toInt()
+            return Rect(
+                (sw * 0.15f).toInt(),
+                cy - halfH,
+                (sw * 0.85f).toInt(),
+                cy + halfH
+            )
         }
+
+        // 3. 備援幾何座標：中央白底黑邊 [關閉] 膠囊按鈕 (y ≈ 0.707f..0.755f, x ≈ 0.15f..0.85f)
         return Rect(
-            (sw * 0.25f).toInt(),
-            (sh * 0.91f).toInt(),
-            (sw * 0.50f).toInt(),
-            (sh * 0.985f).toInt()
+            (sw * 0.15f).toInt(),
+            (sh * 0.705f).toInt(),
+            (sw * 0.85f).toInt(),
+            (sh * 0.755f).toInt()
         )
     }
 
     /**
-     * 底部導覽列「集點」(首頁) 按鈕 (第 1 顆，優先比對 OCR「集點」，備援相對幾何座標)
+     * 底部導覽列「好友」按鈕 (第 2 顆，位於底部 x ≈ 0.25f..0.50f, y ≈ 0.915f..0.975f，避開邊緣與首頁手勢)
+     */
+    fun getBottomFriendsTabRect(sw: Int, sh: Int, ocrItems: List<OcrItem> = emptyList()): Rect {
+        return Rect(
+            (sw * 0.27f).toInt(),
+            (sh * 0.915f).toInt(),
+            (sw * 0.48f).toInt(),
+            (sh * 0.975f).toInt()
+        )
+    }
+
+    /**
+     * 底部導覽列「集點」(首頁) 按鈕 (第 1 顆，位於底部 x ≈ 0.03f..0.23f, y ≈ 0.915f..0.975f，避開邊緣與首頁手勢)
      */
     fun getBottomMainTabRect(sw: Int, sh: Int, ocrItems: List<OcrItem> = emptyList()): Rect {
-        val ocrMatch = ocrItems.firstOrNull { item ->
-            val cy = item.bounds.centerY().toFloat() / sh
-            val cx = item.bounds.centerX().toFloat() / sw
-            cy > 0.85f && cx < 0.30f && (item.text.contains("集點") || item.text.contains("首頁"))
-        }
-        if (ocrMatch != null) {
-            return ocrMatch.bounds
-        }
         return Rect(
-            (sw * 0.02f).toInt(),
-            (sh * 0.91f).toInt(),
-            (sw * 0.26f).toInt(),
-            (sh * 0.985f).toInt()
+            (sw * 0.03f).toInt(),
+            (sh * 0.915f).toInt(),
+            (sw * 0.23f).toInt(),
+            (sh * 0.975f).toInt()
         )
     }
 }
