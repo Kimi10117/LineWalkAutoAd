@@ -143,6 +143,7 @@ class AutomationEngine private constructor(context: Context) {
     private var isBingoCompleted = false
     private var isLotteryCompleted = false
     private var hasClickedLotteryAdReward = false
+    private var lotteryResultRewardWaitTicks = 0
     private var isMissionCompleted = false
     private var isReceiveGiftCompleted = false
     private var isFriendGiftCompleted = false
@@ -171,6 +172,7 @@ class AutomationEngine private constructor(context: Context) {
         isBingoCompleted = false
         isLotteryCompleted = false
         hasClickedLotteryAdReward = false
+        lotteryResultRewardWaitTicks = 0
         isMissionCompleted = false
         isReceiveGiftCompleted = false
         isFriendGiftCompleted = false
@@ -735,34 +737,69 @@ class AutomationEngine private constructor(context: Context) {
         val hasLotteryResultContext = ocrItems.any { item ->
             val t = item.text.replace(" ", "")
             t.contains("中獎囉") || t.contains("中獎") || t.contains("Thankyouforwatching") ||
-            (t.contains("枚金幣") && t.contains("中獎"))
+            (t.contains("枚金幣") && t.contains("中獎")) ||
+            (t.contains("金幣") && t.contains("中獎")) ||
+            (item.bounds.centerY() > sh * 0.65f && (t.contains("分享給好友") || t.contains("分享"))) ||
+            (item.bounds.centerY() in (sh * 0.60f).toInt()..(sh * 0.74f).toInt() &&
+                (t.contains("x1", ignoreCase = true) || t.contains("1張")) &&
+                !t.contains("金幣") && !t.contains("票券"))
         }
 
-        // 0A. 抽獎結果畫面中：若尚未點擊看廣告獲票，優先點擊綠色按鈕 [▶ [抽獎] x1 獲得]！
-        val rewardAdBtn = if (!hasClickedLotteryAdReward) lotteryTask.findLotteryRewardAdButton(screenBitmap, ocrItems) else null
-        if (rewardAdBtn != null) {
-            hasClickedLotteryAdReward = true
-            currentPhaseEmptyTicks = 0
-            appendLog("[抽抽樂] 點擊看廣告獲票按鈕！")
-            FloatingOverlayService.clickWithOverlayPassthrough(rewardAdBtn) {
-                service.clickRect(rewardAdBtn)
+        // 0A. 抽獎結果畫面中：若尚未點擊看廣告獲票，優先尋找並點擊綠色按鈕 [▶ [抽獎] x1 獲得]！
+        if (hasLotteryResultContext && !hasClickedLotteryAdReward) {
+            val rewardAdBtn = lotteryTask.findLotteryRewardAdButton(screenBitmap, ocrItems)
+            if (rewardAdBtn != null) {
+                hasClickedLotteryAdReward = true
+                lotteryResultRewardWaitTicks = 0
+                currentPhaseEmptyTicks = 0
+                appendLog("[抽抽樂] 偵測到中獎結果，優先點擊看廣告獲票按鈕！")
+                FloatingOverlayService.clickWithOverlayPassthrough(rewardAdBtn) {
+                    service.clickRect(rewardAdBtn)
+                }
+                adCloserHandler.onEnterAdMode()
+                transitionTo(EngineState.AD_WATCHING, "已點擊 [x1 獲得]，觀看廣告獲得票券中...", "[抽獎] 廣告獲票中...")
+                return
             }
-            adCloserHandler.onEnterAdMode()
-            transitionTo(EngineState.AD_WATCHING, "已點擊 [x1 獲得]，觀看廣告獲得票券中...", "[抽獎] 廣告獲票中...")
-            return
+
+            // 若尚未找到廣告獲票按鈕，先等待最多 3 輪確認（避免因動畫延遲或 OCR 讀取時機過早關閉彈窗）
+            lotteryResultRewardWaitTicks++
+            if (lotteryResultRewardWaitTicks < 4) {
+                updateDetail("[抽獎] 等待看廣告獲票按鈕 ($lotteryResultRewardWaitTicks/4)...", "[抽獎] 等待獲票按鈕...")
+                return
+            }
+            // 超過 3 輪等待仍無獲票按鈕，表示該次中獎確無廣告獲票可點，允許關閉
+            lotteryResultRewardWaitTicks = 0
+            val resultCloseBtn = lotteryTask.findLotteryResultCloseButton(screenBitmap, ocrItems)
+            if (resultCloseBtn != null) {
+                appendLog("[抽獎]【抽抽樂結果】無廣告獲票按鈕，點擊彈窗底部的 [關閉] 按鈕")
+                FloatingOverlayService.clickWithOverlayPassthrough(resultCloseBtn) {
+                    service.clickRect(resultCloseBtn)
+                }
+                delay(400)
+                return
+            }
         }
 
-        // 0B. 若處於抽獎結果彈窗但已點過廣告獲票或無廣告按鈕，點擊彈窗底部的「關閉」按鈕回到抽獎主面板
-        val resultCloseBtn = lotteryTask.findLotteryResultCloseButton(screenBitmap, ocrItems)
-        if (resultCloseBtn != null && (hasClickedLotteryAdReward || hasLotteryResultContext)) {
+        // 0B. 若處於抽獎結果彈窗且「已點過廣告獲票」，點擊彈窗底部的「關閉」按鈕回到抽獎主面板
+        if (hasLotteryResultContext && hasClickedLotteryAdReward) {
+            val resultCloseBtn = lotteryTask.findLotteryResultCloseButton(screenBitmap, ocrItems)
+            if (resultCloseBtn != null) {
+                hasClickedLotteryAdReward = false
+                lotteryResultRewardWaitTicks = 0
+                currentPhaseEmptyTicks = 0
+                appendLog("[抽獎]【抽抽樂結果】已完成看廣告獲票，點擊彈窗底部的 [關閉] 按鈕")
+                FloatingOverlayService.clickWithOverlayPassthrough(resultCloseBtn) {
+                    service.clickRect(resultCloseBtn)
+                }
+                delay(400)
+                return
+            }
+        }
+
+        // 若不在結果彈窗中，重設相關暫存狀態
+        if (!hasLotteryResultContext) {
             hasClickedLotteryAdReward = false
-            currentPhaseEmptyTicks = 0
-            appendLog("[抽獎]【抽抽樂結果】點擊彈窗底部的 [關閉] 按鈕")
-            FloatingOverlayService.clickWithOverlayPassthrough(resultCloseBtn) {
-                service.clickRect(resultCloseBtn)
-            }
-            delay(400)
-            return
+            lotteryResultRewardWaitTicks = 0
         }
 
         // 1. 依使用者規則尋找：【優先50抽】➔【次選免費抽】➔【嚴禁點5張】
@@ -1334,6 +1371,7 @@ class AutomationEngine private constructor(context: Context) {
             val lotteryRewardBtn = if (!hasClickedLotteryAdReward) lotteryTask.findLotteryRewardAdButton(screenBitmap, ocrItems) else null
             if (lotteryRewardBtn != null) {
                 hasClickedLotteryAdReward = true
+                lotteryResultRewardWaitTicks = 0
                 appendLog("[抽抽樂] 偵測到中獎結果！點擊看廣告獲票按鈕")
                 FloatingOverlayService.clickWithOverlayPassthrough(lotteryRewardBtn) {
                     service.clickRect(lotteryRewardBtn)
@@ -1351,6 +1389,7 @@ class AutomationEngine private constructor(context: Context) {
             val resultCloseBtn = lotteryTask.findLotteryResultCloseButton(screenBitmap, ocrItems)
             if (resultCloseBtn != null && hasClickedLotteryAdReward) {
                 hasClickedLotteryAdReward = false
+                lotteryResultRewardWaitTicks = 0
                 appendLog("[抽獎]【抽抽樂結果】點擊彈窗底部的 [關閉] 按鈕")
                 FloatingOverlayService.clickWithOverlayPassthrough(resultCloseBtn) {
                     service.clickRect(resultCloseBtn)

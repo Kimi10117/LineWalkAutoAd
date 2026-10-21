@@ -201,9 +201,9 @@ class LotteryTask {
 
     /**
      * 偵測抽抽樂抽獎後的結果彈窗綠色看廣告獲票按鈕：[▶ [抽獎] x1 獲得]
-     * - 背景為 LINE 鮮綠色 (#06C856 / g > 140 && g > r + 35 && g > b + 35)
-     * - 位於畫面中下部 (y ≈ 0.60f ~ 0.76f)
-     * - 嚴格安全機制：必須在具有抽抽樂/中獎上下文（中獎囉、中獎、Thank you for watching 等）時才生效！
+     * - 背景為 LINE 鮮綠色 (#06C856 / g > 130 && g > r + 30 && g > b + 30)
+     * - 位於畫面中下部 (y ≈ 0.60f ~ 0.74f)
+     * - 嚴格安全機制：必須在具有抽抽樂/中獎上下文（中獎囉、中獎、枚金幣、分享給好友、抽抽樂等）時才生效！
      * - 絕對排除日常領獎標題（獲得票券！、獲得金幣！等）！
      */
     fun findLotteryRewardAdButton(screenBitmap: Bitmap, ocrItems: List<OcrItem>): Rect? {
@@ -215,54 +215,136 @@ class LotteryTask {
             val t = item.text.replace(" ", "")
             t.contains("中獎囉") || t.contains("中獎") || t.contains("Thankyouforwatching") ||
             (t.contains("枚金幣") && t.contains("中獎")) ||
-            (item.bounds.centerY() < sh * 0.20f && t.contains("抽抽樂"))
+            (t.contains("金幣") && t.contains("中獎")) ||
+            (item.bounds.centerY() < sh * 0.22f && t.contains("抽抽樂")) ||
+            (item.bounds.centerY() > sh * 0.65f && (t.contains("分享給好友") || t.contains("分享"))) ||
+            (item.bounds.centerY() in (sh * 0.60f).toInt()..(sh * 0.74f).toInt() &&
+                (t.contains("x1", ignoreCase = true) || t.contains("1張")) &&
+                !t.contains("金幣") && !t.contains("票券"))
         }
         if (!hasLotteryResultContext) {
             return null
         }
 
-        // 1. 優先：綠色膠囊按鈕像素聚類偵測 (y: 0.60f..0.76f, x: 0.12f..0.88f)
-        val greenPts = mutableListOf<android.graphics.Point>()
+        // 1. 優先策略 A：連續實心綠色行分析 (Contiguous Solid Green Rows)
+        // 實心膠囊按鈕在 y: 0.60f..0.74f, x: 0.10f..0.90f
         val yStart = (sh * 0.60f).toInt()
-        val yEnd = (sh * 0.76f).toInt()
-        val xStart = (sw * 0.12f).toInt()
-        val xEnd = (sw * 0.88f).toInt()
+        val yEnd = (sh * 0.74f).toInt()
+        val xStart = (sw * 0.10f).toInt()
+        val xEnd = (sw * 0.90f).toInt()
+        val stepY = 2
+        val stepX = 2
+        val roiSampledWidth = (xEnd - xStart) / stepX
+        val minSolidRowGreen = (roiSampledWidth * 0.35f).toInt()
 
-        for (y in yStart..yEnd step 3) {
-            for (x in xStart..xEnd step 3) {
+        val solidRows = mutableListOf<Int>()
+        for (y in yStart..yEnd step stepY) {
+            var greenCount = 0
+            for (x in xStart..xEnd step stepX) {
                 val c = screenBitmap.getPixel(x, y)
                 val r = (c shr 16) and 0xFF
                 val g = (c shr 8) and 0xFF
                 val b = c and 0xFF
-                if (g > 140 && g > r + 35 && g > b + 35) {
-                    greenPts.add(android.graphics.Point(x, y))
+                if (g > 130 && (g - r > 30) && (g - b > 30)) {
+                    greenCount++
+                }
+            }
+            if (greenCount >= minSolidRowGreen) {
+                solidRows.add(y)
+            }
+        }
+
+        // 尋找連續綠色行段落（完全過濾掉分享按鈕 1-2 像素的邊框綠線）
+        val runs = mutableListOf<MutableList<Int>>()
+        var curRun = mutableListOf<Int>()
+        for (y in solidRows) {
+            if (curRun.isEmpty() || y - curRun.last() <= stepY * 2) {
+                curRun.add(y)
+            } else {
+                runs.add(curRun)
+                curRun = mutableListOf(y)
+            }
+        }
+        if (curRun.isNotEmpty()) {
+            runs.add(curRun)
+        }
+
+        for (run in runs) {
+            val yMin = run.first()
+            val yMax = run.last()
+            val runHeight = yMax - yMin
+            // 實心膠囊按鈕高度應佔螢幕 2.5% ~ 12% 且至少連續取樣 4 行
+            if (run.size >= 4 && runHeight in (sh * 0.025f).toInt()..(sh * 0.12f).toInt()) {
+                var xMin = Int.MAX_VALUE
+                var xMax = Int.MIN_VALUE
+                for (y in run) {
+                    for (x in xStart..xEnd step stepX) {
+                        val c = screenBitmap.getPixel(x, y)
+                        val r = (c shr 16) and 0xFF
+                        val g = (c shr 8) and 0xFF
+                        val b = c and 0xFF
+                        if (g > 130 && (g - r > 30) && (g - b > 30)) {
+                            if (x < xMin) xMin = x
+                            if (x > xMax) xMax = x
+                        }
+                    }
+                }
+                if (xMax > xMin && (xMax - xMin) >= (sw * 0.35f).toInt()) {
+                    return Rect(xMin, yMin, xMax, yMax)
                 }
             }
         }
 
-        if (greenPts.size >= 50) {
-            val minX = greenPts.minOf { it.x }
-            val maxX = greenPts.maxOf { it.x }
-            val minY = greenPts.minOf { it.y }
-            val maxY = greenPts.maxOf { it.y }
-            // 膠囊按鈕必須具備相當寬度 (>= 40% 螢幕寬度)，排除小的圓形圖示 (如放置蘋果)
-            if (maxX - minX >= (sw * 0.40f).toInt() && maxY - minY in 15..(sh * 0.12f).toInt()) {
-                return Rect(minX, minY, maxX, maxY)
-            }
-        }
-
-        // 2. 備援：OCR 比對 (y: 0.60f..0.76f，文字明確為 "x1獲得" 或 "x1"，絕不可匹配標題如 "獲得票券！" 或 "獲得金幣！")
+        // 2. 備援策略 B：OCR 比對 (y: 0.60f..0.74f，文字包含 "x1"、"1張" 或 "獲得")
         val ocrMatch = ocrItems.firstOrNull { item ->
             val cy = item.bounds.centerY()
             val t = item.text.replace(" ", "")
             cy in yStart..yEnd &&
             !t.endsWith("！") && !t.endsWith("!") &&
             !t.contains("票券") && !t.contains("金幣") &&
-            (t.contains("x1獲得") || (t.contains("x1") && t.contains("獲得")) || (t.contains("1張") && t.contains("獲得"))) &&
-            !t.contains("分享") && !t.contains("關閉")
+            !t.contains("分享") && !t.contains("關閉") &&
+            (t.contains("x1", ignoreCase = true) || t.contains("1張") || t.contains("獲得"))
         }
         if (ocrMatch != null) {
-            return ocrMatch.bounds
+            val left = (sw * 0.15f).toInt()
+            val right = (sw * 0.85f).toInt()
+            val top = ocrMatch.bounds.top.coerceAtLeast(yStart)
+            val bottom = ocrMatch.bounds.bottom.coerceAtMost(yEnd)
+            return Rect(left, top, right, bottom)
+        }
+
+        // 3. 備援策略 C：幾何中心綠色像素探針 (Center Green Probe)
+        val cx = sw / 2
+        for (y in (sh * 0.64f).toInt()..(sh * 0.70f).toInt() step 4) {
+            val c = screenBitmap.getPixel(cx, y)
+            val r = (c shr 16) and 0xFF
+            val g = (c shr 8) and 0xFF
+            val b = c and 0xFF
+            if (g > 130 && (g - r > 30) && (g - b > 30)) {
+                var lx = cx
+                while (lx > (sw * 0.08f).toInt()) {
+                    val p = screenBitmap.getPixel(lx, y)
+                    val pr = (p shr 16) and 0xFF
+                    val pg = (p shr 8) and 0xFF
+                    val pb = p and 0xFF
+                    if (!(pg > 130 && (pg - pr > 30) && (pg - pb > 30))) break
+                    lx -= 3
+                }
+                var rx = cx
+                while (rx < (sw * 0.92f).toInt()) {
+                    val p = screenBitmap.getPixel(rx, y)
+                    val pr = (p shr 16) and 0xFF
+                    val pg = (p shr 8) and 0xFF
+                    val pb = p and 0xFF
+                    if (!(pg > 130 && (pg - pr > 30) && (pg - pb > 30))) break
+                    rx += 3
+                }
+                if (rx - lx >= (sw * 0.35f).toInt()) {
+                    val topY = (y - sh * 0.025f).toInt().coerceAtLeast(yStart)
+                    val bottomY = (y + sh * 0.025f).toInt().coerceAtMost(yEnd)
+                    return Rect(lx, topY, rx, bottomY)
+                }
+            }
         }
 
         return null

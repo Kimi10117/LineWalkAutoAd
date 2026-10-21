@@ -187,17 +187,14 @@ class OcrRecognizer {
         val sw = screenBitmap.width
         val sh = screenBitmap.height
 
-        // 若畫面上存在抽抽樂看廣告獲票鈕 [x1 獲得]，絕不直接點擊關閉，放行讓玩家看廣告領獎！
-        val hasLotteryAdOcr = items.any { item ->
+        // 若處於抽抽樂中獎結果畫面（中獎囉、中獎、分享給好友）或存在看廣告獲票鈕 [x1 獲得]，絕不直接點擊關閉，放行讓 LotteryTask 處理！
+        val isLotteryResultScreen = items.any { item ->
             val cy = item.bounds.centerY().toFloat() / sh
             val t = item.text.replace(" ", "")
-            cy in 0.60f..0.76f &&
-            !t.endsWith("！") && !t.endsWith("!") &&
-            !t.contains("票券") && !t.contains("金幣") &&
-            (t.contains("x1獲得") || (t.contains("x1") && t.contains("獲得")) || (t.contains("1張") && t.contains("獲得"))) &&
-            !t.contains("分享") && !t.contains("關閉")
+            t.contains("中獎囉") || t.contains("中獎") || t.contains("分享給好友") ||
+            (cy in 0.60f..0.76f && (t.contains("x1", ignoreCase = true) || t.contains("1張")) && !t.contains("金幣") && !t.contains("票券"))
         }
-        if (hasLotteryAdOcr) {
+        if (isLotteryResultScreen) {
             return null
         }
 
