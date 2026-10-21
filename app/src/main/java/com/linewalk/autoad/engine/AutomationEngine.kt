@@ -909,9 +909,17 @@ class AutomationEngine private constructor(context: Context) {
             FloatingOverlayService.clickWithOverlayPassthrough(selfGiftOption.second) {
                 service.clickRect(selfGiftOption.second)
             }
-            if (selfGiftOption.first.contains("看廣告") || selfGiftOption.first.contains("送自己")) {
+            val isAd = selfGiftOption.first.contains("也送給自己") ||
+                       selfGiftOption.first.contains("送給自己") ||
+                       selfGiftOption.first.contains("送自己") ||
+                       selfGiftOption.first.contains("看廣告")
+            if (isAd) {
+                updateDetail("🎁 點擊【${selfGiftOption.first}】，觀看廣告中...", "📺 廣告監控中...")
                 adCloserHandler.onEnterAdMode()
                 transitionTo(EngineState.AD_WATCHING, "送禮物也送自己，觀看廣告中...", "📺 廣告監控中...")
+            } else {
+                updateDetail("🎁 已贈送好友禮物，繼續檢查下一位...", "🎁 贈送完成")
+                delay(500)
             }
             return
         }
@@ -921,10 +929,12 @@ class AutomationEngine private constructor(context: Context) {
         if (nextGiftBtn != null) {
             friendGiftEmptyTicks = 0
             friendGiftTask.markGifted(android.graphics.Point(nextGiftBtn.centerX(), nextGiftBtn.centerY()))
-            appendLog("🎁【好友送禮】點擊好友排行榜禮物按鈕！")
+            appendLog("🎁【好友送禮】點擊好友排行榜綠色禮物按鈕 (座標: ${nextGiftBtn.centerX()}, ${nextGiftBtn.centerY()})！")
+            updateDetail("🎁 點擊好友禮物按鈕，等待送禮彈窗...", "🎁 贈送禮物中...")
             FloatingOverlayService.clickWithOverlayPassthrough(nextGiftBtn) {
                 service.clickRect(nextGiftBtn)
             }
+            delay(500)
             return
         }
 
@@ -932,6 +942,7 @@ class AutomationEngine private constructor(context: Context) {
         friendGiftEmptyTicks++
         if (friendGiftEmptyTicks <= 2) {
             appendLog("📜【好友送禮】向下滾動清單搜尋更多好友 ($friendGiftEmptyTicks/2)...")
+            updateDetail("📜 滾動清單搜尋更多好友 ($friendGiftEmptyTicks/2)...", "📜 滾動好友清單...")
             service.performSwipe(
                 startX = sw * 0.50f,
                 startY = sh * 0.70f,
@@ -939,6 +950,8 @@ class AutomationEngine private constructor(context: Context) {
                 endY = sh * 0.35f,
                 durationMs = 380L
             )
+            friendGiftTask.resetSession()
+            delay(600)
             return
         }
 
@@ -951,6 +964,7 @@ class AutomationEngine private constructor(context: Context) {
         }
         currentPhase = getNextPhase(PatrolPhase.FRIEND_GIFT)
         updateDetail("🎉 好友送禮全部完成，返回首頁中...", "🎉 好友送禮完成")
+        delay(600)
     }
 
     private fun getTabRect(tab: MainTab, sw: Int, sh: Int, ocrItems: List<OcrItem>): Rect {
@@ -1345,6 +1359,26 @@ class AutomationEngine private constructor(context: Context) {
         val popupAction = findPopupActionTarget(screenBitmap, ocrItems)
         if (popupAction != null) {
             executePopupAction(service, popupAction)
+            return
+        }
+
+        // 檢查是否彈出好友送禮確認彈窗（『也送給自己』）
+        val selfGiftOption = friendGiftTask.findSelfGiftButton(screenBitmap, ocrItems)
+        if (selfGiftOption != null) {
+            appendLog("🎁【好友送禮】等待彈窗中偵測到【${selfGiftOption.first}】，立即點擊！")
+            FloatingOverlayService.clickWithOverlayPassthrough(selfGiftOption.second) {
+                service.clickRect(selfGiftOption.second)
+            }
+            val isAd = selfGiftOption.first.contains("也送給自己") ||
+                       selfGiftOption.first.contains("送給自己") ||
+                       selfGiftOption.first.contains("送自己") ||
+                       selfGiftOption.first.contains("看廣告")
+            if (isAd) {
+                adCloserHandler.onEnterAdMode()
+                transitionTo(EngineState.AD_WATCHING, "送禮物也送自己，觀看廣告中...", "📺 廣告監控中...")
+            } else {
+                transitionTo(EngineState.IN_GAME_SCAN, "已贈送好友禮物，繼續巡邏...", "🎁 贈送完成")
+            }
             return
         }
 

@@ -25,6 +25,14 @@ class FriendGiftTask {
     }
 
     fun isFriendsPage(ocrItems: List<OcrItem>, sh: Int = 0): Boolean {
+        // 0. 若畫面上出現送禮確認彈窗（如『要向...贈送金幣嗎？』『也送給自己』『剩餘贈送次數』），必定屬於好友頁面！
+        val hasSendGiftModal = ocrItems.any { item ->
+            val t = item.text.replace(" ", "")
+            t.contains("也送給自己") || t.contains("贈送金幣") || t.contains("剩餘贈送次數") ||
+            (t.contains("要向") && t.contains("金幣"))
+        }
+        if (hasSendGiftModal) return true
+
         // 嚴格排除主畫面四大分頁特徵
         val hasMainTabs = ocrItems.any { item ->
             val cy = item.bounds.centerY()
@@ -34,18 +42,26 @@ class FriendGiftTask {
         }
         if (hasMainTabs) return false
 
-        val maxTopY = if (sh > 0) sh * 0.25f else 500f
+        // 1. 好友頁面專屬特徵（排行榜/邀請/好友清單/階層）
+        val maxTopY = if (sh > 0) sh * 0.32f else 600f
         return ocrItems.any { item ->
             item.bounds.centerY() < maxTopY && (
                 item.text.contains("好友排行榜") ||
                 item.text.contains("排行榜") ||
-                item.text.contains("好友清單")
+                item.text.contains("邀請好友") ||
+                item.text.contains("好友清單") ||
+                item.text.contains("查看階層") ||
+                item.text.contains("階層") ||
+                item.text.contains("青銅") ||
+                item.text.contains("白銀") ||
+                item.text.contains("黃金")
             )
         }
     }
 
     /**
-     * 尋找畫面中尚未贈送的綠色「禮物」按鈕 (x in 0.75f..0.95f, y in 0.34f..0.88f)
+     * 尋找畫面中尚未贈送的綠色「禮物」按鈕 (x in 0.76f..0.95f, y in 0.38f..0.85f)
+     * 採用精準的相鄰點間距聚類 (Gap Clustering)，完美區分每個好友列的獨立按鈕，並精確點擊在按鈕正中心！
      */
     fun findNextGiftButton(
         screenBitmap: Bitmap,
@@ -54,43 +70,21 @@ class FriendGiftTask {
         val sh = screenBitmap.height
         val sw = screenBitmap.width
 
-        // 1. OCR 辨識「禮物」文字 (x > 0.75f, y in 0.38f..0.85f)
-        val giftOcrItems = ocrItems.filter { item ->
-            val cy = item.bounds.centerY()
-            val cx = item.bounds.centerX()
-            cy in (sh * 0.38f).toInt()..(sh * 0.85f).toInt() &&
-            cx > (sw * 0.75f).toInt() &&
-            item.text.contains("禮物")
-        }.sortedBy { it.bounds.top }
-
-        for (item in giftOcrItems) {
-            val cx = item.bounds.centerX()
-            val cy = item.bounds.centerY()
-            if (!isAlreadyGifted(cx, cy)) {
-                return Rect(
-                    (sw * 0.78f).toInt(),
-                    cy - 45,
-                    (sw * 0.94f).toInt(),
-                    cy + 15
-                )
-            }
-        }
-
-        // 2. 2D 綠色方塊區塊偵測 (LINE 亮綠 #06C755: g > 140 && g > r + 30 && g > b + 30)
-        // 搜尋右側按鈕區域 x in 0.78f..0.94f, y in 0.38f..0.85f
+        // 1. 優先：2D 綠色方塊區塊偵測 (LINE 亮綠 #06C755: g > 130 && g > r + 25 && g > b + 25)
+        // 搜尋右側按鈕區域 x in 0.76f..0.95f, y in 0.38f..0.85f
         val greenPts = mutableListOf<android.graphics.Point>()
         val yStart = (sh * 0.38f).toInt()
         val yEnd = (sh * 0.85f).toInt()
-        val xStart = (sw * 0.78f).toInt()
-        val xEnd = (sw * 0.94f).toInt()
+        val xStart = (sw * 0.76f).toInt()
+        val xEnd = (sw * 0.95f).toInt()
 
-        for (y in yStart..yEnd step 3) {
-            for (x in xStart..xEnd step 3) {
+        for (y in yStart..yEnd step 2) {
+            for (x in xStart..xEnd step 2) {
                 val c = screenBitmap.getPixel(x, y)
                 val r = (c shr 16) and 0xFF
                 val g = (c shr 8) and 0xFF
                 val b = c and 0xFF
-                if (g > 140 && g > r + 30 && g > b + 30) {
+                if (g > 130 && (g - r) > 25 && (g - b) > 25) {
                     greenPts.add(android.graphics.Point(x, y))
                 }
             }
@@ -98,38 +92,68 @@ class FriendGiftTask {
 
         if (greenPts.isNotEmpty()) {
             val sortedByY = greenPts.sortedBy { it.y }
-            var currentCluster = mutableListOf<android.graphics.Point>()
-            var clusterStartY = sortedByY.first().y
+            val clusters = mutableListOf<Rect>()
+            var curCluster = mutableListOf<android.graphics.Point>()
+            val maxGap = (sh * 0.015f).toInt().coerceAtLeast(8)
 
             for (pt in sortedByY) {
-                if (pt.y - clusterStartY <= (sh * 0.08f).toInt()) {
-                    currentCluster.add(pt)
+                if (curCluster.isEmpty() || (pt.y - curCluster.last().y) <= maxGap) {
+                    curCluster.add(pt)
                 } else {
-                    if (currentCluster.size >= 15) {
-                        val minX = currentCluster.minOf { it.x }
-                        val maxX = currentCluster.maxOf { it.x }
-                        val minY = currentCluster.minOf { it.y }
-                        val maxY = currentCluster.maxOf { it.y }
-                        val cx = (minX + maxX) / 2
-                        val cy = (minY + maxY) / 2
-                        if (!isAlreadyGifted(cx, cy)) {
-                            return Rect(minX, minY, maxX, maxY)
+                    if (curCluster.size >= 15) {
+                        val minX = curCluster.minOf { it.x }
+                        val maxX = curCluster.maxOf { it.x }
+                        val minY = curCluster.minOf { it.y }
+                        val maxY = curCluster.maxOf { it.y }
+                        val w = maxX - minX
+                        val h = maxY - minY
+                        if (w in (sw * 0.06f).toInt()..(sw * 0.20f).toInt() && h in 15..(sh * 0.12f).toInt()) {
+                            clusters.add(Rect(minX, minY, maxX, maxY))
                         }
                     }
-                    currentCluster = mutableListOf(pt)
-                    clusterStartY = pt.y
+                    curCluster = mutableListOf(pt)
                 }
             }
-            if (currentCluster.size >= 15) {
-                val minX = currentCluster.minOf { it.x }
-                val maxX = currentCluster.maxOf { it.x }
-                val minY = currentCluster.minOf { it.y }
-                val maxY = currentCluster.maxOf { it.y }
-                val cx = (minX + maxX) / 2
-                val cy = (minY + maxY) / 2
-                if (!isAlreadyGifted(cx, cy)) {
-                    return Rect(minX, minY, maxX, maxY)
+            if (curCluster.size >= 15) {
+                val minX = curCluster.minOf { it.x }
+                val maxX = curCluster.maxOf { it.x }
+                val minY = curCluster.minOf { it.y }
+                val maxY = curCluster.maxOf { it.y }
+                val w = maxX - minX
+                val h = maxY - minY
+                if (w in (sw * 0.06f).toInt()..(sw * 0.20f).toInt() && h in 15..(sh * 0.12f).toInt()) {
+                    clusters.add(Rect(minX, minY, maxX, maxY))
                 }
+            }
+
+            for (rect in clusters) {
+                if (!isAlreadyGifted(rect.centerX(), rect.centerY(), sh)) {
+                    return rect
+                }
+            }
+        }
+
+        // 2. OCR 備援：辨識「禮物」文字 (x > 0.75f, y in 0.38f..0.85f)
+        val giftOcrItems = ocrItems.filter { item ->
+            val cy = item.bounds.centerY()
+            val cx = item.bounds.centerX()
+            cy in (sh * 0.38f).toInt()..(sh * 0.85f).toInt() &&
+            cx > (sw * 0.75f).toInt() &&
+            item.text.contains("禮物") &&
+            !item.text.contains("次數")
+        }.sortedBy { it.bounds.top }
+
+        for (item in giftOcrItems) {
+            val cx = item.bounds.centerX()
+            val cy = item.bounds.centerY()
+            val btnCenterY = cy - (sh * 0.035f).toInt()
+            if (!isAlreadyGifted(cx, btnCenterY, sh)) {
+                return Rect(
+                    (sw * 0.78f).toInt(),
+                    btnCenterY - (sh * 0.030f).toInt(),
+                    (sw * 0.94f).toInt(),
+                    btnCenterY + (sh * 0.030f).toInt()
+                )
             }
         }
 
@@ -137,10 +161,10 @@ class FriendGiftTask {
     }
 
     /**
-     * 檢查送禮彈窗：
+     * 檢查送禮確認彈窗：
      * - 使用者指定：【都以送禮物也送自己為主】！
-     * - 優先搜尋包含「送禮物也送自己」、「送自己」、「看廣告」或帶有播放圖示的按鈕
-     * - 次選回傳「送禮物 / 贈送」一般按鈕
+     * - 優先搜尋包含「也送給自己」、「送給自己」、「也送自己」之綠色膠囊按鈕 (帶有廣告播放鍵)
+     * - 次選回傳「贈送 / 送禮物」一般按鈕
      */
     fun findSelfGiftButton(
         screenBitmap: Bitmap,
@@ -149,29 +173,35 @@ class FriendGiftTask {
         val sh = screenBitmap.height
         val sw = screenBitmap.width
 
-        // 1. 【第一優先】OCR 辨識「也送給自己」/「送給自己」/「送禮物也送自己」/「看廣告」/「▶」
+        // 1. 【第一優先】OCR 辨識「也送給自己」/「送給自己」/「也送自己」
         val selfGiftOcr = ocrItems.firstOrNull { item ->
             val cy = item.bounds.centerY()
+            val t = item.text.replace(" ", "")
             cy in (sh * 0.35f).toInt()..(sh * 0.75f).toInt() && (
-                item.text.contains("也送給自己") ||
-                item.text.contains("送給自己") ||
-                item.text.contains("送禮物也送自己") ||
-                item.text.contains("送自己") ||
-                item.text.contains("看廣告") ||
-                item.text.contains("廣告") ||
-                item.text.contains("▶") ||
-                (item.text.contains("送") && item.text.contains("自己"))
+                t.contains("也送給自己") ||
+                t.contains("送給自己") ||
+                t.contains("也送自己") ||
+                t.contains("送禮物也送自己") ||
+                (t.contains("送") && t.contains("自己"))
             )
         }
         if (selfGiftOcr != null) {
-            return Pair("也送給自己(看廣告)", selfGiftOcr.bounds)
+            val cy = selfGiftOcr.bounds.centerY()
+            val halfH = (sh * 0.035f).toInt()
+            val btnRect = Rect(
+                (sw * 0.15f).toInt(),
+                cy - halfH,
+                (sw * 0.85f).toInt(),
+                cy + halfH
+            )
+            return Pair("也送給自己(OCR)", btnRect)
         }
 
-        // 2. 綠色按鈕色彩聚類 (LINE 亮綠 #06C755: g > 140 && g > r + 30 && g > b + 30, y in 0.40..0.65, x in 0.15..0.85)
-        // 彈窗中央的「也送給自己」為亮綠色長條按鈕！
+        // 2. 綠色按鈕色彩聚類 (LINE 亮綠 #06C755: g > 130 && g > r + 25 && g > b + 25, y in 0.45..0.60, x in 0.15..0.85)
+        // 彈窗中央的「也送給自己」為亮綠色膠囊按鈕 (寬度約 66% 螢幕寬度)
         val greenPts = mutableListOf<android.graphics.Point>()
-        val yStart = (sh * 0.40f).toInt()
-        val yEnd = (sh * 0.65f).toInt()
+        val yStart = (sh * 0.45f).toInt()
+        val yEnd = (sh * 0.60f).toInt()
         val xStart = (sw * 0.15f).toInt()
         val xEnd = (sw * 0.85f).toInt()
 
@@ -181,7 +211,7 @@ class FriendGiftTask {
                 val r = (c shr 16) and 0xFF
                 val g = (c shr 8) and 0xFF
                 val b = c and 0xFF
-                if (g > 140 && g > r + 30 && g > b + 30) {
+                if (g > 130 && (g - r) > 25 && (g - b) > 25) {
                     greenPts.add(android.graphics.Point(x, y))
                 }
             }
@@ -192,19 +222,18 @@ class FriendGiftTask {
             val minY = greenPts.minOf { it.y }
             val maxY = greenPts.maxOf { it.y }
             val btnW = maxX - minX
-            if (btnW > sw * 0.30f) {
+            val btnH = maxY - minY
+            if (btnW > sw * 0.40f && btnH in 15..(sh * 0.08f).toInt()) {
                 return Pair("也送給自己(綠色按鈕)", Rect(minX, minY, maxX, maxY))
             }
         }
 
-        // 3. 備援：一般「贈送 / 送禮物 / 送出」按鈕
+        // 3. 備援：一般「贈送 / 送出 / 送禮物」按鈕
         val normalGiftOcr = ocrItems.firstOrNull { item ->
             val cy = item.bounds.centerY()
-            cy in (sh * 0.45f).toInt()..(sh * 0.75f).toInt() && (
-                item.text == "贈送" ||
-                item.text == "送出" ||
-                item.text == "送禮物" ||
-                item.text == "確認"
+            val t = item.text.trim()
+            cy in (sh * 0.55f).toInt()..(sh * 0.75f).toInt() && (
+                t == "贈送" || t == "送出" || t == "送禮物" || t == "確認"
             )
         }
         if (normalGiftOcr != null) {
@@ -218,9 +247,10 @@ class FriendGiftTask {
         giftedPoints.add(point)
     }
 
-    private fun isAlreadyGifted(x: Int, y: Int): Boolean {
+    private fun isAlreadyGifted(x: Int, y: Int, sh: Int): Boolean {
+        val radius = (sh * 0.045f).toDouble()
         return giftedPoints.any { pt ->
-            hypot((pt.x - x).toDouble(), (pt.y - y).toDouble()) < 45.0
+            hypot((pt.x - x).toDouble(), (pt.y - y).toDouble()) < radius
         }
     }
 

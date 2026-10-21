@@ -33,10 +33,13 @@ class ReceiveGiftTask {
      * 注意：因「禮物」彈窗為下半部抽屜式視窗，頂部的四大分頁特徵仍可能隱約可見，故不可因頂部分頁存在而判定為非禮物彈窗！
      */
     fun isReceiveGiftDialogOpen(ocrItems: List<OcrItem>, sh: Int): Boolean {
-        // 嚴格排除好友排行榜、排行榜、好友清單等好友頁面特徵
+        // 嚴格排除好友排行榜、排行榜、好友清單等好友頁面特徵與送禮彈窗
         val isFriendsScreen = ocrItems.any { item ->
-            val t = item.text
-            t.contains("好友排行榜") || t.contains("排行榜") || t.contains("好友清單") || t.contains("青銅級") || t.contains("查看階層")
+            val t = item.text.replace(" ", "")
+            t.contains("好友排行榜") || t.contains("排行榜") || t.contains("好友清單") ||
+            t.contains("青銅級") || t.contains("查看階層") ||
+            t.contains("也送給自己") || t.contains("贈送金幣") || t.contains("剩餘贈送次數") ||
+            (t.contains("要向") && t.contains("金幣"))
         }
         if (isFriendsScreen) return false
 
