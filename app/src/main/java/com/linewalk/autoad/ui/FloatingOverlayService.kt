@@ -137,19 +137,19 @@ class FloatingOverlayService : Service() {
             setImageResource(R.drawable.ic_status_dot_slate)
             val dotSize = (8 * density).toInt()
             layoutParams = LinearLayout.LayoutParams(dotSize, dotSize).apply {
-                marginEnd = (8 * density).toInt()
+                marginEnd = (6 * density).toInt()
             }
         }
 
         val titleTv = TextView(this).apply {
             text = "散步趣助手 · 待命"
             setTextColor(Color.WHITE)
-            textSize = 12.5f
+            textSize = 12f
             typeface = Typeface.DEFAULT_BOLD
-        }
-
-        val headerSpacer = View(this).apply {
-            layoutParams = LinearLayout.LayoutParams(0, 0, 1.0f)
+            isSingleLine = true
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f)
         }
 
         val collapseBtn = ImageView(this).apply {
@@ -157,27 +157,26 @@ class FloatingOverlayService : Service() {
             val pad = (4 * density).toInt()
             setPadding(pad, pad, pad, pad)
             val btnSize = (22 * density).toInt()
-            layoutParams = LinearLayout.LayoutParams(btnSize, btnSize)
+            layoutParams = LinearLayout.LayoutParams(btnSize, btnSize).apply {
+                marginStart = (6 * density).toInt()
+            }
         }
 
         headerRow.addView(statusDot)
         headerRow.addView(titleTv)
-        headerRow.addView(headerSpacer)
         headerRow.addView(collapseBtn)
         container.addView(headerRow)
 
         val bodyLayout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
+            val params = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                topMargin = (6 * density).toInt()
+            }
+            layoutParams = params
         }
-
-        val detailTv = TextView(this).apply {
-            text = "準備就緒 (點擊取樣框選圖示)"
-            setTextColor(Color.parseColor("#94A3B8"))
-            textSize = 11f
-            maxWidth = (240 * density).toInt()
-            setPadding(0, (4 * density).toInt(), 0, (8 * density).toInt())
-        }
-        bodyLayout.addView(detailTv)
 
         val btnRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -321,15 +320,26 @@ class FloatingOverlayService : Service() {
                 if (status.isRunning) {
                     statusDot.setImageResource(R.drawable.ic_status_dot_green)
                     bgDrawable.setStroke((2 * density).toInt(), Color.parseColor("#10B981"))
-                    titleTv.text = "散步趣助手 · ${status.state.shortTitle} (${status.adsCompletedCount})"
+                    val shortDetail = status.overlaySafeDetail
+                        .replace("[完成]", "")
+                        .replace("[巡邏]", "")
+                        .replace("[防護]", "")
+                        .replace("[廣告]", "")
+                        .replace("[搜尋]", "")
+                        .replace("[點擊]", "")
+                        .replace("[載入]", "")
+                        .replace("[倒數]", "")
+                        .replace("...", "")
+                        .trim()
+                    val detailSuffix = if (shortDetail.isNotEmpty()) " · $shortDetail" else ""
+                    titleTv.text = "${status.state.shortTitle} (${status.adsCompletedCount})$detailSuffix"
                     styleIconBtn(toggleBtn, R.drawable.ic_pause, "#DC2626", "暫停")
                 } else {
                     statusDot.setImageResource(R.drawable.ic_status_dot_slate)
                     bgDrawable.setStroke((2 * density).toInt(), Color.parseColor("#334155"))
-                    titleTv.text = "散步趣助手 · ${status.state.shortTitle} (${status.adsCompletedCount})"
+                    titleTv.text = "散步趣助手 · 待命"
                     styleIconBtn(toggleBtn, R.drawable.ic_play_arrow, "#059669", "開始")
                 }
-                detailTv.text = status.overlaySafeDetail
                 container.post { updateOverlayBoundsOnScreen() }
             }
         }

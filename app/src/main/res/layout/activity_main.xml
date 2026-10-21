@@ -17,24 +17,45 @@
             android:layout_height="wrap_content"
             android:background="@drawable/bg_banner_sleek"
             android:orientation="vertical"
-            android:padding="20dp">
+            android:padding="18dp">
 
-            <TextView
-                android:id="@+id/tvAppTitle"
-                android:layout_width="wrap_content"
+            <LinearLayout
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="散步趣助手"
-                android:textColor="@color/card_white"
-                android:textSize="20sp"
-                android:textStyle="bold" />
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:id="@+id/tvAppTitle"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="散步趣助手"
+                    android:textColor="@color/card_white"
+                    android:textSize="20sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/tvAppVersionBadge"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:background="@drawable/bg_version_pill"
+                    android:paddingHorizontal="8dp"
+                    android:paddingVertical="2dp"
+                    android:text="v1.15.15"
+                    android:textColor="#FFFFFF"
+                    android:textSize="11sp"
+                    android:textStyle="bold" />
+            </LinearLayout>
 
             <TextView
+                android:id="@+id/tvAppSubtitle"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="6dp"
-                android:text="Android 11+ 本地無感截圖 · 離線 OCR · 即時圖示取樣"
+                android:text="LINE 散步趣專用 ‧ 本地截圖 ‧ 離線 OCR ‧ 圖示取樣"
                 android:textColor="#E8F5E9"
-                android:textSize="13sp" />
+                android:textSize="12sp" />
         </LinearLayout>
 
         <!-- 卡片 1：權限狀態與啟動懸浮窗 -->
@@ -62,7 +83,7 @@
                 android:layout_marginTop="8dp"
                 android:text="檢查權限狀態中..."
                 android:textColor="@color/text_secondary"
-                android:textSize="14sp" />
+                android:textSize="13.5sp" />
 
             <!-- Android 13+ 受限制設定防呆提示盒 -->
             <LinearLayout
@@ -77,7 +98,7 @@
                 <TextView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="[提示] 首次開啟無障礙若跳出「存取權已遭拒絕 (受限制的設定)」："
+                    android:text="[提示] 首次開啟若遇「受限制的設定」："
                     android:textColor="#B45309"
                     android:textSize="13sp"
                     android:textStyle="bold" />
@@ -86,9 +107,10 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="4dp"
-                    android:text="1. 先點一次下方 [1. 開啟無障礙服務] 並點一下反灰的「散步趣助手」讓系統跳出拒絕提示。\n2. 點下方橘色 [解鎖受限制設定] 按鈕進入應用程式資訊。\n3. 點選畫面最右上角的「⋮」(三個直點) ➔ 選擇「允許受限制的設定」，即可回來正常開啟無障礙！"
+                    android:lineSpacingExtra="2dp"
+                    android:text="1. 點下方 [開啟無障礙服務] 並點擊「散步趣助手」\n2. 點下方橘色按鈕跳轉至應用程式資訊\n3. 點右上角「⋮」(三個直點) ➔ 選擇「允許受限制的設定」"
                     android:textColor="#78350F"
-                    android:textSize="12.5sp" />
+                    android:textSize="12sp" />
 
                 <Button
                     android:id="@+id/btnUnlockRestricted"
@@ -96,7 +118,7 @@
                     android:layout_height="wrap_content"
                     android:layout_marginTop="6dp"
                     android:backgroundTint="#F59E0B"
-                    android:text="解鎖「受限制的設定」(跳轉至應用程式資訊)"
+                    android:text="解鎖「受限制的設定」(跳轉應用程式資訊)"
                     android:textColor="@color/card_white"
                     android:textSize="12.5sp" />
             </LinearLayout>
@@ -142,7 +164,7 @@
                 android:textStyle="bold" />
         </LinearLayout>
 
-        <!-- 卡片 2：自動化任務模組開關 -->
+        <!-- 卡片 2：自動化任務模組開關 (文字精簡，杜絕換行折行) -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -157,51 +179,55 @@
                 android:layout_height="wrap_content"
                 android:text="二、自動巡邏順序設定 (移動 ➔ 時間 ➔ 遊戲 ➔ 步數)"
                 android:textColor="@color/text_primary"
-                android:textSize="16sp"
+                android:textSize="15sp"
                 android:textStyle="bold" />
 
             <CheckBox
                 android:id="@+id/cbMoveGauge"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
-                android:text="1.【移動 (首頁)】移動距離獎勵（第一優先領取『獲得金幣』）"
+                android:layout_marginTop="4dp"
+                android:text="1.【移動】移動距離獎勵 (第一優先領取金幣)"
                 android:textColor="@color/text_primary"
+                android:textSize="13sp"
                 android:textStyle="bold" />
 
             <CheckBox
                 android:id="@+id/cbIdleReward"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="2.【時間 (放置)】放置蘋果與寶箱獎勵（第二順位）"
-                android:textColor="@color/text_primary" />
+                android:text="2.【時間】放置蘋果與寶箱獎勵 (第二順位)"
+                android:textColor="@color/text_primary"
+                android:textSize="13sp" />
 
             <CheckBox
                 android:id="@+id/cbGachaTask"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="3.【遊戲】觀看廣告抽獎獎勵（第三順位）"
-                android:textColor="@color/text_primary" />
+                android:text="3.【遊戲】觀看廣告抽獎獎勵 (第三順位)"
+                android:textColor="@color/text_primary"
+                android:textSize="13sp" />
 
             <CheckBox
                 android:id="@+id/cbStepBottle"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="4.【步數】集滿水瓶領取票券獎勵（第四順位）"
-                android:textColor="@color/text_primary" />
+                android:text="4.【步數】水瓶集滿領取票券獎勵 (第四順位)"
+                android:textColor="@color/text_primary"
+                android:textSize="13sp" />
 
             <View
                 android:layout_width="match_parent"
                 android:layout_height="1dp"
-                android:layout_marginVertical="8dp"
+                android:layout_marginVertical="6dp"
                 android:background="#E2E8F0" />
 
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="次要功能與好友任務"
+                android:text="次要功能與日常任務"
                 android:textColor="@color/line_green"
-                android:textSize="14sp"
+                android:textSize="13sp"
                 android:textStyle="bold" />
 
             <CheckBox
@@ -209,42 +235,47 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="4dp"
-                android:text="5.【每日賓果】開啟賓果格與領取連線獎勵（第五順位）"
-                android:textColor="@color/text_primary" />
+                android:text="5.【賓果】開啟賓果格與連線獎勵 (第五順位)"
+                android:textColor="@color/text_primary"
+                android:textSize="13sp" />
 
             <CheckBox
                 android:id="@+id/cbLotteryTask"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="6.【抽抽樂】優先50抽 / 次選免費抽（嚴禁點5張）"
-                android:textColor="@color/text_primary" />
+                android:text="6.【抽抽樂】優先 50 抽與免費抽 (禁點5張)"
+                android:textColor="@color/text_primary"
+                android:textSize="13sp" />
 
             <CheckBox
                 android:id="@+id/cbDailyMissionTask"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="7.【任務】檢查特別/每日/每週任務並領取獎勵（第七順位）"
-                android:textColor="@color/text_primary" />
+                android:text="7.【任務】特別與每日任務獎勵領取 (第七順位)"
+                android:textColor="@color/text_primary"
+                android:textSize="13sp" />
 
             <CheckBox
                 android:id="@+id/cbFriendGiftTask"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="8.【好友送禮】好友排行榜逐一送禮（優先送禮也送自己）"
-                android:textColor="@color/text_primary" />
+                android:text="8.【好友送禮】排行榜逐一送禮 (優先送自己)"
+                android:textColor="@color/text_primary"
+                android:textSize="13sp" />
 
             <View
                 android:layout_width="match_parent"
                 android:layout_height="1dp"
-                android:layout_marginVertical="8dp"
+                android:layout_marginVertical="6dp"
                 android:background="#E2E8F0" />
 
             <CheckBox
                 android:id="@+id/cbClaimNormalWhenNoAd"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="自動關閉推銷彈窗（如『跳過』）與無廣告時的一般領取"
-                android:textColor="@color/text_secondary" />
+                android:text="自動關閉推銷彈窗 (跳過) 與無廣告一般領取"
+                android:textColor="@color/text_secondary"
+                android:textSize="12.5sp" />
         </LinearLayout>
 
         <!-- 卡片 3：手機端框選圖示範本管理 -->
@@ -262,16 +293,17 @@
                 android:layout_height="wrap_content"
                 android:text="三、已取樣圖示範本庫 (懸浮窗點 [取樣] 新增)"
                 android:textColor="@color/text_primary"
-                android:textSize="16sp"
+                android:textSize="15sp"
                 android:textStyle="bold" />
 
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="6dp"
-                android:text="首次使用指引：\n1. 點上方綠色按鈕啟動懸浮窗進入《LINE 散步趣》。\n2. 當畫面有「集滿的水瓶」時，點懸浮窗上的 [取樣]，用手指把單一顆滿水瓶框起來並按儲存。\n3. 點懸浮窗 [開始]，即可全自動點擊水瓶 → 看廣告 → 關廣告 → 領取！"
+                android:lineSpacingExtra="2dp"
+                android:text="使用指引：\n1. 點上方綠色按鈕啟動懸浮窗並打開遊戲\n2. 遇滿水瓶時，點懸浮窗 [取樣] 框選並儲存\n3. 點懸浮窗 [開始]，即享全自動巡邏與領取"
                 android:textColor="@color/text_secondary"
-                android:textSize="13sp" />
+                android:textSize="12.5sp" />
 
             <TextView
                 android:id="@+id/tvTemplateSummary"
@@ -329,7 +361,7 @@
                 android:layout_height="wrap_content"
                 android:text="四、即時狀態與執行日誌"
                 android:textColor="@color/text_primary"
-                android:textSize="16sp"
+                android:textSize="15sp"
                 android:textStyle="bold" />
 
             <TextView

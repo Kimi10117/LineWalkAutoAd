@@ -35,7 +35,8 @@ class MainActivity : AppCompatActivity() {
         setContentView(binding.root)
 
         engine = AutomationEngine.getInstance(this)
-        binding.tvAppTitle.text = "散步趣助手 v${com.linewalk.autoad.BuildConfig.VERSION_NAME} (LINE 散步趣專用)"
+        binding.tvAppTitle.text = "散步趣助手"
+        binding.tvAppVersionBadge.text = "v${com.linewalk.autoad.BuildConfig.VERSION_NAME}"
         setupTaskCheckboxes()
         setupClickListeners()
         observeEngineStatus()
@@ -191,7 +192,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 launch {
                     engine.uiStatus.collectLatest { status ->
-                        val header = "目前狀態：${status.state.title} | 累計完成：${status.adsCompletedCount} 次 | 觸發任務：${status.tasksTriggeredCount} 次\n" +
+                        val header = "狀態：${status.state.shortTitle} | 廣告完成：${status.adsCompletedCount} | 任務觸發：${status.tasksTriggeredCount}\n" +
                             "--------------------------------------------\n"
                         val body = if (status.recentLogs.isEmpty()) {
                             "尚無執行紀錄，請啟動懸浮窗並按 [開始]"

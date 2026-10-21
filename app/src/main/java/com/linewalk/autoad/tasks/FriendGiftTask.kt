@@ -42,13 +42,15 @@ class FriendGiftTask {
         }
         if (hasMainTabs) return false
 
-        // 1. 好友頁面專屬特徵（排行榜/邀請/好友清單/階層）
+        // 嚴格排除「邀請好友」推銷宣傳彈窗（如『還沒有邀請好友 實在太可惜了！』『獲得金幣的流程』）
+        if (isInvitePromoSheet(ocrItems)) return false
+
+        // 1. 好友頁面專屬特徵（排行榜/好友清單/階層）
         val maxTopY = if (sh > 0) sh * 0.32f else 600f
         return ocrItems.any { item ->
             item.bounds.centerY() < maxTopY && (
                 item.text.contains("好友排行榜") ||
                 item.text.contains("排行榜") ||
-                item.text.contains("邀請好友") ||
                 item.text.contains("好友清單") ||
                 item.text.contains("查看階層") ||
                 item.text.contains("階層") ||
@@ -57,6 +59,30 @@ class FriendGiftTask {
                 item.text.contains("黃金")
             )
         }
+    }
+
+    /**
+     * 判定是否跳出「邀請好友」宣傳推銷全螢幕/半螢幕彈窗 (如『還沒有邀請好友 實在太可惜了！』『獲得金幣的流程』)
+     */
+    fun isInvitePromoSheet(ocrItems: List<OcrItem>): Boolean {
+        return ocrItems.any { item ->
+            val t = item.text.replace(" ", "")
+            t.contains("還沒有邀請") || t.contains("太可惜了") || t.contains("獲得金幣的流程") ||
+            t.contains("邀請好友吧") || t.contains("邀請任務觸發") ||
+            (t.contains("邀請好友") && ocrItems.any { it.text.contains("都能獲得幣") || it.text.contains("流程") || it.text.contains("完成邀請任務") })
+        }
+    }
+
+    /**
+     * 「邀請好友」推銷彈窗右上角的圓形關閉按鈕 (X) 座標 (x ≈ 0.92f, y ≈ 0.095f)
+     */
+    fun getInvitePromoCloseButton(sw: Int, sh: Int): Rect {
+        return Rect(
+            (sw * 0.86f).toInt(),
+            (sh * 0.07f).toInt(),
+            (sw * 0.98f).toInt(),
+            (sh * 0.13f).toInt()
+        )
     }
 
     /**

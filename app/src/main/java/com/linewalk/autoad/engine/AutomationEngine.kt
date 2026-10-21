@@ -476,6 +476,19 @@ class AutomationEngine private constructor(context: Context) {
         }
 
         // D. 【子視窗與日常任務優先】優先檢查是否處於日常任務子彈窗或好友分頁（絕不可被底層導覽列誤判為主畫面而忽略已開啟的視窗！）：
+        // D0. 檢查是否跳出「邀請好友」推銷宣傳全螢幕彈窗（如『還沒有邀請好友 實在太可惜了！』『獲得金幣的流程』）
+        if (friendGiftTask.isInvitePromoSheet(ocrItems)) {
+            nonGameScreenTicks = 0
+            val closeBtn = friendGiftTask.getInvitePromoCloseButton(sw, sh)
+            appendLog("[介面] 偵測到【邀請好友】推銷彈窗，點擊右上角 (X) 關閉視窗")
+            updateDetail("[關閉] 正在關閉邀請好友彈窗...", "[關閉] 關閉彈窗中...")
+            FloatingOverlayService.clickWithOverlayPassthrough(closeBtn) {
+                service.clickRect(closeBtn)
+            }
+            delay(500)
+            return
+        }
+
         // D1. 優先檢查是否正在「每日賓果」彈窗
         if (bingoTask.isBingoDialogOpen(ocrItems, sh)) {
             nonGameScreenTicks = 0
@@ -893,6 +906,17 @@ class AutomationEngine private constructor(context: Context) {
         sw: Int,
         sh: Int
     ) {
+        if (isFriendGiftCompleted) {
+            // 已完成好友送禮，直接點擊底部「集點」(首頁) 離開好友頁面！
+            val mainTabBtn = friendGiftTask.getBottomMainTabRect(sw, sh, ocrItems)
+            appendLog("[完成] 好友送禮已完成，點擊底部「集點」返回首頁")
+            FloatingOverlayService.clickWithOverlayPassthrough(mainTabBtn) {
+                service.clickRect(mainTabBtn)
+            }
+            delay(500)
+            return
+        }
+
         // 1. 最優先檢查：是否跳出送禮確認彈窗（使用者指定：【都以送禮物也送自己為主】！）
         val selfGiftOption = friendGiftTask.findSelfGiftButton(screenBitmap, ocrItems)
         if (selfGiftOption != null) {
