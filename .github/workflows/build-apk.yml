@@ -44,7 +44,12 @@ jobs:
           cache-disabled: true
 
       - name: Build Debug APK
-        run: gradle assembleDebug --no-daemon --stacktrace
+        run: |
+          gradle assembleDebug --no-daemon --stacktrace 2>&1 | tee build.log || {
+            ERR=$(tail -n 25 build.log | tr '\n' ' ')
+            echo "::error::Gradle failed: $ERR"
+            exit 1
+          }
 
       - name: Rename APK for easy download
         run: cp app/build/outputs/apk/debug/app-debug.apk LineWalkAutoAd.apk

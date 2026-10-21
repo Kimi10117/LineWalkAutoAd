@@ -104,10 +104,12 @@ class NodeInspector {
             val cx = node.bounds.centerX()
             val inTopCorner = cy < screenHeight * 0.25f &&
                 (cx > screenWidth * 0.72f || cx < screenWidth * 0.28f)
-            val isExplicitSkip = node.text.contains("略過") || node.text.contains("跳過") ||
-                node.text.contains("Skip", ignoreCase = true) ||
-                node.contentDesc.contains("略過") || node.contentDesc.contains("跳過") ||
-                node.contentDesc.contains("Skip", ignoreCase = true)
+            val isExplicitSkip = (node.text?.contains("略過") == true) ||
+                (node.text?.contains("跳過") == true) ||
+                (node.text?.contains("Skip", ignoreCase = true) == true) ||
+                (node.contentDesc?.contains("略過") == true) ||
+                (node.contentDesc?.contains("跳過") == true) ||
+                (node.contentDesc?.contains("Skip", ignoreCase = true) == true)
             when {
                 isExplicitSkip -> 0
                 inTopCorner -> 1
