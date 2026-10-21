@@ -47,6 +47,7 @@ class AdCloserHandler(
     private var redirectCount: Int = 0
     private var hasRecentRedirect: Boolean = false
     private var wasAdLoading: Boolean = false
+    private var hasAdActuallyShown: Boolean = false
     private var lastClickedPoint: Point? = null
     private var lastBackActionTimeMs: Long = 0L
     private var lastFallbackCornerTimeMs: Long = 0L
@@ -62,6 +63,7 @@ class AdCloserHandler(
             redirectCount = 0
             hasRecentRedirect = false
             wasAdLoading = false
+            hasAdActuallyShown = false
             lastClickedPoint = null
             lastBackActionTimeMs = 0L
             lastFallbackCornerTimeMs = 0L
@@ -125,6 +127,7 @@ class AdCloserHandler(
         }
 
         if (isExternal || hasBrowserTitle) {
+            hasAdActuallyShown = true
             markRecentRedirect()
             service.navigateBack()
             return AdStepResult.RedirectRecovered(fgPkg ?: "InAppBrowser")
@@ -184,6 +187,7 @@ class AdCloserHandler(
         val isAdLoading = ocrRecognizer.isAdLoadingScreen(ocrItems)
         if (isAdLoading) {
             wasAdLoading = true
+            hasAdActuallyShown = true
             // 在容許載入時間 (18 秒) 內，靜候廣告緩衝，嚴禁誤按 [取消] 或誤判回到遊戲！
             if (elapsedSec < 18) {
                 return AdStepResult.AdLoading(elapsedSec)
@@ -207,11 +211,17 @@ class AdCloserHandler(
             // 廣告剛從『載入中...』緩衝完成切換至實際廣告畫面！
             // 重置計時起點，確保實際廣告享有完整的播放保護期 (Grace Period) 與倒數計時！
             wasAdLoading = false
+            hasAdActuallyShown = true
             adStartTimeMs = System.currentTimeMillis()
         }
 
+        val isGameVisible = isGameScreenVisible(service, screenBitmap, ocrItems)
+        if (!isGameVisible) {
+            hasAdActuallyShown = true
+        }
+
         // 2A. 若已關閉全螢幕廣告並跳出『獲得15張票券！ / 獲得金幣！』中央領獎彈窗，直接回傳並點擊 [ 關閉 ]！
-        if (elapsedSec >= 2) {
+        if (elapsedSec >= 2 && (hasAdActuallyShown || elapsedSec >= 3)) {
             val modalClose = ocrRecognizer.findCenterRewardModalCloseButton(screenBitmap, ocrItems)
             if (modalClose != null) {
                 return AdStepResult.ReturnedToGame(modalClose.second, "已關閉領獎彈窗 (${modalClose.first})")
@@ -219,7 +229,7 @@ class AdCloserHandler(
         }
 
         // 2B. 若廣告結束後畫面停留在『獲得票券！/ 獲得金幣！』下半部彈窗且按鈕皆在冷卻中 (下方有 [取消] 按鈕)，直接點擊 [取消] 關閉彈窗回到遊戲！
-        if (elapsedSec >= 2) {
+        if (elapsedSec >= 2 && (hasAdActuallyShown || elapsedSec >= 3)) {
             val hasActiveClaim = templateMatcher.findCoralPinkButton(screenBitmap, 0.66f, 0.88f, "彈窗看廣告鈕") != null
             if (!hasActiveClaim) {
                 val cancelBtn = ocrRecognizer.findPopupCancelButton(screenBitmap, ocrItems, templateMatcher)
@@ -229,9 +239,19 @@ class AdCloserHandler(
             }
         }
 
-        // 2C. 若已回到《LINE 散步趣》介面（且至少過了 1 秒避免同一影格殘留），判定已完成這支廣告！
-        if (elapsedSec >= 1 && isGameScreenVisible(service, screenBitmap, ocrItems)) {
-            return AdStepResult.ReturnedToGame(null, "已回到散步趣介面")
+        // 2C. 若處於《LINE 散步趣》介面：
+        // 嚴格安全防護：
+        // 1) 廣告確實已經播放過 (hasAdActuallyShown == true) 且已過至少 3 秒 ➔ 正常完成廣告並回到散步趣介面
+        // 2) 若廣告點擊後完全未啟動 (hasAdActuallyShown == false)，在未滿 4 秒前保持靜候，嚴禁在第 1 秒誤判回到遊戲！
+        // 3) 若超過 4 秒畫面仍完全是遊戲畫面且從未出現過廣告特徵 ➔ 判定為廣告未啟動/無庫存，安全退出且不累計完成次數
+        if (isGameVisible) {
+            if (hasAdActuallyShown && elapsedSec >= 3) {
+                return AdStepResult.ReturnedToGame(null, "已回到散步趣介面")
+            } else if (!hasAdActuallyShown && elapsedSec >= 4) {
+                return AdStepResult.ReturnedToGame(null, "廣告未成功啟動")
+            } else {
+                return AdStepResult.WaitingGracePeriod(elapsedSec)
+            }
         }
 
         // 3. 廣告前保護期 (2.5 秒)：靜候播放
@@ -248,6 +268,9 @@ class AdCloserHandler(
             screenHeight = sh,
             roiNormalized = RectF(0f, 0f, 1f, 0.25f)
         )
+        if (remainingSec != null || rewardGrantedOcr != null) {
+            hasAdActuallyShown = true
+        }
         if (remainingSec != null && remainingSec > 1 && rewardGrantedOcr == null) {
             return AdStepResult.StillCountingDown(remainingSec, elapsedSec)
         }

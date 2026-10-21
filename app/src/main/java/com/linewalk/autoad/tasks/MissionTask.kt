@@ -50,9 +50,8 @@ class MissionTask {
             val inTopHeader = if (sh > 0) cy < sh * 0.16f else cy < 350
             inTopHeader && item.text.contains("任務")
         }
-        val hasBlackPill = screenBitmap != null && hasTabPill(screenBitmap)
 
-        return (hasMissionTitle && !hasMainTabs) || hasMissionTabs || hasBlackPill
+        return (hasMissionTitle && !hasMainTabs) || (hasMissionTabs && !hasMainTabs)
     }
 
     /**
@@ -242,14 +241,14 @@ class MissionTask {
     }
 
     /**
-     * 任務彈窗右上角關閉 (X) 按鈕熱區 (x: 0.84~0.95, y: 0.075~0.14)
+     * 任務彈窗右上角關閉 (X) 按鈕熱區 (x: 0.86~0.96, y: 0.095~0.145)
      */
     fun getCloseButtonBounds(sw: Int, sh: Int): Rect {
         return Rect(
-            (sw * 0.84f).toInt(),
-            (sh * 0.075f).toInt(),
-            (sw * 0.95f).toInt(),
-            (sh * 0.14f).toInt()
+            (sw * 0.86f).toInt(),
+            (sh * 0.095f).toInt(),
+            (sw * 0.96f).toInt(),
+            (sh * 0.145f).toInt()
         )
     }
 
