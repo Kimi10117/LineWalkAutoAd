@@ -134,7 +134,7 @@ class AdCloserHandler(
             return AdStepResult.RedirectRecovered(fgPkg ?: "InAppBrowser")
         }
 
-        // 1A-2. 檢查是否誤入「選單」(設定) 畫面，自動按返回鍵退回散步趣遊戲介面
+        // 1A-2. 檢查是否誤入「選單」(設定) 畫面，自動點擊右上角關閉退回散步趣遊戲介面
         val isMenuScreen = ocrItems.any { item ->
             val t = item.text.replace(" ", "")
             val cy = item.bounds.centerY().toFloat() / sh
@@ -146,17 +146,18 @@ class AdCloserHandler(
             t.contains("目前版本")
         }
         if (isMenuScreen) {
-            service.navigateBack()
-            return AdStepResult.ReturnedToGame(null, "已關閉選單回到散步趣介面")
+            val closeMenuRect = Rect((sw * 0.85f).toInt(), (sh * 0.04f).toInt(), (sw * 0.98f).toInt(), (sh * 0.10f).toInt())
+            service.clickRect(closeMenuRect)
+            return AdStepResult.ReturnedToGame(null, "已點擊關閉選單回到散步趣介面")
         }
 
         // 1A-3. Meta 輪播廣告 / 外部跳轉安全防死循環返回機制：
         // 若剛剛剛從外部瀏覽器/Custom Tabs 透過返回鍵回到廣告畫面：
         // 由於點擊該廣告角落或畫面會再度觸發跳轉外部網頁，因此切勿再點擊畫面！
-        // 直接對廣告 Activity 發送系統返回鍵 (navigateBack)，安全關閉廣告退回遊戲！
+        // 直接對廣告 Activity 發送系統安全返回鍵 (safeNavigateBack)，安全關閉廣告退回遊戲！
         if (hasRecentRedirect) {
             hasRecentRedirect = false
-            service.navigateBack()
+            service.safeNavigateBack()
             return AdStepResult.WatchdogBackTriggered(elapsedSec, "防重定向返回鍵")
         }
 
@@ -177,7 +178,7 @@ class AdCloserHandler(
                 )
                 service.clickRect(backdropRect)
             } else {
-                service.navigateBack()
+                service.safeNavigateBack()
             }
             return AdStepResult.AdChoicesDismissed
         } else {
@@ -260,7 +261,50 @@ class AdCloserHandler(
             return AdStepResult.WaitingGracePeriod(elapsedSec)
         }
 
-        // 4. 檢查畫面頂部是否有明確的倒數計時（如「還有 15 秒」）
+        // 4. 【最高優先級 - 略過廣告/關閉按鈕急先鋒 (Active Skip & Close Hunter)】
+        // 現代影音廣告（如 LINE チョッキンズ、Unity、Google AdMob）在播放 5 秒後即會出現「略過廣告 / Skip Ad / 広告をスキップ」按鈕，
+        // 但畫面上可能仍持續顯示「還有 25 秒」等影片總長倒數！
+        // 舊邏輯若先判斷 remainingSec > 1 立即返回，會導致整整 30 秒對略過按鈕視而不見！
+        // 因此必須在判定倒數前，先精確偵測無障礙節點與 OCR 畫面中是否已出現可點擊的「略過/跳過」按鈕！
+
+        // 4A. 無障礙節點樹優先檢查 (包含 16:9 劇院黑邊廣告內容頂部的略過按鈕)
+        val rootNode = service.getSafeRootNode()
+        val closeNode = nodeInspector.findAdCloseNode(rootNode, sw, sh, ::isInvalidOrBlacklisted, isFullScreenAd = true)
+        if (closeNode != null) {
+            recordAndClick(service, closeNode.bounds)
+            return AdStepResult.ClickedCloseOrSkip(closeNode.label, closeNode.bounds)
+        }
+
+        // 4B. 全畫面 OCR 明確略過按鈕搜尋 (文字長度放寬至 16，避免截斷 "略過廣告 ▶|", "広告をスキップ", "Skip Ad")
+        // 注意：AD_CLOSE_EXCLUDE_KEYWORDS 已排除 "秒後"、"還有"，因此「5秒後可略過廣告」絕不會被誤判，
+        // 只有倒數結束變為真正可按的「略過廣告」時才會命中！
+        val explicitSkipOcr = ocrRecognizer.findMatch(
+            items = ocrItems,
+            keywords = listOf(
+                "略過廣告",
+                "跳過廣告",
+                "広告をスキップ",
+                "Skip Ad",
+                "略過",
+                "跳過",
+                "Skip",
+                "SKIP",
+                "スキップ"
+            ),
+            screenWidth = sw,
+            screenHeight = sh,
+            roiNormalized = RectF(0.01f, 0.02f, 0.99f, 0.96f),
+            excludeKeywords = OcrRecognizer.AD_CLOSE_EXCLUDE_KEYWORDS,
+            maxTextLength = 16
+        )
+        if (explicitSkipOcr != null &&
+            !isInvalidOrBlacklisted(explicitSkipOcr.bounds.centerX(), explicitSkipOcr.bounds.centerY())
+        ) {
+            recordAndClick(service, explicitSkipOcr.bounds)
+            return AdStepResult.ClickedCloseOrSkip("OCR[${explicitSkipOcr.text}]", explicitSkipOcr.bounds)
+        }
+
+        // 5. 檢查畫面是否有明確的倒數計時（如「還有 15 秒」）或已獲得獎勵
         val remainingSec = ocrRecognizer.detectAdCountdownSeconds(ocrItems, sh)
         val rewardGrantedOcr = ocrRecognizer.findMatch(
             items = ocrItems,
@@ -276,29 +320,21 @@ class AdCloserHandler(
             return AdStepResult.StillCountingDown(remainingSec, elapsedSec)
         }
 
-        // 5. 第一層辨識：檢查無障礙節點樹是否有「跳過 / 略過 / 關閉 / X」節點
-        val rootNode = service.getSafeRootNode()
-        val closeNode = nodeInspector.findAdCloseNode(rootNode, sw, sh, ::isInvalidOrBlacklisted)
-        if (closeNode != null) {
-            recordAndClick(service, closeNode.bounds)
-            return AdStepResult.ClickedCloseOrSkip(closeNode.label, closeNode.bounds)
-        }
-
-        // 6. 第二層辨識：全畫面搜尋短字「跳過 / 略過 / 關閉 / 確認 / 確定 / Skip / Close」(字數 <= 6)
-        val fullScreenSkipOcr = ocrRecognizer.findMatch(
+        // 6. 一般全畫面關閉/確定/確認 OCR 辨識 (當倒數完畢或無倒數計時時)
+        val fullScreenCloseOcr = ocrRecognizer.findMatch(
             items = ocrItems,
             keywords = OcrRecognizer.AD_CLOSE_OCR_KEYWORDS + listOf("確認", "確定"),
             screenWidth = sw,
             screenHeight = sh,
-            roiNormalized = RectF(0.02f, 0.03f, 0.98f, 0.96f),
+            roiNormalized = RectF(0.01f, 0.02f, 0.99f, 0.96f),
             excludeKeywords = OcrRecognizer.AD_CLOSE_EXCLUDE_KEYWORDS,
-            maxTextLength = 6
+            maxTextLength = 16
         )
-        if (fullScreenSkipOcr != null &&
-            !isInvalidOrBlacklisted(fullScreenSkipOcr.bounds.centerX(), fullScreenSkipOcr.bounds.centerY())
+        if (fullScreenCloseOcr != null &&
+            !isInvalidOrBlacklisted(fullScreenCloseOcr.bounds.centerX(), fullScreenCloseOcr.bounds.centerY())
         ) {
-            recordAndClick(service, fullScreenSkipOcr.bounds)
-            return AdStepResult.ClickedCloseOrSkip("OCR[${fullScreenSkipOcr.text}]", fullScreenSkipOcr.bounds)
+            recordAndClick(service, fullScreenCloseOcr.bounds)
+            return AdStepResult.ClickedCloseOrSkip("OCR[${fullScreenCloseOcr.text}]", fullScreenCloseOcr.bounds)
         }
 
         // 7. 第三層辨識 A：比對使用者在懸浮窗框選儲存的「廣告 X / >> 範本 (AD_CLOSE_ICON)」
@@ -333,18 +369,13 @@ class AdCloserHandler(
             }
         }
 
-        // 8B. 主動安全返回策略與右上角/內容角/Google Play 徽章 X 熱區點擊（大幅加速廣告關閉速度，告別 60 秒乾等）：
-        // - 若該廣告曾觸發跳轉外部網頁 (redirectCount > 0)，每次 tick 優先發送雙重返回鍵關閉廣告
-        // - 若廣告無倒數計時（例如可玩式互動廣告、應用商店推廣頁、Meta 輪播、靜態廣告或互動式 end-card），且已播放超過 5 秒：
-        //   使用時間戳記間隔控制：
-        //   - 每間隔 3.0 秒依序輪替點擊各關閉熱區（包含頂部 Google Play 徽章、螢幕右上角、16:9內容右上角、左上角），且熱區不加入黑名單！
-        //   - 每間隔 3.0 秒發送系統雙重返回鍵 (service.doubleNavigateBack())！
+        // 8B. 主動安全返回策略與熱區點擊（全面改用 safeNavigateBack，散步趣在前景時絕不發送返回鍵）：
         val now = System.currentTimeMillis()
         if (remainingSec == null && elapsedSec >= 5) {
             if (redirectCount > 0) {
-                service.doubleNavigateBack()
+                service.safeNavigateBack()
                 lastBackActionTimeMs = now
-                return AdStepResult.WatchdogBackTriggered(elapsedSec, "重定向雙重返回鍵")
+                return AdStepResult.WatchdogBackTriggered(elapsedSec, "重定向安全返回鍵")
             }
 
             // 針對互動式可玩小遊戲廣告 (Playable Ad，例如飛刀命中、旋轉輪盤等)：
@@ -369,27 +400,27 @@ class AdCloserHandler(
                 val (label, targetRect) = getNextFallbackTarget(sw, sh)
                 lastFallbackCornerTimeMs = now
                 recordAndClick(service, targetRect, allowBlacklist = false)
-                // 盲點關閉熱區同時發送系統返回鍵，雙管齊下關閉頑固廣告
-                service.navigateBack()
+                // 盲點關閉熱區同時安全發送系統返回鍵
+                service.safeNavigateBack()
                 lastBackActionTimeMs = now
-                return AdStepResult.WatchdogBackTriggered(elapsedSec, "盲點[$label]+返回")
+                return AdStepResult.WatchdogBackTriggered(elapsedSec, "盲點[$label]+安全返回")
             }
 
             if (now - lastBackActionTimeMs >= 2500L) {
-                service.doubleNavigateBack()
+                service.safeNavigateBack()
                 lastBackActionTimeMs = now
-                return AdStepResult.WatchdogBackTriggered(elapsedSec, "雙重返回鍵")
+                return AdStepResult.WatchdogBackTriggered(elapsedSec, "安全返回鍵")
             }
         }
 
-        // 9. 防卡死 Watchdog：若單支廣告超過最大等待秒數 (預設 32 秒)，持續循環點擊各關閉熱區與發送返回鍵
+        // 9. 防卡死 Watchdog：若單支廣告超過最大等待秒數 (預設 32 秒)，持續循環點擊各關閉熱區與安全返回
         if (elapsedSec >= config.maxAdWaitSeconds) {
             val (label, targetRect) = getNextFallbackTarget(sw, sh)
             lastFallbackCornerTimeMs = now
             recordAndClick(service, targetRect, allowBlacklist = false)
-            service.doubleNavigateBack()
+            service.safeNavigateBack()
             lastBackActionTimeMs = now
-            return AdStepResult.WatchdogBackTriggered(elapsedSec, "強效關閉[$label+返回]")
+            return AdStepResult.WatchdogBackTriggered(elapsedSec, "強效關閉[$label+安全返回]")
         }
 
         return AdStepResult.ScanningAd(elapsedSec)

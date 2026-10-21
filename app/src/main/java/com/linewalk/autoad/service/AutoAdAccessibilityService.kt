@@ -230,20 +230,32 @@ class AutoAdAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * 觸發系統返回鍵 (用於從 Google Play 商店、外部瀏覽器或卡死廣告退回遊戲)。
+     * 檢查《LINE 散步趣》是否已在前景。
      */
-    fun navigateBack(): Boolean {
-        return performGlobalAction(GLOBAL_ACTION_BACK)
+    fun isGameInForeground(): Boolean {
+        val fg = getForegroundPackageName()
+        return fg != null && (fg == "com.linecorp.LGWALK" || fg.contains("LGWALK"))
     }
 
     /**
-     * 連續兩次快速觸發系統返回鍵 (用於全螢幕沉浸式廣告或需要「再按一次返回以退出」的頑固視窗)。
+     * 安全觸發系統返回鍵：
+     * - 【核心防護】若《LINE 散步趣》已經在前景，絕對禁止按返回鍵，徹底杜絕自己跳出回桌面問題！
+     * - 單次精確返回，避免快速雙擊打穿廣告層關閉遊戲本體。
      */
+    fun safeNavigateBack(): Boolean {
+        if (isGameInForeground()) {
+            android.util.Log.w(TAG, "🛡️ 散步趣已在前景，安全防護生效：攔截返回鍵避免退出至桌面！")
+            return false
+        }
+        return performGlobalAction(GLOBAL_ACTION_BACK)
+    }
+
+    fun navigateBack(): Boolean {
+        return safeNavigateBack()
+    }
+
     suspend fun doubleNavigateBack(): Boolean {
-        val first = performGlobalAction(GLOBAL_ACTION_BACK)
-        kotlinx.coroutines.delay(180)
-        val second = performGlobalAction(GLOBAL_ACTION_BACK)
-        return first || second
+        return safeNavigateBack()
     }
 
     /**

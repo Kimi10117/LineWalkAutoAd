@@ -415,13 +415,11 @@ class AutomationEngine private constructor(context: Context) {
             FloatingOverlayService.clickWithOverlayPassthrough(closeMenuRect) {
                 service.clickRect(closeMenuRect)
             }
-            delay(350)
-            service.navigateBack()
             updateDetail("⚙️ 正在關閉【選單】畫面...", "⚙️ 關閉選單中...")
             return
         }
 
-        // 0. 檢查是否誤入「輕鬆賺」(adjoe) 服務條款或遊戲推薦頁，自動點擊右上角 (X) 或按返回鍵退回遊戲！
+        // 0. 檢查是否誤入「輕鬆賺」(adjoe) 服務條款或遊戲推薦頁，自動點擊右上角 (X) 退回遊戲！
         val isAdjoeTermsOrOfferwall = ocrItems.any { item ->
             val t = item.text.replace(" ", "")
             t.contains("想體驗更多遊戲") ||
@@ -436,8 +434,6 @@ class AutomationEngine private constructor(context: Context) {
             FloatingOverlayService.clickWithOverlayPassthrough(closeXRect) {
                 service.clickRect(closeXRect)
             }
-            delay(400)
-            service.navigateBack()
             updateDetail("🛡️ 正在退出【輕鬆賺】廣告頁面...", "🛡️ 退出廣告頁中...")
             return
         }
@@ -1550,7 +1546,7 @@ class AutomationEngine private constructor(context: Context) {
         val adElapsed = adCloserHandler.getElapsedSeconds()
         if (adElapsed >= config.maxAdWaitSeconds + 4) {
             appendLog("🚨 廣告播放達 ${adElapsed}s 超過上限 (${config.maxAdWaitSeconds}s)，強制喚醒散步趣拉回前景！")
-            service.doubleNavigateBack()
+            service.safeNavigateBack()
             delay(300)
             service.bringAppToFront("com.linecorp.LGWALK")
             delay(800)

@@ -26,7 +26,8 @@ class NodeInspector {
         root: AccessibilityNodeInfo?,
         screenWidth: Int,
         screenHeight: Int,
-        blacklistedCoord: ((Int, Int) -> Boolean)? = null
+        blacklistedCoord: ((Int, Int) -> Boolean)? = null,
+        isFullScreenAd: Boolean = false
     ): MatchedNode? {
         if (root == null) return null
 
@@ -43,11 +44,12 @@ class NodeInspector {
                     val cx = rect.centerX()
                     val cy = rect.centerY()
 
-                    // 排除懸浮窗本身、頂部中間 dynamicSpot 動態島，以及頂部橫幅廣告區間 (y: 12% ~ 36%)
+                    // 排除懸浮窗本身、頂部中間 dynamicSpot 動態島
+                    // 僅在非全螢幕廣告狀態 (如主畫面彈窗) 排除首頁橫幅廣告區間 (y: 12% ~ 36%)，全螢幕廣告時放行中間內容區的略過按鈕！
                     val inOverlay = FloatingOverlayService.isInsideOverlay(cx, cy)
                     val inDynamicIsland = cy < screenHeight * 0.045f &&
                         cx in (screenWidth * 0.28f).toInt()..(screenWidth * 0.72f).toInt()
-                    val inAdBannerZone = cy in (screenHeight * 0.12f).toInt()..(screenHeight * 0.36f).toInt()
+                    val inAdBannerZone = !isFullScreenAd && cy in (screenHeight * 0.12f).toInt()..(screenHeight * 0.36f).toInt()
 
                     val validSize = rect.width() in 16..(screenWidth * 0.45f).toInt() &&
                         rect.height() in 16..(screenHeight * 0.14f).toInt()
@@ -96,16 +98,19 @@ class NodeInspector {
             }
         }
 
-        // 優先選擇頂部角落 (X) 或底部明確的「跳過/略過」按鈕
+        // 第一優先選擇明確的「略過/跳過」按鈕，其次為頂部角落 (X)
         return candidates.sortedBy { node ->
             val cy = node.bounds.centerY()
             val cx = node.bounds.centerX()
             val inTopCorner = cy < screenHeight * 0.25f &&
                 (cx > screenWidth * 0.72f || cx < screenWidth * 0.28f)
-            val isExplicitSkip = node.text == "跳過" || node.text == "略過" || node.contentDesc == "跳過"
+            val isExplicitSkip = node.text.contains("略過") || node.text.contains("跳過") ||
+                node.text.contains("Skip", ignoreCase = true) ||
+                node.contentDesc.contains("略過") || node.contentDesc.contains("跳過") ||
+                node.contentDesc.contains("Skip", ignoreCase = true)
             when {
-                inTopCorner -> 0
-                isExplicitSkip -> 1
+                isExplicitSkip -> 0
+                inTopCorner -> 1
                 else -> 2
             }
         }.firstOrNull()
@@ -191,7 +196,9 @@ class NodeInspector {
         )
 
         private val AD_CLOSE_TEXT_KEYWORDS = listOf(
-            "關閉廣告", "略過廣告", "跳過廣告", "跳過", "略過", "關閉", "Skip", "Close", "Dismiss"
+            "略過廣告", "跳過廣告", "關閉廣告", "離開廣告", "退出廣告", "廣告略過",
+            "略過", "跳過", "關閉", "離開", "退出", "Skip Ad", "Skip ad", "Skip Ads",
+            "Skip", "Close", "Dismiss", "スキップ", "広告をスキップ", "閉じる"
         )
 
         private val COUNTDOWN_HINTS = listOf(
