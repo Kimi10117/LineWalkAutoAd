@@ -148,7 +148,7 @@ class AutomationEngine private constructor(context: Context) {
     private var isReceiveGiftCompleted = false
     private var isFriendGiftCompleted = false
     private val checkedMissionTabs = mutableSetOf<String>()
-    private val missionTabSequence = listOf("特別", "每日")
+    private val missionTabSequence = listOf("特別", "每日", "每週")
     private var friendGiftEmptyTicks = 0
     private var currentPhaseEmptyTicks = 0
     private var nonGameScreenTicks = 0
@@ -873,8 +873,8 @@ class AutomationEngine private constructor(context: Context) {
         // 2. 當前分頁已無可領取項目，將當前分頁加入已檢查清單
         checkedMissionTabs.add(activeTab)
 
-        // 3. 判斷是否還有未檢查的分頁：LINE 散步趣任務彈窗固定只有「特別」與「每日」兩個分頁！
-        val availableTabs = listOf("特別", "每日")
+        // 3. 判斷是否還有未檢查的分頁：LINE 散步趣任務彈窗固定包含「特別」、「每日」、「每週」三大分頁！
+        val availableTabs = listOf("特別", "每日", "每週")
         val nextTab = availableTabs.firstOrNull { it !in checkedMissionTabs }
         if (nextTab != null) {
             appendLog("[切換]【任務】$activeTab 分頁已無可領取項目，切換至【$nextTab】分頁檢查...")
@@ -883,13 +883,14 @@ class AutomationEngine private constructor(context: Context) {
                 service.clickRect(tabRect)
             }
             updateDetail("[切換] 切換至【$nextTab】任務分頁...", "[切換] 切換分頁...")
-            delay(400)
+            delay(500)
             return
         }
 
-        // 4. 所有分頁 (特別、每日) 皆已檢查完畢，確實標記完成並關閉視窗！
+        // 4. 所有分頁 (特別、每日、每週) 皆已檢查完畢，確實標記完成並關閉視窗！
         isMissionCompleted = true
-        appendLog("[完成]【任務】所有分頁（特別、每日）皆已檢查完畢，關閉視窗並推進至下一階段！")
+        checkedMissionTabs.clear()
+        appendLog("[完成]【任務】所有分頁（特別、每日、每週）皆已檢查完畢，關閉視窗並推進至下一階段！")
         val closeBtn = missionTask.getCloseButtonBounds(sw, sh)
         FloatingOverlayService.clickWithOverlayPassthrough(closeBtn) {
             service.clickRect(closeBtn)

@@ -80,7 +80,7 @@ class MissionTask {
 
     /**
      * 偵測當前畫面選中的分頁名稱：
-     * LINE 散步趣任務彈窗標準為雙分頁「特別」(左側 x ≈ 0.20~0.30) 與「每日」(右側 x ≈ 0.55~0.70)
+     * LINE 散步趣任務彈窗標準為三繁體分頁「特別」(左側 x ≈ 0.20)、「每日」(中央 x ≈ 0.50) 與「每週」(右側 x ≈ 0.80)
      */
     fun detectCurrentActiveTab(screenBitmap: Bitmap): String {
         val sw = screenBitmap.width
@@ -102,8 +102,9 @@ class MissionTask {
         if (blackXs.size >= 15) {
             val avgXRatio = blackXs.average().toFloat() / sw
             return when {
-                avgXRatio < 0.40f -> "特別"
-                else -> "每日"
+                avgXRatio < 0.35f -> "特別"
+                avgXRatio in 0.35f..0.65f -> "每日"
+                else -> "每週"
             }
         }
         return "特別"
@@ -133,28 +134,31 @@ class MissionTask {
             val cy = item.bounds.centerY()
             val cx = item.bounds.centerX()
             cy in (sh * 0.22f).toInt()..(sh * 0.90f).toInt() &&
-            cx > (sw * 0.60f).toInt() &&
-            (item.text.contains("挑戰") || item.text.contains("已領取") || item.text.contains("已領"))
-        }.map { (it.bounds.top - 20)..(it.bounds.bottom + 20) }
+            cx > (sw * 0.45f).toInt() &&
+            (item.text.contains("挑戰") || item.text.contains("已領取") || item.text.contains("已領") ||
+             item.text.contains("挑") || item.text.contains("戰"))
+        }.map { (it.bounds.top - 25)..(it.bounds.bottom + 25) }
 
         // 1. OCR 優先辨識「領取」或「Get」(排除已領取、排除挑戰)
         val claimOcr = ocrItems.firstOrNull { item ->
             val cy = item.bounds.centerY()
             val cx = item.bounds.centerX()
+            val t = item.text.replace(" ", "")
             cy in (sh * 0.22f).toInt()..(sh * 0.90f).toInt() &&
-            cx > (sw * 0.60f).toInt() &&
-            (item.text.contains("領取") || item.text.contains("領獎") || item.text.equals("Get", ignoreCase = true)) &&
-            !item.text.contains("已領取") &&
-            !item.text.contains("已領") &&
-            !item.text.contains("挑戰") &&
+            cx > (sw * 0.55f).toInt() &&
+            (t.contains("領取") || t.contains("領獎") || t.equals("Get", ignoreCase = true)) &&
+            !t.contains("已領取") &&
+            !t.contains("已領") &&
+            !t.contains("挑戰") &&
+            !t.contains("挑") && !t.contains("戰") &&
             excludedYRanges.none { range -> cy in range }
         }
         if (claimOcr != null) {
             return claimOcr.bounds
         }
 
-        // 2. 2D 綠色連通像素區塊偵測 (LINE 亮綠 #06C755: g > 140 && g > r + 35 && g > b + 35)
-        // 僅在確認具備任務分頁 (特別/每日/每週) 時才啟用綠色色塊備援，防止主畫面綠色風景/背景誤判
+        // 2. 2D 綠色連通像素區塊偵測 (LINE 亮綠 #06C755: g > 130 && g > r + 30 && g > b + 30)
+        // 僅在確認具備任務分頁 (特別/每日/每週) 時才啟用綠色色塊備援
         val hasMissionTabs = ocrItems.any { item ->
             item.bounds.centerY() < sh * 0.35f && (
                 item.text.contains("每日") || item.text.contains("每週") || item.text.contains("特別")
@@ -175,37 +179,58 @@ class MissionTask {
                 val r = (c shr 16) and 0xFF
                 val g = (c shr 8) and 0xFF
                 val b = c and 0xFF
-                if (g > 140 && g > r + 35 && g > b + 35) {
+                if (g > 130 && (g - r > 30) && (g - b > 30)) {
                     greenPts.add(Point(x, y))
                 }
             }
         }
 
-        // 若找到足夠多連通綠色像素 (實心膠囊按鈕通常 > 35 個採樣點)，聚合成按鈕矩形
-        if (greenPts.size >= 35) {
-            val sortedByY = greenPts.sortedBy { it.y }
-            val firstCluster = mutableListOf<Point>()
-            val firstY = sortedByY.first().y
-            for (pt in sortedByY) {
-                if (pt.y - firstY <= (sh * 0.08f).toInt()) {
-                    firstCluster.add(pt)
-                }
-            }
+        if (greenPts.size < 25) return null
 
-            if (firstCluster.size >= 25) {
-                val minX = firstCluster.minOf { it.x }
-                val maxX = firstCluster.maxOf { it.x }
-                val minY = firstCluster.minOf { it.y }
-                val maxY = firstCluster.maxOf { it.y }
+        // 聚合成候選按鈕群組
+        val sortedByY = greenPts.sortedBy { it.y }.toMutableList()
+        while (sortedByY.isNotEmpty()) {
+            val firstY = sortedByY.first().y
+            val cluster = sortedByY.filter { it.y - firstY <= (sh * 0.08f).toInt() }
+            sortedByY.removeAll(cluster)
+
+            if (cluster.size >= 25) {
+                val minX = cluster.minOf { it.x }
+                val maxX = cluster.maxOf { it.x }
+                val minY = cluster.minOf { it.y }
+                val maxY = cluster.maxOf { it.y }
                 val btnW = maxX - minX
                 val btnH = maxY - minY
+
                 if (btnW in (sw * 0.12f).toInt()..(sw * 0.35f).toInt() && btnH >= 15) {
-                    return Rect(minX, minY, maxX, maxY)
+                    // 嚴格驗證實心綠色按鈕：
+                    // 1. 綠色採樣填滿率 >= 45% (實心按鈕通常 60%~80%，空心「挑戰」僅 ~20%)
+                    val totalSampledInBox = ((btnW / 3) + 1) * ((btnH / 3) + 1)
+                    val inBoxCount = cluster.count { it.x in minX..maxX && it.y in minY..maxY }
+                    val fillRatio = inBoxCount.toFloat() / totalSampledInBox.coerceAtLeast(1)
+
+                    // 2. 檢查左右兩端背景色 (實心按鈕兩端皆為綠色，空心「挑戰」兩端為純白背景)
+                    val midY = (minY + maxY) / 2
+                    val leftPixel = screenBitmap.getPixel((minX + btnW * 0.20f).toInt(), midY)
+                    val rightPixel = screenBitmap.getPixel((maxX - btnW * 0.20f).toInt(), midY)
+                    val isLeftGreen = isGreenPixel(leftPixel)
+                    val isRightGreen = isGreenPixel(rightPixel)
+
+                    if (fillRatio >= 0.45f && isLeftGreen && isRightGreen) {
+                        return Rect(minX, minY, maxX, maxY)
+                    }
                 }
             }
         }
 
         return null
+    }
+
+    private fun isGreenPixel(color: Int): Boolean {
+        val r = (color shr 16) and 0xFF
+        val g = (color shr 8) and 0xFF
+        val b = color and 0xFF
+        return g > 130 && (g - r > 30) && (g - b > 30)
     }
 
     /**
@@ -225,9 +250,9 @@ class MissionTask {
         }
 
         val xRatio = when (tabName) {
-            "特別" -> 0.25f
+            "特別" -> 0.20f
             "每週" -> 0.80f
-            else -> 0.65f // "每日"：雙分頁佈局下中心點約 0.65f
+            else -> 0.50f // "每日"：三繁體分頁佈局下中心點約 0.50f
         }
         val yCenter = (sh * 0.188f).toInt()
         val halfW = (sw * 0.14f).toInt()
