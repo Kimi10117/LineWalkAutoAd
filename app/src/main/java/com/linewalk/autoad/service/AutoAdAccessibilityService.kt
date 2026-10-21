@@ -234,26 +234,32 @@ class AutoAdAccessibilityService : AccessibilityService() {
 
     /**
      * 安全發送單次系統返回鍵：
-     * 1. 強制至少 2000ms 冷卻間隔，防止連續快速發送返回鍵擊穿廣告層。
-     * 2. 單次發送 (SINGLE BACK KEY ONLY)，絕不連擊雙重返回鍵，杜絕退回手機桌面。
+     * 1. 嚴格安全防護：若目前前景為《LINE 散步趣》(com.linecorp.LGWALK)，嚴禁發送系統返回鍵以免退出散步趣回到手機桌面！
+     * 2. 強制至少 2000ms 冷卻間隔，防止連續快速發送返回鍵擊穿廣告層。
+     * 3. 單次發送 (SINGLE BACK KEY ONLY)，杜絕退回手機桌面。
      */
-    fun safeNavigateBack(minIntervalMs: Long = 2000L): Boolean {
+    fun safeNavigateBack(minIntervalMs: Long = 2000L, allowInGame: Boolean = false): Boolean {
+        val fg = getForegroundPackageName()
+        if (!allowInGame && fg == "com.linecorp.LGWALK") {
+            Log.w(TAG, "目前前景為散步趣 (com.linecorp.LGWALK)，禁止發送系統返回鍵以免退回手機桌面！")
+            return false
+        }
         val now = System.currentTimeMillis()
         if (now - lastBackActionTimeMs < minIntervalMs) {
             Log.d(TAG, "返回鍵冷卻中 (${now - lastBackActionTimeMs}ms < ${minIntervalMs}ms)，跳過派發")
             return false
         }
         lastBackActionTimeMs = now
-        Log.i(TAG, "派發單次安全系統返回鍵 (GLOBAL_ACTION_BACK)")
+        Log.i(TAG, "派發單次安全系統返回鍵 (GLOBAL_ACTION_BACK), 前景: $fg")
         return performGlobalAction(GLOBAL_ACTION_BACK)
     }
 
-    fun navigateBack(): Boolean {
-        return safeNavigateBack()
+    fun navigateBack(allowInGame: Boolean = false): Boolean {
+        return safeNavigateBack(allowInGame = allowInGame)
     }
 
-    suspend fun doubleNavigateBack(): Boolean {
-        return safeNavigateBack()
+    suspend fun doubleNavigateBack(allowInGame: Boolean = false): Boolean {
+        return safeNavigateBack(allowInGame = allowInGame)
     }
 
     /**

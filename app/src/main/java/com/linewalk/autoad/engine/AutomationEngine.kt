@@ -251,7 +251,7 @@ class AutomationEngine private constructor(context: Context) {
             service.navigateBack()
             if (_uiStatus.value.state != EngineState.AD_WATCHING) {
                 adCloserHandler.onEnterAdMode(preserveRedirectState = true)
-                transitionTo(EngineState.AD_WATCHING, "已關閉外部套件，監控廣告中...", "📺 廣告監控中...")
+                transitionTo(EngineState.AD_WATCHING, "已關閉外部套件，監控廣告中...", "[廣告] 廣告監控中...")
             }
             return
         }
@@ -385,7 +385,7 @@ class AutomationEngine private constructor(context: Context) {
             transitionTo(
                 EngineState.AD_WATCHING,
                 "已關閉 Hide Ad 選單，繼續等待廣告結束...",
-                "📺 監控廣告中..."
+                "[廣告] 監控廣告中..."
             )
             return
         }
@@ -468,7 +468,7 @@ class AutomationEngine private constructor(context: Context) {
         // C. 檢查是否彈出「玩遊戲賺點數 / 免費參加」推廣宣傳頁，自動點擊底部「跳過」
         val promoSkip = findPlayGamePromoSkipButton(screenBitmap, ocrItems, sw, sh)
         if (promoSkip != null) {
-            appendLog("🎮 偵測到【玩遊戲賺點數】推廣頁，自動點擊底部 [跳過]！")
+            appendLog("[遊戲] 偵測到【玩遊戲賺點數】推廣頁，自動點擊底部 [跳過]！")
             FloatingOverlayService.clickWithOverlayPassthrough(promoSkip) {
                 service.clickRect(promoSkip)
             }
@@ -476,12 +476,12 @@ class AutomationEngine private constructor(context: Context) {
         }
 
         // D. 【子視窗與日常任務優先】優先檢查是否處於日常任務子彈窗或好友分頁（絕不可被底層導覽列誤判為主畫面而忽略已開啟的視窗！）：
-        // D0. 檢查是否跳出「邀請好友」推銷宣傳全螢幕彈窗（如『還沒有邀請好友 實在太可惜了！』『獲得金幣的流程』）
-        if (friendGiftTask.isInvitePromoSheet(ocrItems)) {
+        // D0. 檢查是否跳出 LINE 內部宣傳促銷全螢幕廣告（如『還沒有邀請好友 實在太可惜了！』『獲得金幣的流程』）
+        if (ocrRecognizer.isLineInHousePromoAd(ocrItems)) {
             nonGameScreenTicks = 0
-            val closeBtn = friendGiftTask.getInvitePromoCloseButton(sw, sh)
-            appendLog("[介面] 偵測到【邀請好友】推銷彈窗，點擊右上角 (X) 關閉視窗")
-            updateDetail("[關閉] 正在關閉邀請好友彈窗...", "[關閉] 關閉彈窗中...")
+            val closeBtn = ocrRecognizer.getLineInHousePromoCloseButton(sw, sh)
+            appendLog("[廣告] 偵測到 LINE 宣傳廣告/促銷彈窗，點擊右上角 (X) 關閉視窗")
+            updateDetail("[關閉] 正在關閉宣傳廣告視窗...", "[關閉] 關閉宣傳廣告中...")
             FloatingOverlayService.clickWithOverlayPassthrough(closeBtn) {
                 service.clickRect(closeBtn)
             }
@@ -651,12 +651,12 @@ class AutomationEngine private constructor(context: Context) {
         val isGameScreen = hasMainScreenMarkers || adCloserHandler.isGameScreenVisible(service, screenBitmap, ocrItems)
         if (adWatchdogCooldownTicks == 0 && (hasPlayableOrStoreAdOcr || (!isGameScreen && nonGameScreenTicks >= 2))) {
             nonGameScreenTicks = 0
-            appendLog("📺 偵測到全螢幕廣告/可玩式廣告/商店宣傳頁，切換至廣告監控流程安全關閉！")
+            appendLog("[廣告] 偵測到全螢幕廣告/可玩式廣告/商店宣傳頁，切換至廣告監控流程安全關閉！")
             adCloserHandler.onEnterAdMode()
             transitionTo(
                 EngineState.AD_WATCHING,
                 "偵測到廣告/宣傳視窗，安全等待與關閉中...",
-                "📺 廣告監控中..."
+                "[廣告] 廣告監控中..."
             )
             return
         }
@@ -697,12 +697,12 @@ class AutomationEngine private constructor(context: Context) {
         val openCellBtn = bingoTask.findOpenCellButton(screenBitmap, ocrItems, templateMatcher)
         if (openCellBtn != null) {
             currentPhaseEmptyTicks = 0
-            appendLog("🎯【每日賓果】點擊「立即開啟賓果格」！")
+            appendLog("[目標]【每日賓果】點擊「立即開啟賓果格」！")
             FloatingOverlayService.clickWithOverlayPassthrough(openCellBtn) {
                 service.clickRect(openCellBtn)
             }
             adCloserHandler.onEnterAdMode()
-            transitionTo(EngineState.AD_WATCHING, "已點擊「立即開啟賓果格」，觀看廣告開格中...", "📺 廣告開格中...")
+            transitionTo(EngineState.AD_WATCHING, "已點擊「立即開啟賓果格」，觀看廣告開格中...", "[廣告] 廣告開格中...")
             return
         }
 
@@ -738,7 +738,7 @@ class AutomationEngine private constructor(context: Context) {
             (t.contains("枚金幣") && t.contains("中獎"))
         }
 
-        // 0A. 抽獎結果畫面中：若尚未點擊看廣告獲票，優先點擊綠色按鈕 [▶ 🎫 x1 獲得]！
+        // 0A. 抽獎結果畫面中：若尚未點擊看廣告獲票，優先點擊綠色按鈕 [▶ [抽獎] x1 獲得]！
         val rewardAdBtn = if (!hasClickedLotteryAdReward) lotteryTask.findLotteryRewardAdButton(screenBitmap, ocrItems) else null
         if (rewardAdBtn != null) {
             hasClickedLotteryAdReward = true
@@ -748,7 +748,7 @@ class AutomationEngine private constructor(context: Context) {
                 service.clickRect(rewardAdBtn)
             }
             adCloserHandler.onEnterAdMode()
-            transitionTo(EngineState.AD_WATCHING, "已點擊 [x1 獲得]，觀看廣告獲得票券中...", "🎰 廣告獲票中...")
+            transitionTo(EngineState.AD_WATCHING, "已點擊 [x1 獲得]，觀看廣告獲得票券中...", "[抽獎] 廣告獲票中...")
             return
         }
 
@@ -757,7 +757,7 @@ class AutomationEngine private constructor(context: Context) {
         if (resultCloseBtn != null && (hasClickedLotteryAdReward || hasLotteryResultContext)) {
             hasClickedLotteryAdReward = false
             currentPhaseEmptyTicks = 0
-            appendLog("🎰【抽抽樂結果】點擊彈窗底部的 [關閉] 按鈕")
+            appendLog("[抽獎]【抽抽樂結果】點擊彈窗底部的 [關閉] 按鈕")
             FloatingOverlayService.clickWithOverlayPassthrough(resultCloseBtn) {
                 service.clickRect(resultCloseBtn)
             }
@@ -770,17 +770,17 @@ class AutomationEngine private constructor(context: Context) {
         if (drawTarget != null) {
             hasClickedLotteryAdReward = false
             currentPhaseEmptyTicks = 0
-            appendLog("🎰【抽抽樂】依規則點擊：${drawTarget.first}")
+            appendLog("[抽獎]【抽抽樂】依規則點擊：${drawTarget.first}")
             FloatingOverlayService.clickWithOverlayPassthrough(drawTarget.second) {
                 service.clickRect(drawTarget.second)
             }
             if (drawTarget.first.contains("免費")) {
                 adCloserHandler.onEnterAdMode()
-                transitionTo(EngineState.AD_WATCHING, "已點擊 ${drawTarget.first}，觀看廣告抽獎...", "🎰 廣告抽獎中...")
+                transitionTo(EngineState.AD_WATCHING, "已點擊 ${drawTarget.first}，觀看廣告抽獎...", "[抽獎] 廣告抽獎中...")
             } else {
                 delay(400)
                 popupRetryTicks = 0
-                transitionTo(EngineState.TRIGGER_AD_POPUP, "已點擊 ${drawTarget.first}，等待抽獎結果彈窗...", "🎰 抽獎中...")
+                transitionTo(EngineState.TRIGGER_AD_POPUP, "已點擊 ${drawTarget.first}，等待抽獎結果彈窗...", "[抽獎] 抽獎中...")
             }
             return
         }
@@ -812,13 +812,13 @@ class AutomationEngine private constructor(context: Context) {
         sh: Int
     ) {
         val activeTab = missionTask.detectCurrentActiveTab(screenBitmap)
-        appendLog("📋【任務視窗】當前處於【$activeTab】分頁 (已檢查: ${checkedMissionTabs.joinToString()})")
+        appendLog("[任務]【任務視窗】當前處於【$activeTab】分頁 (已檢查: ${checkedMissionTabs.joinToString()})")
 
         // 1. 尋找清單中綠色「領取」按鈕 (嚴格排除「挑戰」與「已領取」)
         val claimBtn = missionTask.findClaimableMissionButton(screenBitmap, ocrItems)
         if (claimBtn != null) {
             currentPhaseEmptyTicks = 0
-            appendLog("🎯【任務-$activeTab】點擊綠色「領取」按鈕！")
+            appendLog("[目標]【任務-$activeTab】點擊綠色「領取」按鈕！")
             FloatingOverlayService.clickWithOverlayPassthrough(claimBtn) {
                 service.clickRect(claimBtn)
             }
@@ -828,7 +828,7 @@ class AutomationEngine private constructor(context: Context) {
             transitionTo(
                 EngineState.TRIGGER_AD_POPUP,
                 "【任務-$activeTab】已點擊領取，等待獎勵或廣告載入中...",
-                "🎯 領取獎勵中..."
+                "[目標] 領取獎勵中..."
             )
             return
         }
@@ -840,12 +840,12 @@ class AutomationEngine private constructor(context: Context) {
         val availableTabs = listOf("特別", "每日")
         val nextTab = availableTabs.firstOrNull { it !in checkedMissionTabs }
         if (nextTab != null) {
-            appendLog("🔄【任務】$activeTab 分頁已無可領取項目，切換至【$nextTab】分頁檢查...")
+            appendLog("[切換]【任務】$activeTab 分頁已無可領取項目，切換至【$nextTab】分頁檢查...")
             val tabRect = missionTask.getTabRect(nextTab, sw, sh, ocrItems)
             FloatingOverlayService.clickWithOverlayPassthrough(tabRect) {
                 service.clickRect(tabRect)
             }
-            updateDetail("🔄 切換至【$nextTab】任務分頁...", "🔄 切換分頁...")
+            updateDetail("[切換] 切換至【$nextTab】任務分頁...", "[切換] 切換分頁...")
             delay(400)
             return
         }
@@ -872,13 +872,13 @@ class AutomationEngine private constructor(context: Context) {
         val claimBtn = receiveGiftTask.findNextClaimGiftButton(screenBitmap, ocrItems)
         if (claimBtn != null) {
             currentPhaseEmptyTicks = 0
-            appendLog("🎁【接收禮物】點擊領取好友送來的禮物 (綠色播放鈕)！")
+            appendLog("[禮物]【接收禮物】點擊領取好友送來的禮物 (綠色播放鈕)！")
             FloatingOverlayService.clickWithOverlayPassthrough(claimBtn) {
                 service.clickRect(claimBtn)
             }
             delay(500)
             popupRetryTicks = 0
-            transitionTo(EngineState.TRIGGER_AD_POPUP, "已點擊領取禮物，等待廣告或確認視窗...", "🎁 領取禮物中...")
+            transitionTo(EngineState.TRIGGER_AD_POPUP, "已點擊領取禮物，等待廣告或確認視窗...", "[禮物] 領取禮物中...")
             return
         }
 
@@ -920,7 +920,7 @@ class AutomationEngine private constructor(context: Context) {
         // 1. 最優先檢查：是否跳出送禮確認彈窗（使用者指定：【都以送禮物也送自己為主】！）
         val selfGiftOption = friendGiftTask.findSelfGiftButton(screenBitmap, ocrItems)
         if (selfGiftOption != null) {
-            appendLog("🎁【好友送禮】點擊【${selfGiftOption.first}】(優先送禮物也送自己)！")
+            appendLog("[禮物]【好友送禮】點擊【${selfGiftOption.first}】(優先送禮物也送自己)！")
             FloatingOverlayService.clickWithOverlayPassthrough(selfGiftOption.second) {
                 service.clickRect(selfGiftOption.second)
             }
@@ -929,11 +929,11 @@ class AutomationEngine private constructor(context: Context) {
                        selfGiftOption.first.contains("送自己") ||
                        selfGiftOption.first.contains("看廣告")
             if (isAd) {
-                updateDetail("🎁 點擊【${selfGiftOption.first}】，觀看廣告中...", "📺 廣告監控中...")
+                updateDetail("[禮物] 點擊【${selfGiftOption.first}】，觀看廣告中...", "[廣告] 廣告監控中...")
                 adCloserHandler.onEnterAdMode()
-                transitionTo(EngineState.AD_WATCHING, "送禮物也送自己，觀看廣告中...", "📺 廣告監控中...")
+                transitionTo(EngineState.AD_WATCHING, "送禮物也送自己，觀看廣告中...", "[廣告] 廣告監控中...")
             } else {
-                updateDetail("🎁 已贈送好友禮物，繼續檢查下一位...", "🎁 贈送完成")
+                updateDetail("[禮物] 已贈送好友禮物，繼續檢查下一位...", "[禮物] 贈送完成")
                 delay(500)
             }
             return
@@ -944,8 +944,8 @@ class AutomationEngine private constructor(context: Context) {
         if (nextGiftBtn != null) {
             friendGiftEmptyTicks = 0
             friendGiftTask.markGifted(android.graphics.Point(nextGiftBtn.centerX(), nextGiftBtn.centerY()))
-            appendLog("🎁【好友送禮】點擊好友排行榜綠色禮物按鈕 (座標: ${nextGiftBtn.centerX()}, ${nextGiftBtn.centerY()})！")
-            updateDetail("🎁 點擊好友禮物按鈕，等待送禮彈窗...", "🎁 贈送禮物中...")
+            appendLog("[禮物]【好友送禮】點擊好友排行榜綠色禮物按鈕 (座標: ${nextGiftBtn.centerX()}, ${nextGiftBtn.centerY()})！")
+            updateDetail("[禮物] 點擊好友禮物按鈕，等待送禮彈窗...", "[禮物] 贈送禮物中...")
             FloatingOverlayService.clickWithOverlayPassthrough(nextGiftBtn) {
                 service.clickRect(nextGiftBtn)
             }
@@ -956,8 +956,8 @@ class AutomationEngine private constructor(context: Context) {
         // 3. 畫面上沒有禮物按鈕了，向下滾動清單搜尋更多好友！
         friendGiftEmptyTicks++
         if (friendGiftEmptyTicks <= 2) {
-            appendLog("📜【好友送禮】向下滾動清單搜尋更多好友 ($friendGiftEmptyTicks/2)...")
-            updateDetail("📜 滾動清單搜尋更多好友 ($friendGiftEmptyTicks/2)...", "📜 滾動好友清單...")
+            appendLog("[清單]【好友送禮】向下滾動清單搜尋更多好友 ($friendGiftEmptyTicks/2)...")
+            updateDetail("[清單] 滾動清單搜尋更多好友 ($friendGiftEmptyTicks/2)...", "[清單] 滾動好友清單...")
             service.performSwipe(
                 startX = sw * 0.50f,
                 startY = sh * 0.70f,
@@ -1089,13 +1089,13 @@ class AutomationEngine private constructor(context: Context) {
                     emptyTicksOnCurrentTab = 0
                     tabSwitchRetries++
                     val tabRect = getTabRect(desiredTab, sw, sh, ocrItems)
-                    appendLog("🔄 依優先順序切換至【${desiredTab.tabName}】(目前在【${currentTab.tabName}】，嘗試:$tabSwitchRetries/3)...")
+                    appendLog("[切換] 依優先順序切換至【${desiredTab.tabName}】(目前在【${currentTab.tabName}】，嘗試:$tabSwitchRetries/3)...")
                     FloatingOverlayService.clickWithOverlayPassthrough(tabRect) {
                         service.clickRect(tabRect)
                     }
                     updateDetail(
-                        "🔄 正在切換至【${desiredTab.tabName}】($tabSwitchRetries/3)...",
-                        "🔄 切換至[${desiredTab.shortLabel}]..."
+                        "[切換] 正在切換至【${desiredTab.tabName}】($tabSwitchRetries/3)...",
+                        "[切換] 切換至[${desiredTab.shortLabel}]..."
                     )
                     if (tabSwitchRetries >= 4) {
                         appendLog("[提示] 切換至【${desiredTab.tabName}】逾時，強制同步分頁狀態並開始檢查")
@@ -1132,7 +1132,7 @@ class AutomationEngine private constructor(context: Context) {
                     confirmedEmptyTabs.remove(currentTab)
                     val newTaskCount = _uiStatus.value.tasksTriggeredCount + 1
                     _uiStatus.value = _uiStatus.value.copy(tasksTriggeredCount = newTaskCount)
-                    appendLog("🎯【${currentTab.tabName}】點擊: ${target.targetLabel}")
+                    appendLog("[目標]【${currentTab.tabName}】點擊: ${target.targetLabel}")
                     FloatingOverlayService.clickWithOverlayPassthrough(target.bounds) {
                         service.clickRect(target.bounds)
                     }
@@ -1170,15 +1170,15 @@ class AutomationEngine private constructor(context: Context) {
                 val nextTab = nextRemainingTabs.first()
                 val remainOrderStr = nextRemainingTabs.joinToString("➔") { it.shortLabel }
                 val tabRect = getTabRect(nextTab, sw, sh, ocrItems)
-                appendLog("🔄【${currentTab.tabName}】已領完，依序切換至【${nextTab.tabName}】(待檢查:$remainOrderStr)")
+                appendLog("[切換]【${currentTab.tabName}】已領完，依序切換至【${nextTab.tabName}】(待檢查:$remainOrderStr)")
                 needsInitialTabSync = true
                 tabSwitchRetries = 0
                 FloatingOverlayService.clickWithOverlayPassthrough(tabRect) {
                     service.clickRect(tabRect)
                 }
                 updateDetail(
-                    "🔄 正在切換至【${nextTab.tabName}】...",
-                    "🔄 切換至[${nextTab.shortLabel}]檢查中..."
+                    "[切換] 正在切換至【${nextTab.tabName}】...",
+                    "[切換] 切換至[${nextTab.shortLabel}]檢查中..."
                 )
                 delay(600)
                 return
@@ -1189,12 +1189,12 @@ class AutomationEngine private constructor(context: Context) {
                     currentPhase = getNextPhase(PatrolPhase.BINGO)
                     return
                 }
-                appendLog("🎯 點擊主畫面【每日賓果】圖示按鈕...")
+                appendLog("[目標] 點擊主畫面【每日賓果】圖示按鈕...")
                 val iconRect = bingoTask.getMainScreenBingoIconRect(sw, sh, ocrItems)
                 FloatingOverlayService.clickWithOverlayPassthrough(iconRect) {
                     service.clickRect(iconRect)
                 }
-                updateDetail("🎯 開啟【每日賓果】視窗中...", "🎯 開啟每日賓果...")
+                updateDetail("[目標] 開啟【每日賓果】視窗中...", "[目標] 開啟每日賓果...")
             }
 
             PatrolPhase.LOTTERY -> {
@@ -1202,12 +1202,12 @@ class AutomationEngine private constructor(context: Context) {
                     currentPhase = getNextPhase(PatrolPhase.LOTTERY)
                     return
                 }
-                appendLog("🎰 點擊主畫面【抽抽樂】圖示按鈕...")
+                appendLog("[抽獎] 點擊主畫面【抽抽樂】圖示按鈕...")
                 val iconRect = lotteryTask.getMainScreenLotteryIconRect(sw, sh, ocrItems)
                 FloatingOverlayService.clickWithOverlayPassthrough(iconRect) {
                     service.clickRect(iconRect)
                 }
-                updateDetail("🎰 開啟【抽抽樂】視窗中...", "🎰 開啟抽抽樂...")
+                updateDetail("[抽獎] 開啟【抽抽樂】視窗中...", "[抽獎] 開啟抽抽樂...")
             }
 
             PatrolPhase.MISSION -> {
@@ -1215,12 +1215,12 @@ class AutomationEngine private constructor(context: Context) {
                     currentPhase = getNextPhase(PatrolPhase.MISSION)
                     return
                 }
-                appendLog("🎯 點擊主畫面【任務】圖示按鈕...")
+                appendLog("[目標] 點擊主畫面【任務】圖示按鈕...")
                 val iconRect = missionTask.getMainScreenMissionIconRect(sw, sh, ocrItems)
                 FloatingOverlayService.clickWithOverlayPassthrough(iconRect) {
                     service.clickRect(iconRect)
                 }
-                updateDetail("🎯 開啟【任務】視窗中...", "🎯 開啟任務...")
+                updateDetail("[目標] 開啟【任務】視窗中...", "[目標] 開啟任務...")
             }
 
             PatrolPhase.FRIEND_GIFT -> {
@@ -1228,12 +1228,12 @@ class AutomationEngine private constructor(context: Context) {
                     currentPhase = getNextPhase(PatrolPhase.FRIEND_GIFT)
                     return
                 }
-                appendLog("🎁 點擊底部導覽列【好友】按鈕...")
+                appendLog("[禮物] 點擊底部導覽列【好友】按鈕...")
                 val friendsTab = friendGiftTask.getBottomFriendsTabRect(sw, sh, ocrItems)
                 FloatingOverlayService.clickWithOverlayPassthrough(friendsTab) {
                     service.clickRect(friendsTab)
                 }
-                updateDetail("🎁 進入【好友排行榜】送禮中...", "🎁 進入好友...")
+                updateDetail("[禮物] 進入【好友排行榜】送禮中...", "[禮物] 進入好友...")
             }
 
             PatrolPhase.RECEIVE_GIFT -> {
@@ -1241,12 +1241,12 @@ class AutomationEngine private constructor(context: Context) {
                     currentPhase = getNextPhase(PatrolPhase.RECEIVE_GIFT)
                     return
                 }
-                appendLog("🎁 點擊主畫面右上角【禮物盒】圖示按鈕...")
+                appendLog("[禮物] 點擊主畫面右上角【禮物盒】圖示按鈕...")
                 val giftBoxRect = receiveGiftTask.getHeaderGiftBoxRect(sw, sh)
                 FloatingOverlayService.clickWithOverlayPassthrough(giftBoxRect) {
                     service.clickRect(giftBoxRect)
                 }
-                updateDetail("🎁 開啟【禮物】視窗接收禮物中...", "🎁 接收禮物中...")
+                updateDetail("[禮物] 開啟【禮物】視窗接收禮物中...", "[禮物] 接收禮物中...")
             }
 
             PatrolPhase.COMPLETED -> {
@@ -1303,7 +1303,7 @@ class AutomationEngine private constructor(context: Context) {
         } else {
             val nextTab = nextRemainingTabs.first()
             val remainOrderStr = nextRemainingTabs.joinToString("➔") { it.shortLabel }
-            appendLog("🔄【${currentTab.tabName}】冷卻中，依序切換至【${nextTab.tabName}】(待檢查: $remainOrderStr)")
+            appendLog("[切換]【${currentTab.tabName}】冷卻中，依序切換至【${nextTab.tabName}】(待檢查: $remainOrderStr)")
             currentTab = nextTab
             needsInitialTabSync = true
             tabSwitchRetries = 0
@@ -1329,7 +1329,7 @@ class AutomationEngine private constructor(context: Context) {
             return
         }
 
-        // 優先檢查：若處於抽抽樂階段或彈窗，檢查是否為抽抽樂中獎結果彈窗上的綠色獲票按鈕 [▶ 🎫 x1 獲得]！
+        // 優先檢查：若處於抽抽樂階段或彈窗，檢查是否為抽抽樂中獎結果彈窗上的綠色獲票按鈕 [▶ [抽獎] x1 獲得]！
         if (currentPhase == PatrolPhase.LOTTERY || lotteryTask.isLotteryDialogOpen(ocrItems, sh)) {
             val lotteryRewardBtn = if (!hasClickedLotteryAdReward) lotteryTask.findLotteryRewardAdButton(screenBitmap, ocrItems) else null
             if (lotteryRewardBtn != null) {
@@ -1342,7 +1342,7 @@ class AutomationEngine private constructor(context: Context) {
                 transitionTo(
                     EngineState.AD_WATCHING,
                     "點擊抽抽樂獎勵看廣告再獲得票券 [x1 獲得]...",
-                    "🎰 廣告獲票中..."
+                    "[抽獎] 廣告獲票中..."
                 )
                 return
             }
@@ -1351,11 +1351,11 @@ class AutomationEngine private constructor(context: Context) {
             val resultCloseBtn = lotteryTask.findLotteryResultCloseButton(screenBitmap, ocrItems)
             if (resultCloseBtn != null && hasClickedLotteryAdReward) {
                 hasClickedLotteryAdReward = false
-                appendLog("🎰【抽抽樂結果】點擊彈窗底部的 [關閉] 按鈕")
+                appendLog("[抽獎]【抽抽樂結果】點擊彈窗底部的 [關閉] 按鈕")
                 FloatingOverlayService.clickWithOverlayPassthrough(resultCloseBtn) {
                     service.clickRect(resultCloseBtn)
                 }
-                transitionTo(EngineState.IN_GAME_SCAN, "已關閉抽獎結果，繼續抽抽樂...", "🎰 抽抽樂中...")
+                transitionTo(EngineState.IN_GAME_SCAN, "已關閉抽獎結果，繼續抽抽樂...", "[抽獎] 抽抽樂中...")
                 return
             }
         }
@@ -1380,7 +1380,7 @@ class AutomationEngine private constructor(context: Context) {
         // 檢查是否彈出好友送禮確認彈窗（『也送給自己』）
         val selfGiftOption = friendGiftTask.findSelfGiftButton(screenBitmap, ocrItems)
         if (selfGiftOption != null) {
-            appendLog("🎁【好友送禮】等待彈窗中偵測到【${selfGiftOption.first}】，立即點擊！")
+            appendLog("[禮物]【好友送禮】等待彈窗中偵測到【${selfGiftOption.first}】，立即點擊！")
             FloatingOverlayService.clickWithOverlayPassthrough(selfGiftOption.second) {
                 service.clickRect(selfGiftOption.second)
             }
@@ -1390,9 +1390,9 @@ class AutomationEngine private constructor(context: Context) {
                        selfGiftOption.first.contains("看廣告")
             if (isAd) {
                 adCloserHandler.onEnterAdMode()
-                transitionTo(EngineState.AD_WATCHING, "送禮物也送自己，觀看廣告中...", "📺 廣告監控中...")
+                transitionTo(EngineState.AD_WATCHING, "送禮物也送自己，觀看廣告中...", "[廣告] 廣告監控中...")
             } else {
-                transitionTo(EngineState.IN_GAME_SCAN, "已贈送好友禮物，繼續巡邏...", "🎁 贈送完成")
+                transitionTo(EngineState.IN_GAME_SCAN, "已贈送好友禮物，繼續巡邏...", "[禮物] 贈送完成")
             }
             return
         }
@@ -1400,7 +1400,7 @@ class AutomationEngine private constructor(context: Context) {
         // 若彈出「玩遊戲賺點數」推廣宣傳頁，自動點擊底部 [跳過]
         val promoSkip = findPlayGamePromoSkipButton(screenBitmap, ocrItems, sw, sh)
         if (promoSkip != null) {
-            appendLog("🎮 偵測到【玩遊戲賺點數】推廣頁，自動點擊底部 [跳過]！")
+            appendLog("[遊戲] 偵測到【玩遊戲賺點數】推廣頁，自動點擊底部 [跳過]！")
             FloatingOverlayService.clickWithOverlayPassthrough(promoSkip) {
                 service.clickRect(promoSkip)
             }
@@ -1447,6 +1447,18 @@ class AutomationEngine private constructor(context: Context) {
             friendGiftTask.isFriendsPage(ocrItems, sh)
         )
 
+        // 檢查是否彈出 LINE 內部宣傳促銷廣告 (如『還沒有邀請好友 實在太可惜了！』)
+        if (ocrRecognizer.isLineInHousePromoAd(ocrItems)) {
+            val closeBtn = ocrRecognizer.getLineInHousePromoCloseButton(sw, sh)
+            appendLog("[廣告] 彈窗觸發期間偵測到 LINE 宣傳廣告/促銷彈窗，點擊右上角 (X) 關閉")
+            FloatingOverlayService.clickWithOverlayPassthrough(closeBtn) {
+                service.clickRect(closeBtn)
+            }
+            delay(500)
+            transitionTo(EngineState.IN_GAME_SCAN, "已關閉宣傳廣告，繼續巡邏...", "[巡邏] 巡邏畫面目標中...")
+            return
+        }
+
         val fgPkgDirect = service.getForegroundPackageName()
         val isExternalDirect = fgPkgDirect != null && AppConfig.isRedirectPackage(fgPkgDirect)
         val hasBrowserTitleDirect = ocrItems.any { item ->
@@ -1456,9 +1468,9 @@ class AutomationEngine private constructor(context: Context) {
         val isGameScreen = adCloserHandler.isGameScreenVisible(service, screenBitmap, ocrItems)
         // 嚴格安全防護：若畫面仍在主畫面或領獎下半部彈窗，絕不誤判為全螢幕廣告！
         if (!onMainScreenDirect && !isStillInSubDialog && !isBottomRewardPopup && (directGeoX != null || isExternalDirect || hasBrowserTitleDirect || (!isGameScreen && popupRetryTicks >= 2))) {
-            appendLog("📺 點擊目標後已直接進入全螢幕廣告/宣傳頁，啟動廣告監控流程！")
+            appendLog("[廣告] 點擊目標後已直接進入全螢幕廣告/宣傳頁，啟動廣告監控流程！")
             adCloserHandler.onEnterAdMode()
-            transitionTo(EngineState.AD_WATCHING, "已進入廣告畫面，安全監控中...", "📺 廣告監控中...")
+            transitionTo(EngineState.AD_WATCHING, "已進入廣告畫面，安全監控中...", "[廣告] 監控中...")
             return
         }
 
@@ -1515,7 +1527,7 @@ class AutomationEngine private constructor(context: Context) {
             is PopupActionTarget.CandySkipAd -> {
                 val newCount = _uiStatus.value.adsCompletedCount + 1
                 _uiStatus.value = _uiStatus.value.copy(adsCompletedCount = newCount)
-                appendLog("🍬 偵測到可用糖果！點擊 [${action.label}] 直接跳過廣告！(累計 $newCount 次)")
+                appendLog("[糖果] 偵測到可用糖果！點擊 [${action.label}] 直接跳過廣告！(累計 $newCount 次)")
                 FloatingOverlayService.clickWithOverlayPassthrough(action.bounds) {
                     service.clickRect(action.bounds)
                 }
@@ -1523,12 +1535,12 @@ class AutomationEngine private constructor(context: Context) {
                 transitionTo(
                     EngineState.REWARD_CLAIM,
                     "已使用糖果跳過廣告，確認領取狀態中...",
-                    "🍬 糖果跳過確認中..."
+                    "[糖果] 糖果跳過確認中..."
                 )
             }
 
             is PopupActionTarget.WatchAd -> {
-                appendLog("🎬 點擊彈窗看廣告按鈕: ${action.label}")
+                appendLog("[廣告] 點擊彈窗看廣告按鈕: ${action.label}")
                 FloatingOverlayService.clickWithOverlayPassthrough(action.bounds) {
                     service.clickRect(action.bounds)
                 }
@@ -1536,7 +1548,7 @@ class AutomationEngine private constructor(context: Context) {
                 transitionTo(
                     EngineState.AD_WATCHING,
                     "已點擊 ${action.label}，等待廣告播放與關閉...",
-                    "📺 監控廣告中..."
+                    "[廣告] 監控廣告中..."
                 )
             }
         }
@@ -1551,11 +1563,22 @@ class AutomationEngine private constructor(context: Context) {
         val sh = screenBitmap.height
         val promoSkip = findPlayGamePromoSkipButton(screenBitmap, ocrItems, sw, sh)
         if (promoSkip != null) {
-            appendLog("🎮 廣告中偵測到【玩遊戲賺點數】推廣頁，自動點擊底部 [跳過]！")
+            appendLog("[推廣] 廣告中偵測到【玩遊戲賺點數】推廣頁，自動點擊底部 [跳過]！")
             FloatingOverlayService.clickWithOverlayPassthrough(promoSkip) {
                 service.clickRect(promoSkip)
             }
             transitionTo(EngineState.IN_GAME_SCAN, "已跳過推廣頁，繼續巡邏...", "[巡邏] 巡邏畫面目標中...")
+            return
+        }
+
+        // 檢查是否彈出 LINE 內部宣傳促銷全螢幕廣告 (如『還沒有邀請好友 實在太可惜了！』『獲得金幣的流程』)
+        if (ocrRecognizer.isLineInHousePromoAd(ocrItems)) {
+            val promoClose = ocrRecognizer.getLineInHousePromoCloseButton(sw, sh)
+            appendLog("[廣告] 廣告播放期間偵測到 LINE 宣傳廣告/促銷彈窗，點擊右上角 (X) 關閉！")
+            FloatingOverlayService.clickWithOverlayPassthrough(promoClose) {
+                service.clickRect(promoClose)
+            }
+            delay(500)
             return
         }
 
@@ -1710,6 +1733,17 @@ class AutomationEngine private constructor(context: Context) {
         rewardClaimRetryTicks++
         val sw = screenBitmap.width
         val sh = screenBitmap.height
+
+        // 檢查是否彈出 LINE 內部宣傳促銷全螢幕廣告 (如『還沒有邀請好友 實在太可惜了！』)
+        if (ocrRecognizer.isLineInHousePromoAd(ocrItems)) {
+            val closeBtn = ocrRecognizer.getLineInHousePromoCloseButton(sw, sh)
+            appendLog("[廣告] 領獎確認期間偵測到 LINE 宣傳廣告/促銷彈窗，點擊右上角 (X) 關閉")
+            FloatingOverlayService.clickWithOverlayPassthrough(closeBtn) {
+                service.clickRect(closeBtn)
+            }
+            delay(500)
+            return
+        }
 
         val modalClose = ocrRecognizer.findCenterRewardModalCloseButton(screenBitmap, ocrItems)
         if (modalClose != null) {

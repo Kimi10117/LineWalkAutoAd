@@ -62,24 +62,28 @@ class FriendGiftTask {
     }
 
     /**
-     * 判定是否跳出「邀請好友」宣傳推銷全螢幕/半螢幕彈窗 (如『還沒有邀請好友 實在太可惜了！』『獲得金幣的流程』)
+     * 判定是否跳出 LINE 內部宣傳推銷全螢幕/半螢幕廣告 (如『還沒有邀請好友 實在太可惜了！』『獲得金幣的流程』)
      */
     fun isInvitePromoSheet(ocrItems: List<OcrItem>): Boolean {
         return ocrItems.any { item ->
             val t = item.text.replace(" ", "")
             t.contains("還沒有邀請") || t.contains("太可惜了") || t.contains("獲得金幣的流程") ||
-            t.contains("邀請好友吧") || t.contains("邀請任務觸發") ||
-            (t.contains("邀請好友") && ocrItems.any { it.text.contains("都能獲得幣") || it.text.contains("流程") || it.text.contains("完成邀請任務") })
+            t.contains("邀請好友吧") || t.contains("邀請任務觸發") || t.contains("都能獲得幣") ||
+            t.contains("完成邀請任務") ||
+            (t.contains("邀請好友") && ocrItems.any {
+                val o = it.text.replace(" ", "")
+                o.contains("流程") || o.contains("都能獲得") || o.contains("太可惜") || o.contains("10000")
+            })
         }
     }
 
     /**
-     * 「邀請好友」推銷彈窗右上角的圓形關閉按鈕 (X) 座標 (x ≈ 0.92f, y ≈ 0.095f)
+     * LINE 內部宣傳推銷廣告右上角的圓形關閉按鈕 (X) 座標 (x in 86%..98%, y in 6.5%..13%)
      */
     fun getInvitePromoCloseButton(sw: Int, sh: Int): Rect {
         return Rect(
             (sw * 0.86f).toInt(),
-            (sh * 0.07f).toInt(),
+            (sh * 0.065f).toInt(),
             (sw * 0.98f).toInt(),
             (sh * 0.13f).toInt()
         )

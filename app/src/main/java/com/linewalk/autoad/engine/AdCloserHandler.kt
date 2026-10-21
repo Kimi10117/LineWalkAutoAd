@@ -151,6 +151,15 @@ class AdCloserHandler(
             return AdStepResult.ReturnedToGame(null, "已點擊關閉選單回到散步趣介面")
         }
 
+        // 1A-4. LINE 內部促銷宣傳全螢幕廣告 (如『還沒有邀請好友 實在太可惜了！』『獲得金幣的流程』)：
+        // 屬於帶點廣告時可能彈出的促銷全螢幕廣告，絕不等待 30 秒倒數，立即點擊右上角圓形白底 (X) 關閉退回遊戲！
+        if (ocrRecognizer.isLineInHousePromoAd(ocrItems)) {
+            val promoCloseRect = ocrRecognizer.getLineInHousePromoCloseButton(sw, sh)
+            hasAdActuallyShown = true
+            recordAndClick(service, promoCloseRect, allowBlacklist = false)
+            return AdStepResult.ClickedCloseOrSkip("LINE宣傳廣告關閉(X)", promoCloseRect)
+        }
+
         // 1A-3. Meta 輪播廣告 / 外部跳轉安全防死循環返回機制：
         // 若剛剛剛從外部瀏覽器/Custom Tabs 透過返回鍵回到廣告畫面：
         // 由於點擊該廣告角落或畫面會再度觸發跳轉外部網頁，因此切勿再點擊畫面！
@@ -300,7 +309,7 @@ class AdCloserHandler(
         if (explicitSkipOcr != null &&
             !isInvalidOrBlacklisted(explicitSkipOcr.bounds.centerX(), explicitSkipOcr.bounds.centerY())
         ) {
-            recordAndClick(service, explicitSkipOcr.bounds)
+            recordAndClick(service, explicitSkipOcr.bounds, allowBlacklist = false)
             return AdStepResult.ClickedCloseOrSkip("OCR[${explicitSkipOcr.text}]", explicitSkipOcr.bounds)
         }
 
@@ -333,7 +342,7 @@ class AdCloserHandler(
         if (fullScreenCloseOcr != null &&
             !isInvalidOrBlacklisted(fullScreenCloseOcr.bounds.centerX(), fullScreenCloseOcr.bounds.centerY())
         ) {
-            recordAndClick(service, fullScreenCloseOcr.bounds)
+            recordAndClick(service, fullScreenCloseOcr.bounds, allowBlacklist = false)
             return AdStepResult.ClickedCloseOrSkip("OCR[${fullScreenCloseOcr.text}]", fullScreenCloseOcr.bounds)
         }
 
@@ -349,14 +358,14 @@ class AdCloserHandler(
                 blacklistedCoord = ::isInvalidOrBlacklisted
             )
             if (tplMatch != null) {
-                recordAndClick(service, tplMatch.bounds)
+                recordAndClick(service, tplMatch.bounds, allowBlacklist = false)
                 return AdStepResult.ClickedCloseOrSkip(tplMatch.label, tplMatch.bounds)
             }
         }
 
         // 8. 第三層辨識 B：啟動「高精度免樣本幾何角落 X 偵測器」（支援右上角/左上角圓底白 X 與細線 X）
-        // 大幅加速：3 秒後即開始尋找角落 X；若播放已超過 8 秒或已獲得獎勵，啟動放寬模式 (isRelaxed) 偵測半透明 X！
-        if (elapsedSec >= 3 || rewardGrantedOcr != null) {
+        // 大幅加速：2 秒後即開始尋找角落 X；若播放已超過 8 秒或已獲得獎勵，啟動放寬模式 (isRelaxed) 偵測半透明 X！
+        if (elapsedSec >= 2 || rewardGrantedOcr != null) {
             val isRelaxed = elapsedSec >= 8 || rewardGrantedOcr != null
             val geoMatch = templateMatcher.detectCornerGeometricX(
                 screenBitmap = screenBitmap,
@@ -364,15 +373,16 @@ class AdCloserHandler(
                 isRelaxed = isRelaxed
             )
             if (geoMatch != null) {
-                recordAndClick(service, geoMatch.bounds)
+                recordAndClick(service, geoMatch.bounds, allowBlacklist = false)
                 return AdStepResult.ClickedCloseOrSkip(geoMatch.label, geoMatch.bounds)
             }
         }
 
-        // 8B. 主動安全返回策略與熱區點擊（全面改用 safeNavigateBack，散步趣在前景時絕不發送返回鍵）：
+        // 8B. 主動安全返回策略與熱區點擊（全面改用 safeNavigateBack，散步趣在前景時絕不發送返回鍵以免跳出至桌面）：
         val now = System.currentTimeMillis()
+        val isSafeToBack = fgPkg != null && fgPkg != "com.linecorp.LGWALK"
         if (remainingSec == null && elapsedSec >= 5) {
-            if (redirectCount > 0) {
+            if (redirectCount > 0 && isSafeToBack) {
                 service.safeNavigateBack()
                 lastBackActionTimeMs = now
                 return AdStepResult.WatchdogBackTriggered(elapsedSec, "重定向安全返回鍵")
@@ -400,27 +410,34 @@ class AdCloserHandler(
                 val (label, targetRect) = getNextFallbackTarget(sw, sh, ocrItems)
                 lastFallbackCornerTimeMs = now
                 recordAndClick(service, targetRect, allowBlacklist = false)
-                // 盲點關閉熱區同時安全發送系統返回鍵
-                service.safeNavigateBack()
-                lastBackActionTimeMs = now
-                return AdStepResult.WatchdogBackTriggered(elapsedSec, "盲點[$label]+安全返回")
+                if (isSafeToBack) {
+                    service.safeNavigateBack()
+                    lastBackActionTimeMs = now
+                    return AdStepResult.WatchdogBackTriggered(elapsedSec, "盲點[$label]+安全返回")
+                } else {
+                    return AdStepResult.WatchdogBackTriggered(elapsedSec, "盲點[$label]")
+                }
             }
 
-            if (now - lastBackActionTimeMs >= 2500L) {
+            if (isSafeToBack && now - lastBackActionTimeMs >= 2500L) {
                 service.safeNavigateBack()
                 lastBackActionTimeMs = now
                 return AdStepResult.WatchdogBackTriggered(elapsedSec, "安全返回鍵")
             }
         }
 
-        // 9. 防卡死 Watchdog：若單支廣告超過最大等待秒數 (預設 32 秒)，持續循環點擊各關閉熱區與安全返回
+        // 9. 防卡死 Watchdog：若單支廣告超過最大等待秒數 (預設 32 秒)，持續循環點擊各關閉熱區
         if (elapsedSec >= config.maxAdWaitSeconds) {
             val (label, targetRect) = getNextFallbackTarget(sw, sh, ocrItems)
             lastFallbackCornerTimeMs = now
             recordAndClick(service, targetRect, allowBlacklist = false)
-            service.safeNavigateBack()
-            lastBackActionTimeMs = now
-            return AdStepResult.WatchdogBackTriggered(elapsedSec, "強效關閉[$label+安全返回]")
+            if (isSafeToBack) {
+                service.safeNavigateBack()
+                lastBackActionTimeMs = now
+                return AdStepResult.WatchdogBackTriggered(elapsedSec, "強效關閉[$label+安全返回]")
+            } else {
+                return AdStepResult.WatchdogBackTriggered(elapsedSec, "強效關閉[$label]")
+            }
         }
 
         return AdStepResult.ScanningAd(elapsedSec)
@@ -494,21 +511,28 @@ class AdCloserHandler(
         lastClickedPoint = pt
         clickedHistory.add(pt)
         if (allowBlacklist) {
-            // 若同一區域 (半徑 65px 內) 在同支廣告中已被點擊滿 2 次卻仍未關閉廣告，自動加入黑名單避免重複誤觸靜音鍵或假 X
+            // 只有當同一區域 (半徑 65px 內) 在同支廣告中已被點擊滿 5 次仍未關閉廣告，才加入黑名單避免重複誤觸假 X
             val nearbyClicks = clickedHistory.count { p ->
                 hypot((p.x - pt.x).toDouble(), (p.y - pt.y).toDouble()) < BLACKLIST_RADIUS_PX
             }
-            if (nearbyClicks >= 2) {
+            if (nearbyClicks >= 5) {
                 blacklistedPoints.add(pt)
             }
         }
         closeClickCount++
-        service.clickRect(rect, maxJitterPx = 2)
+        FloatingOverlayService.clickWithOverlayPassthrough(rect) {
+            service.clickRect(rect, maxJitterPx = 2)
+        }
     }
 
     fun isGameScreenVisible(service: AutoAdAccessibilityService, screenBitmap: Bitmap, ocrItems: List<OcrItem>): Boolean {
         // 0. 若畫面正在向廣告伺服器載入廣告（如『載入中...』），代表正在等候廣告，絕非遊戲主畫面！
         if (ocrRecognizer.isAdLoadingScreen(ocrItems)) {
+            return false
+        }
+
+        // 0B. 若畫面為 LINE 內部促銷宣傳廣告 (如『還沒有邀請好友 實在太可惜了！』)，絕非遊戲主畫面！
+        if (ocrRecognizer.isLineInHousePromoAd(ocrItems)) {
             return false
         }
 

@@ -272,6 +272,39 @@ class OcrRecognizer {
     }
 
     /**
+     * 判定是否處於 LINE 內部宣傳促銷全螢幕/半螢幕廣告 (如『還沒有邀請好友 實在太可惜了！』『獲得金幣的流程』)。
+     * 此類別為遊戲內跳出之推廣廣告，在觀看廣告前後或點擊廣告時皆可能出現，應立即點擊右上角 (X) 關閉。
+     */
+    fun isLineInHousePromoAd(items: List<OcrItem>): Boolean {
+        return items.any { item ->
+            val t = item.text.replace(" ", "")
+            t.contains("還沒有邀請") ||
+            t.contains("太可惜了") ||
+            t.contains("獲得金幣的流程") ||
+            t.contains("邀請好友吧") ||
+            t.contains("邀請任務觸發") ||
+            t.contains("都能獲得幣") ||
+            t.contains("完成邀請任務") ||
+            (t.contains("邀請好友") && items.any {
+                val o = it.text.replace(" ", "")
+                o.contains("流程") || o.contains("都能獲得") || o.contains("太可惜") || o.contains("10000")
+            })
+        }
+    }
+
+    /**
+     * LINE 內部宣傳廣告右上角的圓形關閉按鈕 (X) 區域 (x in 86%..98%, y in 6.5%..13%)。
+     */
+    fun getLineInHousePromoCloseButton(sw: Int, sh: Int): Rect {
+        return Rect(
+            (sw * 0.86f).toInt(),
+            (sh * 0.065f).toInt(),
+            (sw * 0.98f).toInt(),
+            (sh * 0.13f).toInt()
+        )
+    }
+
+    /**
      * 尋找下半部彈窗（如『時間』分頁點擊獲得票券後，按鈕皆在冷卻中）底部的 [ 取消 ] 按鈕：
      * - 嚴格安全機制：若彈窗內仍有可領取的珊瑚粉紅按鈕或有效領獎文字 (如 ▶ 8 獲得)，代表尚未領取，絕對不可點擊 [取消]！
      * - 僅在確定冷卻中 (hasCooldownText 或 hasGrayDisabledButton) 或確定無任何看廣告按鈕時，才回傳取消按鈕！
@@ -420,6 +453,11 @@ class OcrRecognizer {
     ): Boolean {
         // 0. 若畫面正在向廣告伺服器載入廣告（中央顯示『載入中...』與白色 [取消] 鈕），代表正在等候廣告播放，絕非主畫面！
         if (isAdLoadingScreen(items)) {
+            return false
+        }
+
+        // 0B. 若畫面為 LINE 內部宣傳促銷廣告 (如『還沒有邀請好友 實在太可惜了！』)，絕非主畫面！
+        if (isLineInHousePromoAd(items)) {
             return false
         }
 
