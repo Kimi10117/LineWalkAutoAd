@@ -94,7 +94,8 @@ class AdCloserHandler(
         if (FloatingOverlayService.isInsideOverlay(x, y)) return true
         // 僅排除最頂部系統狀態列 (時間、電量，y < 3.5%)，放行廣告右上角/左上角關閉鈕
         if (currentScreenHeight > 0) {
-            if (y < currentScreenHeight * 0.035f) return true
+            val topLimit = kotlin.math.max(currentScreenHeight * 0.052f, 48f)
+            if (y < topLimit) return true
         }
         return blacklistedPoints.any { pt ->
             hypot((pt.x - x).toDouble(), (pt.y - y).toDouble()) < BLACKLIST_RADIUS_PX
@@ -346,14 +347,35 @@ class AdCloserHandler(
                 return AdStepResult.WatchdogBackTriggered(elapsedSec, "重定向雙重返回鍵")
             }
 
-            if (now - lastFallbackCornerTimeMs >= 3000L) {
-                val (label, targetRect) = getNextFallbackTarget(sw, sh, ocrItems)
-                lastFallbackCornerTimeMs = now
-                recordAndClick(service, targetRect, allowBlacklist = false)
-                return AdStepResult.ClickedCloseOrSkip(label, targetRect)
+            // 針對互動式可玩小遊戲廣告 (Playable Ad，例如飛刀命中、旋轉輪盤等)：
+            // 在第 5~8 秒且尚未點擊過時，於畫面中央下方輕點一次，推進小遊戲進度喚出結尾卡片與 [X] 關閉鈕！
+            val isPlayableAd = ocrItems.any { item ->
+                val t = item.text.uppercase()
+                t.contains("DOWNLOAD") || t.contains("INSTALL") || t.contains("PLAY")
+            }
+            if (isPlayableAd && elapsedSec in 5..8 && closeClickCount == 0) {
+                val interactiveTap = Rect(
+                    (sw * 0.45f).toInt(),
+                    (sh * 0.65f).toInt(),
+                    (sw * 0.55f).toInt(),
+                    (sh * 0.72f).toInt()
+                )
+                closeClickCount++
+                service.clickRect(interactiveTap, maxJitterPx = 2)
+                return AdStepResult.WatchdogBackTriggered(elapsedSec, "互動可玩廣告推進點擊")
             }
 
-            if (now - lastBackActionTimeMs >= 3000L) {
+            if (now - lastFallbackCornerTimeMs >= 2500L) {
+                val (label, targetRect) = getNextFallbackTarget(sw, sh)
+                lastFallbackCornerTimeMs = now
+                recordAndClick(service, targetRect, allowBlacklist = false)
+                // 盲點關閉熱區同時發送系統返回鍵，雙管齊下關閉頑固廣告
+                service.navigateBack()
+                lastBackActionTimeMs = now
+                return AdStepResult.WatchdogBackTriggered(elapsedSec, "盲點[$label]+返回")
+            }
+
+            if (now - lastBackActionTimeMs >= 2500L) {
                 service.doubleNavigateBack()
                 lastBackActionTimeMs = now
                 return AdStepResult.WatchdogBackTriggered(elapsedSec, "雙重返回鍵")
@@ -362,7 +384,7 @@ class AdCloserHandler(
 
         // 9. 防卡死 Watchdog：若單支廣告超過最大等待秒數 (預設 32 秒)，持續循環點擊各關閉熱區與發送返回鍵
         if (elapsedSec >= config.maxAdWaitSeconds) {
-            val (label, targetRect) = getNextFallbackTarget(sw, sh, ocrItems)
+            val (label, targetRect) = getNextFallbackTarget(sw, sh)
             lastFallbackCornerTimeMs = now
             recordAndClick(service, targetRect, allowBlacklist = false)
             service.doubleNavigateBack()
@@ -375,33 +397,19 @@ class AdCloserHandler(
 
     private fun getNextFallbackTarget(
         sw: Int,
-        sh: Int,
-        ocrItems: List<OcrItem>
+        sh: Int
     ): Pair<String, Rect> {
         val targets = mutableListOf<Pair<String, Rect>>()
 
-        // 1. 若頂部出現 Google Play 徽章 (▶| Google Play)，點擊該徽章觸發跳過或喚出關閉機制
-        val gpBadge = ocrItems.firstOrNull { item ->
-            val cy = item.bounds.centerY().toFloat() / sh
-            val cx = item.bounds.centerX().toFloat() / sw
-            cy < 0.18f && cx < 0.40f && (
-                item.text.contains("Google Play", ignoreCase = true) ||
-                (item.text.contains("Google", ignoreCase = true) && item.text.contains("Play", ignoreCase = true))
-            )
-        }
-        if (gpBadge != null) {
-            targets.add("頂部GooglePlay按鈕" to gpBadge.bounds)
-        }
-
-        // 2. 螢幕右上角關閉熱區 (標準全螢幕廣告)
+        // 1. 螢幕右上角關閉熱區 (標準全螢幕廣告，y in 5.5%..12.5% 避開系統狀態列)
         targets.add("螢幕右上角熱區" to Rect(
             (sw * 0.88f).toInt(),
-            (sh * 0.045f).toInt(),
+            (sh * 0.055f).toInt(),
             (sw * 0.97f).toInt(),
-            (sh * 0.110f).toInt()
+            (sh * 0.125f).toInt()
         ))
 
-        // 3. 內容右上角關閉熱區 (專門應對 16:9 / 4:3 劇院黑邊廣告，點擊黑邊下方的內容角落)
+        // 2. 內容右上角關閉熱區 (專門應對 16:9 / 4:3 劇院黑邊廣告，點擊黑邊下方的內容角落)
         targets.add("內容右上角熱區" to Rect(
             (sw * 0.88f).toInt(),
             (sh * 0.165f).toInt(),
@@ -409,19 +417,19 @@ class AdCloserHandler(
             (sh * 0.230f).toInt()
         ))
 
-        // 4. 螢幕左上角關閉熱區 (部分全螢幕廣告 X 在左上)
+        // 3. 螢幕左上角關閉熱區 (部分全螢幕廣告 X 在左上，y in 5.5%..12.5% 避開系統狀態列)
         targets.add("螢幕左上角熱區" to Rect(
             (sw * 0.03f).toInt(),
-            (sh * 0.045f).toInt(),
-            (sw * 0.15f).toInt(),
-            (sh * 0.110f).toInt()
+            (sh * 0.055f).toInt(),
+            (sw * 0.14f).toInt(),
+            (sh * 0.125f).toInt()
         ))
 
-        // 5. 內容左上角關閉熱區
+        // 4. 內容左上角關閉熱區
         targets.add("內容左上角熱區" to Rect(
             (sw * 0.03f).toInt(),
             (sh * 0.165f).toInt(),
-            (sw * 0.15f).toInt(),
+            (sw * 0.14f).toInt(),
             (sh * 0.230f).toInt()
         ))
 

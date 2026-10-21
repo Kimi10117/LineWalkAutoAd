@@ -1544,6 +1544,21 @@ class AutomationEngine private constructor(context: Context) {
             return
         }
 
+        // 0. 全域廣告超時絕對防護 (Global Ad Timeout Watchdog)：
+        // 無論後續辨識回傳何種狀態，若單支廣告已播放達 (maxAdWaitSeconds + 4 秒，預設 36 秒) 仍未結束，
+        // 絕對強制發送返回鍵、喚醒《LINE 散步趣》拉回前景並重置引擎狀態，絕不允許任何廣告造成卡死！
+        val adElapsed = adCloserHandler.getElapsedSeconds()
+        if (adElapsed >= config.maxAdWaitSeconds + 4) {
+            appendLog("🚨 廣告播放達 ${adElapsed}s 超過上限 (${config.maxAdWaitSeconds}s)，強制喚醒散步趣拉回前景！")
+            service.doubleNavigateBack()
+            delay(300)
+            service.bringAppToFront("com.linecorp.LGWALK")
+            delay(800)
+            adWatchdogCooldownTicks = 4
+            transitionTo(EngineState.IN_GAME_SCAN, "廣告逾時強制拉回散步趣主畫面，繼續巡邏...", "🔍 重新巡邏中...")
+            return
+        }
+
         when (val res = adCloserHandler.processAdTick(service, screenBitmap, ocrItems)) {
             is AdStepResult.RedirectRecovered -> {
                 appendLog("🛡️ 誤跳轉外部套件/網頁 (${res.externalPkg})，已自動按返回鍵關閉並繼續監控廣告")

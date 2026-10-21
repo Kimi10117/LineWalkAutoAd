@@ -479,11 +479,12 @@ class TemplateMatcher {
         val step = max(2, sw / 240)
         val tol = max(1, sw / 360)
 
+        val topLimitY = max((sh * 0.052f).toInt(), 48)
         val searchZones = listOf(
-            // 右上角 (最常見，涵蓋螢幕頂部與 16:9 劇院黑邊下方區域 y < 24%)
-            Rect((sw * 0.75f).toInt(), (sh * 0.02f).toInt(), (sw * 0.98f).toInt(), (sh * 0.24f).toInt()),
-            // 左上角 (廣告左上角關閉鈕通常緊貼左上 x < 18%, y < 24%)
-            Rect((sw * 0.02f).toInt(), (sh * 0.02f).toInt(), (sw * 0.18f).toInt(), (sh * 0.24f).toInt())
+            // 右上角 (最常見，涵蓋螢幕頂部系統列下方與 16:9 劇院黑邊下方區域 y in 5.2%..24%)
+            Rect((sw * 0.75f).toInt(), topLimitY, (sw * 0.98f).toInt(), (sh * 0.24f).toInt()),
+            // 左上角 (廣告左上角關閉鈕通常緊貼左上 x < 18%, y in 5.2%..24%)
+            Rect((sw * 0.02f).toInt(), topLimitY, (sw * 0.18f).toInt(), (sh * 0.24f).toInt())
         )
 
         var bestCandidate: TemplateMatchResult? = null
