@@ -1250,6 +1250,7 @@ class AutomationEngine private constructor(context: Context) {
             val nextTab = nextRemainingTabs.first()
             val remainOrderStr = nextRemainingTabs.joinToString("➔") { it.shortLabel }
             appendLog("🔄【${currentTab.tabName}】冷卻中，依序切換至【${nextTab.tabName}】(待檢查: $remainOrderStr)")
+            currentTab = nextTab
             needsInitialTabSync = true
             tabSwitchRetries = 0
         }
@@ -1320,13 +1321,11 @@ class AutomationEngine private constructor(context: Context) {
             return
         }
 
-        // 若彈窗按鈕皆在冷卻中且出現 [取消]，且至少已嘗試 1 次 (確保非畫面剛彈出時的載入延遲)
-        if (popupRetryTicks >= 2) {
-            val cancelBtn = ocrRecognizer.findPopupCancelButton(screenBitmap, ocrItems, templateMatcher)
-            if (cancelBtn != null) {
-                handlePopupCooldownCancel(service, cancelBtn, sw, sh)
-                return
-            }
+        // 若彈窗按鈕皆在冷卻中且出現 [取消]，立即點擊 [取消] 關閉彈窗並切換至下一分頁/任務
+        val cancelBtn = ocrRecognizer.findPopupCancelButton(screenBitmap, ocrItems, templateMatcher)
+        if (cancelBtn != null) {
+            handlePopupCooldownCancel(service, cancelBtn, sw, sh)
+            return
         }
 
         // 檢查是否處於真正的四大分頁下半部領獎彈窗（必須具備彈窗標題與取消按鈕，嚴禁因底層廣告粉紅像素誤判）
@@ -1679,6 +1678,8 @@ class AutomationEngine private constructor(context: Context) {
             return null
         }
 
+        val btnMarginY = (sh * 0.045f).toInt()
+
         // 0. 【最高優先】檢查彈窗內是否有可用的『跳過廣告』(糖果) 按鈕！
         // 若使用者擁有糖果，『跳過廣告』按鈕不會是反灰底色 (!isPopupButtonDisabledGray)，直接點擊即可免看廣告領獎！
         val skipAdCandyOcr = ocrRecognizer.findMatch(
@@ -1690,7 +1691,7 @@ class AutomationEngine private constructor(context: Context) {
             maxTextLength = 10
         )
         if (skipAdCandyOcr != null &&
-            !ocrRecognizer.isAreaInCooldown(ocrItems, skipAdCandyOcr.bounds.top - 20, skipAdCandyOcr.bounds.bottom + 20) &&
+            !ocrRecognizer.isAreaInCooldown(ocrItems, skipAdCandyOcr.bounds.top - btnMarginY, skipAdCandyOcr.bounds.bottom + btnMarginY) &&
             !templateMatcher.isPopupButtonDisabledGray(screenBitmap, skipAdCandyOcr.bounds.centerY())
         ) {
             return PopupActionTarget.CandySkipAd("糖果[跳過廣告]", skipAdCandyOcr.bounds)
@@ -1740,7 +1741,7 @@ class AutomationEngine private constructor(context: Context) {
                 val hasRewardWord = Regex("""\d+\s*獲得""").containsMatchIn(t) || t.contains("看廣告") || t.contains("紅利")
                 if ((matchesKeyword || hasRewardWord) &&
                     OcrRecognizer.GAME_AD_EXCLUDE_KEYWORDS.none { ex -> t.contains(ex, ignoreCase = true) } &&
-                    !ocrRecognizer.isAreaInCooldown(ocrItems, cy - 20, cy + 20) &&
+                    !ocrRecognizer.isAreaInCooldown(ocrItems, cy - btnMarginY, cy + btnMarginY) &&
                     !templateMatcher.isPopupButtonDisabledGray(screenBitmap, cy)
                 ) {
                     val coins = parseRewardCoins(t)
@@ -1757,7 +1758,7 @@ class AutomationEngine private constructor(context: Context) {
             label = "紅利粉紅看廣告鈕"
         )
         if (pinkPopupBtn != null &&
-            !ocrRecognizer.isAreaInCooldown(ocrItems, pinkPopupBtn.bounds.top - 20, pinkPopupBtn.bounds.bottom + 20) &&
+            !ocrRecognizer.isAreaInCooldown(ocrItems, pinkPopupBtn.bounds.top - btnMarginY, pinkPopupBtn.bounds.bottom + btnMarginY) &&
             !templateMatcher.isPopupButtonDisabledGray(screenBitmap, pinkPopupBtn.bounds.centerY())
         ) {
             // 必須確認按鈕附近有「獲得 / 看廣告 / 紅利」字樣，且嚴格排除廣告推廣字眼，絕不點擊底層橫幅廣告！
@@ -1777,7 +1778,7 @@ class AutomationEngine private constructor(context: Context) {
         // 3. 偵測彈窗左側的珊瑚粉紅『紅利』小標籤 (特別針對『時間』分頁的白底黑框『紅利 [▶] x 1 獲得』按鈕！)
         val badgePopupBtn = templateMatcher.findPopupBonusBadgeAdButton(screenBitmap)
         if (badgePopupBtn != null &&
-            !ocrRecognizer.isAreaInCooldown(ocrItems, badgePopupBtn.bounds.top - 20, badgePopupBtn.bounds.bottom + 20) &&
+            !ocrRecognizer.isAreaInCooldown(ocrItems, badgePopupBtn.bounds.top - btnMarginY, badgePopupBtn.bounds.bottom + (sh * 0.06f).toInt()) &&
             !templateMatcher.isPopupButtonDisabledGray(screenBitmap, badgePopupBtn.bounds.centerY())
         ) {
             val nearbyBonusOcr = ocrItems.firstOrNull {
@@ -1802,7 +1803,7 @@ class AutomationEngine private constructor(context: Context) {
         )
         if (bonusTag != null) {
             val targetY = (bonusTag.bounds.bottom + (sh * 0.032f).toInt()).coerceAtMost((sh * 0.90f).toInt())
-            if (!ocrRecognizer.isAreaInCooldown(ocrItems, targetY - 25, targetY + 25) &&
+            if (!ocrRecognizer.isAreaInCooldown(ocrItems, targetY - btnMarginY, targetY + btnMarginY) &&
                 !templateMatcher.isPopupButtonDisabledGray(screenBitmap, targetY)
             ) {
                 val btnRect = Rect((sw * 0.30f).toInt(), targetY - 20, (sw * 0.70f).toInt(), targetY + 20)
@@ -1822,7 +1823,7 @@ class AutomationEngine private constructor(context: Context) {
                 blacklistedCoord = FloatingOverlayService::isInsideOverlay
             )
             if (tplMatch != null &&
-                !ocrRecognizer.isAreaInCooldown(ocrItems, tplMatch.bounds.top - 20, tplMatch.bounds.bottom + 20) &&
+                !ocrRecognizer.isAreaInCooldown(ocrItems, tplMatch.bounds.top - btnMarginY, tplMatch.bounds.bottom + btnMarginY) &&
                 !templateMatcher.isPopupButtonDisabledGray(screenBitmap, tplMatch.bounds.centerY())
             ) {
                 candidates.add(PopupActionTarget.WatchAd(tplMatch.label, tplMatch.bounds) to 1)

@@ -288,27 +288,57 @@ class OcrRecognizer {
 
         val sw = screenBitmap.width
         val sh = screenBitmap.height
+        val btnCheckMargin = (sh * 0.045f).toInt()
+
+        // 檢查是否有明確的冷卻倒數文字（回復還需 / 還需 / 00:00）或按鈕全反灰
+        val hasCooldownText = items.any { item ->
+            val cy = item.bounds.centerY()
+            val t = item.text.replace(" ", "")
+            cy in (sh * 0.55f).toInt()..(sh * 0.92f).toInt() && (
+                t.contains("回復還需") ||
+                t.contains("還需") ||
+                t.contains("回復") ||
+                t.contains("復還需") ||
+                Regex("""\d{1,2}:\d{2}""").containsMatchIn(t)
+            )
+        }
+
+        val hasDisabledGrayButtons = templateMatcher?.let { tm ->
+            val upperGray = tm.isPopupButtonDisabledGray(screenBitmap, (sh * 0.75f).toInt())
+            val lowerGray = tm.isPopupButtonDisabledGray(screenBitmap, (sh * 0.85f).toInt())
+            upperGray || lowerGray
+        } ?: false
 
         // 0. 重要安全防護：若彈窗內仍有高亮可領取的珊瑚粉紅按鈕 (如 ▶ 8 獲得、▶ 15 獲得) 或紅利標籤按鈕，代表獎勵未進入冷卻，絕對不可點擊 [取消]！
         val hasActivePinkBtn = templateMatcher?.let { tm ->
             val pinkBtn = tm.findCoralPinkButton(screenBitmap, 0.66f, 0.88f, "彈窗看廣告鈕")
-            pinkBtn != null && !isAreaInCooldown(items, pinkBtn.bounds.top - 20, pinkBtn.bounds.bottom + 20) &&
+            pinkBtn != null &&
+                !isAreaInCooldown(items, pinkBtn.bounds.top - btnCheckMargin, pinkBtn.bounds.bottom + btnCheckMargin) &&
                 !tm.isPopupButtonDisabledGray(screenBitmap, pinkBtn.bounds.centerY())
         } ?: false
 
         val hasActiveBadgeBtn = templateMatcher?.let { tm ->
             val badgeBtn = tm.findPopupBonusBadgeAdButton(screenBitmap)
-            badgeBtn != null && !isAreaInCooldown(items, badgeBtn.bounds.top - 20, badgeBtn.bounds.bottom + 20) &&
+            badgeBtn != null &&
+                !isAreaInCooldown(items, badgeBtn.bounds.top - btnCheckMargin, badgeBtn.bounds.bottom + (sh * 0.06f).toInt()) &&
                 !tm.isPopupButtonDisabledGray(screenBitmap, badgeBtn.bounds.centerY())
         } ?: false
 
-        // 檢查畫面中是否有可領取文字 (如 \d+ 獲得、看廣告、紅利)
+        // 檢查畫面中是否有可領取文字 (如 \d+ 獲得、看廣告)
+        // 注意：嚴禁單純匹配 "紅利"，因為冷卻中的按鈕上仍固定印有 "紅利" 標籤！
+        // 且必須確認該處不是反灰按鈕 (!isPopupButtonDisabledGray) 且非冷卻中
         val hasActiveClaimRewardOcr = items.any { item ->
             val cy = item.bounds.centerY()
             val t = item.text.trim()
+            val isClaimWord = (Regex("""\d+\s*獲得""").containsMatchIn(t) || t.contains("看廣告")) &&
+                !t.contains("取消") && !t.endsWith("！") && !t.endsWith("!")
+            val isGray = templateMatcher?.isPopupButtonDisabledGray(screenBitmap, cy) ?: false
+            val inCooldown = isAreaInCooldown(items, cy - btnCheckMargin, cy + btnCheckMargin)
+
             cy in (sh * 0.65f).toInt()..(sh * 0.90f).toInt() &&
-                (Regex("""\d+\s*獲得""").containsMatchIn(t) || t.contains("看廣告") || t.contains("紅利")) &&
-                !isAreaInCooldown(items, cy - 20, cy + 20)
+                isClaimWord &&
+                !isGray &&
+                !inCooldown
         }
 
         // 只要彈窗內仍有任何看廣告領獎鈕，絕對不可誤按取消！
@@ -316,45 +346,35 @@ class OcrRecognizer {
             return null
         }
 
-        // 檢查是否有明確的冷卻倒數文字（回復還需 / 還需 / 00:00）
-        val hasCooldownText = items.any { item ->
-            val cy = item.bounds.centerY()
-            cy in (sh * 0.58f).toInt()..(sh * 0.90f).toInt() && (
-                item.text.contains("回復還需") ||
-                item.text.contains("還需") ||
-                item.text.contains("回復") ||
-                Regex("""\d{1,2}:\d{2}""").containsMatchIn(item.text)
-            )
-        }
-
-        // 1. OCR 搜尋下半部 (y = 0.82..0.97, x = 0.30..0.70) 的「取消」文字
+        // 1. OCR 搜尋下半部 (y = 0.80..0.98, x = 0.20..0.80) 的「取消」文字
         val cancelOcr = findMatch(
             items = items,
             keywords = listOf("取消"),
             screenWidth = sw,
             screenHeight = sh,
-            roiNormalized = RectF(0.30f, 0.82f, 0.70f, 0.97f),
+            roiNormalized = RectF(0.20f, 0.80f, 0.80f, 0.98f),
             excludeKeywords = listOf("預訂", "訂購", "禮物卡", "購買"),
             maxTextLength = 4
         )
         if (cancelOcr != null) {
-            // 只有在明確出現冷卻倒數文字（回復還需、還需、00:xx）時，才點擊 [取消]！
+            // 只有在明確出現冷卻倒數文字（回復還需、還需、00:xx）或按鈕皆反灰時，才點擊 [取消]！
             // 嚴禁在未冷卻的正常彈窗上誤點取消！
-            if (hasCooldownText) {
+            if (hasCooldownText || hasDisabledGrayButtons) {
                 return cancelOcr.bounds
             }
             return null
         }
 
-        // 2. 備援：若畫面上方為半透明遮罩，下半部出現「回復還需 / 還需 / 00:」倒數中，且有彈窗標題
+        // 2. 備援：若下半部出現「回復還需 / 還需 / 00:」倒數中或按鈕反灰，且有彈窗標題（獲得票券 / 獲得金幣）
         val hasModalTitle = items.any { item ->
             val cy = item.bounds.centerY()
-            cy in (sh * 0.55f).toInt()..(sh * 0.72f).toInt() && (
-                item.text.contains("獲得票券") || item.text.contains("獲得金幣")
+            val t = item.text.replace(" ", "")
+            cy in (sh * 0.52f).toInt()..(sh * 0.75f).toInt() && (
+                t.contains("獲得票券") || t.contains("獲得金幣")
             )
         }
 
-        if (hasCooldownText && hasModalTitle) {
+        if ((hasCooldownText || hasDisabledGrayButtons) && hasModalTitle) {
             return Rect(
                 (sw * 0.38f).toInt(),
                 (sh * 0.90f).toInt(),
@@ -376,11 +396,13 @@ class OcrRecognizer {
     ): Boolean {
         return items.any { item ->
             val cy = item.bounds.centerY()
-            if (cy in topY..bottomY) {
-                val t = item.text
+            val overlaps = item.bounds.top <= bottomY && item.bounds.bottom >= topY
+            if (cy in topY..bottomY || overlaps) {
+                val t = item.text.replace(" ", "")
                 t.contains("回復還需") ||
                 t.contains("還需") ||
                 t.contains("回復") ||
+                t.contains("復還需") ||
                 Regex("""\d{1,2}:\d{2}""").containsMatchIn(t)
             } else {
                 false
