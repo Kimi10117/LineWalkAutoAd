@@ -203,11 +203,23 @@ class LotteryTask {
      * 偵測抽抽樂抽獎後的結果彈窗綠色看廣告獲票按鈕：[▶ 🎫 x1 獲得]
      * - 背景為 LINE 鮮綠色 (#06C856 / g > 140 && g > r + 35 && g > b + 35)
      * - 位於畫面中下部 (y ≈ 0.60f ~ 0.76f)
-     * - 優先像素聚類，備援 OCR 搜尋 (含 "獲得" 或 "x1")
+     * - 嚴格安全機制：必須在具有抽抽樂/中獎上下文（中獎囉、中獎、Thank you for watching 等）時才生效！
+     * - 絕對排除日常領獎標題（獲得票券！、獲得金幣！等）！
      */
     fun findLotteryRewardAdButton(screenBitmap: Bitmap, ocrItems: List<OcrItem>): Rect? {
         val sw = screenBitmap.width
         val sh = screenBitmap.height
+
+        // 0. 嚴格安全前置檢查：必須處於抽抽樂中獎結果畫面！
+        val hasLotteryResultContext = ocrItems.any { item ->
+            val t = item.text.replace(" ", "")
+            t.contains("中獎囉") || t.contains("中獎") || t.contains("Thankyouforwatching") ||
+            (t.contains("枚金幣") && t.contains("中獎")) ||
+            (item.bounds.centerY() < sh * 0.20f && t.contains("抽抽樂"))
+        }
+        if (!hasLotteryResultContext) {
+            return null
+        }
 
         // 1. 優先：綠色膠囊按鈕像素聚類偵測 (y: 0.60f..0.76f, x: 0.12f..0.88f)
         val greenPts = mutableListOf<android.graphics.Point>()
@@ -233,17 +245,20 @@ class LotteryTask {
             val maxX = greenPts.maxOf { it.x }
             val minY = greenPts.minOf { it.y }
             val maxY = greenPts.maxOf { it.y }
-            if (maxX - minX >= (sw * 0.35f).toInt() && maxY - minY in 15..(sh * 0.12f).toInt()) {
+            // 膠囊按鈕必須具備相當寬度 (>= 40% 螢幕寬度)，排除小的圓形圖示 (如放置蘋果)
+            if (maxX - minX >= (sw * 0.40f).toInt() && maxY - minY in 15..(sh * 0.12f).toInt()) {
                 return Rect(minX, minY, maxX, maxY)
             }
         }
 
-        // 2. 備援：OCR 比對 (y: 0.60f..0.76f，文字含 "獲得" 或 "x1"，排除 "分享" 或 "關閉")
+        // 2. 備援：OCR 比對 (y: 0.60f..0.76f，文字明確為 "x1獲得" 或 "x1"，絕不可匹配標題如 "獲得票券！" 或 "獲得金幣！")
         val ocrMatch = ocrItems.firstOrNull { item ->
             val cy = item.bounds.centerY()
             val t = item.text.replace(" ", "")
             cy in yStart..yEnd &&
-            (t.contains("獲得") || t.contains("x1") || t.contains("1張") || t.contains("再獲得")) &&
+            !t.endsWith("！") && !t.endsWith("!") &&
+            !t.contains("票券") && !t.contains("金幣") &&
+            (t.contains("x1獲得") || (t.contains("x1") && t.contains("獲得")) || (t.contains("1張") && t.contains("獲得"))) &&
             !t.contains("分享") && !t.contains("關閉")
         }
         if (ocrMatch != null) {

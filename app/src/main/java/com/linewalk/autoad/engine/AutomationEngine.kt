@@ -439,23 +439,6 @@ class AutomationEngine private constructor(context: Context) {
             return
         }
 
-        // A0. 優先檢查：是否停留在抽抽樂中獎結果彈窗，且有綠色看廣告獲票按鈕 [▶ 🎫 x1 獲得]！
-        val lotteryRewardAdBtn = lotteryTask.findLotteryRewardAdButton(screenBitmap, ocrItems)
-        if (lotteryRewardAdBtn != null) {
-            emptyTicksOnCurrentTab = 0
-            appendLog("🎰【抽抽樂中獎】點擊綠色按鈕看廣告再獲得 1 張票券 [▶ 🎫 x1 獲得]")
-            FloatingOverlayService.clickWithOverlayPassthrough(lotteryRewardAdBtn) {
-                service.clickRect(lotteryRewardAdBtn)
-            }
-            adCloserHandler.onEnterAdMode()
-            transitionTo(
-                EngineState.AD_WATCHING,
-                "點擊抽抽樂獎勵看廣告再獲得票券 [x1 獲得]...",
-                "🎰 廣告獲票中..."
-            )
-            return
-        }
-
         // A. 最優先檢查：是否停留在看完廣告後的『獲得15張票券！ / 獲得金幣！』中央彈窗（下方有白色 [ 關閉 ] 按鈕）！
         val modalCloseBtn = ocrRecognizer.findCenterRewardModalCloseButton(screenBitmap, ocrItems)
         if (modalCloseBtn != null) {
@@ -1291,20 +1274,22 @@ class AutomationEngine private constructor(context: Context) {
             return
         }
 
-        // 優先檢查：是否為抽抽樂中獎結果彈窗上的綠色獲票按鈕 [▶ 🎫 x1 獲得]！
-        val lotteryRewardBtn = lotteryTask.findLotteryRewardAdButton(screenBitmap, ocrItems)
-        if (lotteryRewardBtn != null) {
-            appendLog("🎰 偵測到抽抽樂中獎結果！點擊綠色按鈕看廣告再獲得 1 張票券 [▶ 🎫 x1 獲得]")
-            FloatingOverlayService.clickWithOverlayPassthrough(lotteryRewardBtn) {
-                service.clickRect(lotteryRewardBtn)
+        // 優先檢查：若處於抽抽樂階段或彈窗，檢查是否為抽抽樂中獎結果彈窗上的綠色獲票按鈕 [▶ 🎫 x1 獲得]！
+        if (currentPhase == PatrolPhase.LOTTERY || lotteryTask.isLotteryDialogOpen(ocrItems, sh)) {
+            val lotteryRewardBtn = lotteryTask.findLotteryRewardAdButton(screenBitmap, ocrItems)
+            if (lotteryRewardBtn != null) {
+                appendLog("🎰 偵測到抽抽樂中獎結果！點擊綠色按鈕看廣告再獲得 1 張票券 [▶ 🎫 x1 獲得]")
+                FloatingOverlayService.clickWithOverlayPassthrough(lotteryRewardBtn) {
+                    service.clickRect(lotteryRewardBtn)
+                }
+                adCloserHandler.onEnterAdMode()
+                transitionTo(
+                    EngineState.AD_WATCHING,
+                    "點擊抽抽樂獎勵看廣告再獲得票券 [x1 獲得]...",
+                    "🎰 廣告獲票中..."
+                )
+                return
             }
-            adCloserHandler.onEnterAdMode()
-            transitionTo(
-                EngineState.AD_WATCHING,
-                "點擊抽抽樂獎勵看廣告再獲得票券 [x1 獲得]...",
-                "🎰 廣告獲票中..."
-            )
-            return
         }
 
         // 若已彈出抽獎/領獎完成彈窗（如『獲得金幣！ [關閉]』），直接點擊 [關閉] 並返回主畫面/子視窗繼續巡邏！

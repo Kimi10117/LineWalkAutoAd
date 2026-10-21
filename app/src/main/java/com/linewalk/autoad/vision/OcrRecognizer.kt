@@ -191,7 +191,10 @@ class OcrRecognizer {
         val hasLotteryAdOcr = items.any { item ->
             val cy = item.bounds.centerY().toFloat() / sh
             val t = item.text.replace(" ", "")
-            cy in 0.60f..0.76f && (t.contains("x1獲得") || (t.contains("x1") && t.contains("獲得")) || (t.contains("1張") && t.contains("獲得"))) &&
+            cy in 0.60f..0.76f &&
+            !t.endsWith("！") && !t.endsWith("!") &&
+            !t.contains("票券") && !t.contains("金幣") &&
+            (t.contains("x1獲得") || (t.contains("x1") && t.contains("獲得")) || (t.contains("1張") && t.contains("獲得"))) &&
             !t.contains("分享") && !t.contains("關閉")
         }
         if (hasLotteryAdOcr) {
