@@ -397,7 +397,7 @@ class AdCloserHandler(
             }
 
             if (now - lastFallbackCornerTimeMs >= 2500L) {
-                val (label, targetRect) = getNextFallbackTarget(sw, sh)
+                val (label, targetRect) = getNextFallbackTarget(sw, sh, ocrItems)
                 lastFallbackCornerTimeMs = now
                 recordAndClick(service, targetRect, allowBlacklist = false)
                 // 盲點關閉熱區同時安全發送系統返回鍵
@@ -415,7 +415,7 @@ class AdCloserHandler(
 
         // 9. 防卡死 Watchdog：若單支廣告超過最大等待秒數 (預設 32 秒)，持續循環點擊各關閉熱區與安全返回
         if (elapsedSec >= config.maxAdWaitSeconds) {
-            val (label, targetRect) = getNextFallbackTarget(sw, sh)
+            val (label, targetRect) = getNextFallbackTarget(sw, sh, ocrItems)
             lastFallbackCornerTimeMs = now
             recordAndClick(service, targetRect, allowBlacklist = false)
             service.safeNavigateBack()
@@ -428,7 +428,8 @@ class AdCloserHandler(
 
     private fun getNextFallbackTarget(
         sw: Int,
-        sh: Int
+        sh: Int,
+        ocrItems: List<OcrItem> = emptyList()
     ): Pair<String, Rect> {
         val targets = mutableListOf<Pair<String, Rect>>()
 
@@ -448,21 +449,36 @@ class AdCloserHandler(
             (sh * 0.230f).toInt()
         ))
 
-        // 3. 螢幕左上角關閉熱區 (部分全螢幕廣告 X 在左上，y in 5.5%..12.5% 避開系統狀態列)
-        targets.add("螢幕左上角熱區" to Rect(
+        // 3. 螢幕左上角關閉熱區 (若左上方為 Google Play / 商店推廣徽章，絕對避開以免誤跳轉應用商店)
+        val leftTopRect = Rect(
             (sw * 0.03f).toInt(),
             (sh * 0.055f).toInt(),
             (sw * 0.14f).toInt(),
             (sh * 0.125f).toInt()
-        ))
+        )
+        val hasStoreBadgeOnLeft = ocrItems.any { item ->
+            val t = item.text.lowercase()
+            (t.contains("google") || t.contains("play") || t.contains("install") || t.contains("下載") || t.contains("安裝")) &&
+                item.bounds.centerY() < sh * 0.18f && item.bounds.centerX() < sw * 0.45f
+        }
+        if (!hasStoreBadgeOnLeft) {
+            targets.add("螢幕左上角熱區" to leftTopRect)
+        }
 
-        // 4. 內容左上角關閉熱區
-        targets.add("內容左上角熱區" to Rect(
-            (sw * 0.03f).toInt(),
-            (sh * 0.165f).toInt(),
-            (sw * 0.14f).toInt(),
-            (sh * 0.230f).toInt()
-        ))
+        // 4. 內容左上角關閉熱區 (避開左側可能的商店徽章或懸浮窗)
+        val hasStoreBadgeOnContentLeft = ocrItems.any { item ->
+            val t = item.text.lowercase()
+            (t.contains("google") || t.contains("play") || t.contains("install")) &&
+                item.bounds.centerY() in (sh * 0.15f).toInt()..(sh * 0.28f).toInt() && item.bounds.centerX() < sw * 0.35f
+        }
+        if (!hasStoreBadgeOnContentLeft) {
+            targets.add("內容左上角熱區" to Rect(
+                (sw * 0.03f).toInt(),
+                (sh * 0.165f).toInt(),
+                (sw * 0.14f).toInt(),
+                (sh * 0.230f).toInt()
+            ))
+        }
 
         val target = targets[fallbackCornerCycle % targets.size]
         fallbackCornerCycle++

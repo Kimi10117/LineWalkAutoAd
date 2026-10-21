@@ -650,11 +650,6 @@ class AutomationEngine private constructor(context: Context) {
 
         if (!isGameScreen) {
             nonGameScreenTicks++
-            if (nonGameScreenTicks >= 3) {
-                appendLog("🛡️ 畫面非主畫面且持續無可點擊目標 ($nonGameScreenTicks ticks)，嘗試發送系統返回鍵關閉彈窗")
-                service.navigateBack()
-                nonGameScreenTicks = 0
-            }
         } else {
             nonGameScreenTicks = 0
         }

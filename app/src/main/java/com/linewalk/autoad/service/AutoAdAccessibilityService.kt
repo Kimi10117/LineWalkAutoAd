@@ -229,24 +229,22 @@ class AutoAdAccessibilityService : AccessibilityService() {
         }
     }
 
-    /**
-     * 檢查《LINE 散步趣》是否已在前景。
-     */
-    fun isGameInForeground(): Boolean {
-        val fg = getForegroundPackageName()
-        return fg != null && (fg == "com.linecorp.LGWALK" || fg.contains("LGWALK"))
-    }
+    @Volatile
+    private var lastBackActionTimeMs: Long = 0L
 
     /**
-     * 安全觸發系統返回鍵：
-     * - 【核心防護】若《LINE 散步趣》已經在前景，絕對禁止按返回鍵，徹底杜絕自己跳出回桌面問題！
-     * - 單次精確返回，避免快速雙擊打穿廣告層關閉遊戲本體。
+     * 安全發送單次系統返回鍵：
+     * 1. 強制至少 2000ms 冷卻間隔，防止連續快速發送返回鍵擊穿廣告層。
+     * 2. 單次發送 (SINGLE BACK KEY ONLY)，絕不連擊雙重返回鍵，杜絕退回手機桌面。
      */
-    fun safeNavigateBack(): Boolean {
-        if (isGameInForeground()) {
-            android.util.Log.w(TAG, "🛡️ 散步趣已在前景，安全防護生效：攔截返回鍵避免退出至桌面！")
+    fun safeNavigateBack(minIntervalMs: Long = 2000L): Boolean {
+        val now = System.currentTimeMillis()
+        if (now - lastBackActionTimeMs < minIntervalMs) {
+            Log.d(TAG, "返回鍵冷卻中 (${now - lastBackActionTimeMs}ms < ${minIntervalMs}ms)，跳過派發")
             return false
         }
+        lastBackActionTimeMs = now
+        Log.i(TAG, "派發單次安全系統返回鍵 (GLOBAL_ACTION_BACK)")
         return performGlobalAction(GLOBAL_ACTION_BACK)
     }
 
