@@ -3,4 +3,11 @@
     <string name="app_name">散步趣助手</string>
     <string name="accessibility_service_label">散步趣助手</string>
     <string name="accessibility_service_description">用於《LINE 散步趣》自動辨識步數水瓶、移動距離、放置獎勵與自動關閉廣告彈窗。本服務僅在您手動按下懸浮窗「開始」時運作，所有影像與文字辨識皆在手機本地端離線完成。</string>
+    <string name="btn_export_logs">匯出日誌</string>
+    <string name="btn_copy_logs">複製日誌</string>
+    <string name="toast_logs_copied">已複製日誌至剪貼簿</string>
+    <string name="toast_clipboard_error">無法存取系統剪貼簿</string>
+    <string name="toast_export_fallback_copied">無法開啟分享選單，已自動複製完整日誌至剪貼簿</string>
+    <string name="chooser_export_logs">匯出日誌</string>
+    <string name="subject_export_logs">LINE散步趣助手執行日誌</string>
 </resources>

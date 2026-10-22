@@ -44,6 +44,12 @@ class BingoTask {
         }
     }
 
+    data class BingoRewardTarget(
+        val columnIndex: Int,
+        val label: String,
+        val bounds: Rect
+    )
+
     /**
      * 尋找「立即開啟賓果格」橘色按鈕 (y ≈ 0.635f)
      */
@@ -55,11 +61,18 @@ class BingoTask {
         val sh = screenBitmap.height
         val sw = screenBitmap.width
 
+        // 0. 若已出現「今日上限」或「已達到今日上限」，代表今日無法再開啟賓果格
+        val hasReachedLimit = ocrItems.any { item ->
+            val t = item.text.replace(" ", "")
+            t.contains("今日上限") || t.contains("已達到今日上限") || t.contains("9/9") || t.contains("已全數開啟")
+        }
+        if (hasReachedLimit) return null
+
         // 1. OCR 搜尋「立即開啟」/「開啟賓果格」/「開啟賓果」
         val match = ocrItems.firstOrNull { item ->
             val cy = item.bounds.centerY()
             val t = item.text.replace(" ", "")
-            cy in (sh * 0.58f).toInt()..(sh * 0.70f).toInt() &&
+            cy in (sh * 0.56f).toInt()..(sh * 0.72f).toInt() &&
             (t.contains("立即開啟") || t.contains("開啟賓果格") || t.contains("開啟賓果") || t.contains("立即開"))
         }
         if (match != null) {
@@ -70,12 +83,12 @@ class BingoTask {
         }
 
         // 2. 2D 亮橘色長條按鈕區塊聚類偵測 (#FF8C00 ~ #FFA500: r > 190 && g in 100..195 && b < 70)
-        // 搜尋 y in 0.58f..0.70f, x in 0.18f..0.82f
+        // 搜尋 y in 0.56f..0.72f, x in 0.16f..0.84f
         val orangePts = mutableListOf<android.graphics.Point>()
-        val yStart = (sh * 0.58f).toInt()
-        val yEnd = (sh * 0.70f).toInt()
-        val xStart = (sw * 0.18f).toInt()
-        val xEnd = (sw * 0.82f).toInt()
+        val yStart = (sh * 0.56f).toInt()
+        val yEnd = (sh * 0.72f).toInt()
+        val xStart = (sw * 0.16f).toInt()
+        val xEnd = (sw * 0.84f).toInt()
 
         for (y in yStart..yEnd step 3) {
             for (x in xStart..xEnd step 3) {
@@ -96,8 +109,11 @@ class BingoTask {
             val maxY = orangePts.maxOf { it.y }
             val btnW = maxX - minX
             val btnH = maxY - minY
-            if (btnW > sw * 0.35f && btnH in 15..(sh * 0.10f).toInt()) {
-                return Rect(minX, minY, maxX, maxY)
+            if (btnW > sw * 0.35f && btnH in 15..(sh * 0.12f).toInt()) {
+                val cy = (minY + maxY) / 2
+                if (!templateMatcher.isPopupButtonDisabledGray(screenBitmap, cy)) {
+                    return Rect(minX, minY, maxX, maxY)
+                }
             }
         }
 
@@ -105,24 +121,30 @@ class BingoTask {
     }
 
     /**
-     * 尋找連線獎勵按鈕 (例如 1 BINGO 下方的紅底白字 [▶ Get] 或 [領取])：
-     * 支援 4 大連線直欄 (1 BINGO, 3 BINGO, 5 BINGO, 8 BINGO) 之紅色膠囊按鈕精準偵測！
+     * 尋找可領取的賓果連線獎勵按鈕 (1 BINGO: 18%, 3 BINGO: 39%, 5 BINGO: 61%, 8 BINGO: 82%)：
+     * 排除已在當前輪次領取過的直欄 (claimedColumns)。
+     * 偵測特徵：
+     * 1. 該欄下半部 (y in 0.74f..0.90f) 出現紅色 [▶ Get] 膠囊按鈕
+     * 2. 該欄下半部 OCR 出現「Get」/「GET」/「Cet」/「領取」/「▶」
      */
-    fun findConnectionRewardButton(
+    fun findNextClaimableReward(
         screenBitmap: Bitmap,
-        ocrItems: List<OcrItem>
-    ): Rect? {
+        ocrItems: List<OcrItem>,
+        claimedColumns: Set<Int> = emptySet()
+    ): BingoRewardTarget? {
         val sh = screenBitmap.height
         val sw = screenBitmap.width
-
-        // 1. 優先：依序檢查 4 大 BINGO 連線欄位 (1 BINGO: 18%, 3 BINGO: 39%, 5 BINGO: 61%, 8 BINGO: 82%) 之紅色膠囊按鈕 [▶ Get]
         val colCenters = listOf(0.18f, 0.39f, 0.61f, 0.82f)
-        for (cx in colCenters) {
-            val x1 = (sw * (cx - 0.08f)).toInt().coerceIn(0, sw - 1)
-            val x2 = (sw * (cx + 0.08f)).toInt().coerceIn(x1 + 1, sw)
-            val y1 = (sh * 0.78f).toInt().coerceIn(0, sh - 1)
-            val y2 = (sh * 0.88f).toInt().coerceIn(y1 + 1, sh)
 
+        for ((colIndex, cx) in colCenters.withIndex()) {
+            if (colIndex in claimedColumns) continue
+
+            val x1 = (sw * (cx - 0.10f)).toInt().coerceIn(0, sw - 1)
+            val x2 = (sw * (cx + 0.10f)).toInt().coerceIn(x1 + 1, sw)
+            val y1 = (sh * 0.74f).toInt().coerceIn(0, sh - 1)
+            val y2 = (sh * 0.90f).toInt().coerceIn(y1 + 1, sh)
+
+            // 1. 檢查該欄是否有紅色膠囊按鈕
             val redPoints = mutableListOf<android.graphics.Point>()
             var y = y1
             while (y < y2) {
@@ -132,7 +154,6 @@ class BingoTask {
                     val r = (c shr 16) and 0xFF
                     val g = (c shr 8) and 0xFF
                     val b = c and 0xFF
-                    // 紅色膠囊按鈕：R 明顯高於 G 與 B (相差 > 30)
                     if (r > 140 && r > g + 30 && r > b + 30) {
                         redPoints.add(android.graphics.Point(x, y))
                     }
@@ -141,54 +162,44 @@ class BingoTask {
                 y += 2
             }
 
-            if (redPoints.size >= 25) {
+            if (redPoints.size >= 20) {
                 val minX = redPoints.minOf { it.x }
                 val maxX = redPoints.maxOf { it.x }
                 val minY = redPoints.minOf { it.y }
                 val maxY = redPoints.maxOf { it.y }
-                if (maxX - minX >= (sw * 0.08f).toInt() && maxY - minY in 12..(sh * 0.08f).toInt()) {
-                    return Rect(minX, minY, maxX, maxY)
+                if (maxX - minX >= (sw * 0.07f).toInt() && maxY - minY in 10..(sh * 0.08f).toInt()) {
+                    return BingoRewardTarget(colIndex, "紅色獎勵鈕(欄${colIndex + 1})", Rect(minX, minY, maxX, maxY))
                 }
             }
-        }
 
-        // 2. OCR 備援：尋找「Get / ▶Get / 領取」，但必須嚴格驗證按鈕區域內含有充足紅色像素（排除已達成插綠旗之白底黑字『Get』標籤！）
-        val match = ocrItems.firstOrNull { item ->
-            val cy = item.bounds.centerY()
-            cy in (sh * 0.78f).toInt()..(sh * 0.88f).toInt() && (
-                item.text.contains("Get", ignoreCase = true) ||
-                item.text.contains("Cet", ignoreCase = true) ||
-                item.text.contains("Qet", ignoreCase = true) ||
-                item.text.contains("領取") ||
-                item.text.contains("▶")
-            ) && !item.text.contains("今日上限") && !item.text.contains("開啟")
-        }
-        if (match != null) {
-            val b = match.bounds
-            val expandX = (sw * 0.03f).toInt()
-            val expandY = (sh * 0.01f).toInt()
-            val bx1 = (b.left - expandX).coerceAtLeast(0)
-            val bx2 = (b.right + expandX).coerceAtMost(sw)
-            val by1 = (b.top - expandY).coerceAtLeast(0)
-            val by2 = (b.bottom + expandY).coerceAtMost(sh)
-            var redCount = 0
-            for (y in by1 until by2 step 2) {
-                for (x in bx1 until bx2 step 2) {
-                    val c = screenBitmap.getPixel(x, y)
-                    val r = (c shr 16) and 0xFF
-                    val g = (c shr 8) and 0xFF
-                    val bl = c and 0xFF
-                    if (r > 140 && r > g + 30 && r > bl + 30) {
-                        redCount++
-                    }
-                }
+            // 2. 檢查該欄 OCR 是否包含 Get / 領取 / ▶
+            val colOcr = ocrItems.firstOrNull { item ->
+                val icx = item.bounds.centerX()
+                val icy = item.bounds.centerY()
+                icx in x1..x2 && icy in y1..y2 && (
+                    item.text.contains("Get", ignoreCase = true) ||
+                    item.text.contains("Cet", ignoreCase = true) ||
+                    item.text.contains("Qet", ignoreCase = true) ||
+                    item.text.contains("領取") ||
+                    item.text.contains("▶")
+                ) && !item.text.contains("今日上限") && !item.text.contains("開啟")
             }
-            if (redCount >= 25) {
-                return match.bounds
+            if (colOcr != null) {
+                return BingoRewardTarget(colIndex, "OCR[${colOcr.text}](欄${colIndex + 1})", colOcr.bounds)
             }
         }
 
         return null
+    }
+
+    /**
+     * 向下相容舊版介面
+     */
+    fun findConnectionRewardButton(
+        screenBitmap: Bitmap,
+        ocrItems: List<OcrItem>
+    ): Rect? {
+        return findNextClaimableReward(screenBitmap, ocrItems, emptySet())?.bounds
     }
 
     /**

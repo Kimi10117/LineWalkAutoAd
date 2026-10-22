@@ -8,6 +8,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.Rect
@@ -50,9 +51,23 @@ class FloatingOverlayService : Service() {
     private lateinit var engine: AutomationEngine
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
-    private var rootView: View? = null
-    private var layoutParams: WindowManager.LayoutParams? = null
-    private var isCollapsed = false
+    internal var rootView: View? = null
+        private set
+    internal var layoutParams: WindowManager.LayoutParams? = null
+        private set
+    internal var isCollapsed = false
+        private set
+    internal var bodyLayout: LinearLayout? = null
+        private set
+    internal var headerRow: LinearLayout? = null
+        private set
+    internal var titleTv: TextView? = null
+        private set
+    internal var collapseBtn: ImageView? = null
+        private set
+    internal var statusDot: ImageView? = null
+        private set
+    private var bgDrawable: GradientDrawable? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -87,7 +102,60 @@ class FloatingOverlayService : Service() {
             }
         }
         rootView = null
+        layoutParams = null
+        bodyLayout = null
+        headerRow = null
+        titleTv = null
+        collapseBtn = null
+        statusDot = null
+        bgDrawable = null
         super.onDestroy()
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        val container = rootView ?: return
+        val params = layoutParams ?: return
+        val displayMetrics = resources.displayMetrics
+
+        val viewW = container.width.takeIf { it > 0 } ?: container.measuredWidth.coerceAtLeast(1)
+        val viewH = container.height.takeIf { it > 0 } ?: container.measuredHeight.coerceAtLeast(1)
+        val maxX = (displayMetrics.widthPixels - viewW).coerceAtLeast(0)
+        val maxY = (displayMetrics.heightPixels - viewH).coerceAtLeast(0)
+
+        val clampedX = params.x.coerceIn(0, maxX)
+        val clampedY = params.y.coerceIn(0, maxY)
+
+        if (clampedX != params.x || clampedY != params.y) {
+            params.x = clampedX
+            params.y = clampedY
+            try {
+                windowManager.updateViewLayout(container, params)
+            } catch (_: Exception) {
+            }
+        }
+
+        container.post {
+            val curContainer = rootView ?: return@post
+            val curParams = layoutParams ?: return@post
+            val curMetrics = resources.displayMetrics
+            val curW = curContainer.width.takeIf { it > 0 } ?: curContainer.measuredWidth.coerceAtLeast(1)
+            val curH = curContainer.height.takeIf { it > 0 } ?: curContainer.measuredHeight.coerceAtLeast(1)
+            val curMaxX = (curMetrics.widthPixels - curW).coerceAtLeast(0)
+            val curMaxY = (curMetrics.heightPixels - curH).coerceAtLeast(0)
+
+            val reClampedX = curParams.x.coerceIn(0, curMaxX)
+            val reClampedY = curParams.y.coerceIn(0, curMaxY)
+            if (reClampedX != curParams.x || reClampedY != curParams.y) {
+                curParams.x = reClampedX
+                curParams.y = reClampedY
+                try {
+                    windowManager.updateViewLayout(curContainer, curParams)
+                } catch (_: Exception) {
+                }
+            }
+            updateOverlayBoundsOnScreen()
+        }
     }
 
     private fun updateOverlayBoundsOnScreen() {
@@ -107,6 +175,102 @@ class FloatingOverlayService : Service() {
         )
     }
 
+    internal fun setCollapsedState(collapsed: Boolean) {
+        isCollapsed = collapsed
+        val body = bodyLayout ?: return
+        val btn = collapseBtn ?: return
+        val density = resources.displayMetrics.density
+
+        body.visibility = if (collapsed) View.GONE else View.VISIBLE
+        btn.setImageResource(if (collapsed) R.drawable.ic_expand else R.drawable.ic_minimize)
+
+        val bg = bgDrawable
+        if (collapsed) {
+            bg?.cornerRadius = 999f
+            val padH = (12 * density).toInt()
+            val padV = (6 * density).toInt()
+            rootView?.setPadding(padH, padV, padH, padV)
+        } else {
+            bg?.cornerRadius = 24f * density / 2f
+            val padH = (14 * density).toInt()
+            val padV = (10 * density).toInt()
+            rootView?.setPadding(padH, padV, padH, padV)
+        }
+
+        rootView?.post {
+            val container = rootView ?: return@post
+            val params = layoutParams ?: return@post
+            val displayMetrics = resources.displayMetrics
+            val viewW = container.width.takeIf { it > 0 } ?: container.measuredWidth.coerceAtLeast(1)
+            val viewH = container.height.takeIf { it > 0 } ?: container.measuredHeight.coerceAtLeast(1)
+            val maxX = (displayMetrics.widthPixels - viewW).coerceAtLeast(0)
+            val maxY = (displayMetrics.heightPixels - viewH).coerceAtLeast(0)
+
+            val clampedX = params.x.coerceIn(0, maxX)
+            val clampedY = params.y.coerceIn(0, maxY)
+            if (clampedX != params.x || clampedY != params.y) {
+                params.x = clampedX
+                params.y = clampedY
+                try {
+                    windowManager.updateViewLayout(container, params)
+                } catch (_: Exception) {
+                }
+            }
+            updateOverlayBoundsOnScreen()
+        }
+    }
+
+    internal fun formatActiveStatusText(status: com.linewalk.autoad.engine.EngineUiStatus): String {
+        if (!status.isRunning) {
+            return "散步趣助手 · 待命"
+        }
+
+        val detail = status.statusDetail
+        val safeDetail = status.overlaySafeDetail
+
+        return when {
+            detail.contains("外部保護") || safeDetail.contains("外部保護") || detail.contains("防護") -> {
+                "[外部保護] 安全退出中"
+            }
+            detail.contains("每日賓果") || safeDetail.contains("每日賓果") || safeDetail.contains("賓果") -> {
+                when {
+                    detail.contains("開格") || safeDetail.contains("開格") -> "[每日賓果] 開格中"
+                    detail.contains("連線") || detail.contains("Get") || safeDetail.contains("Get") -> "[每日賓果] 領取Get"
+                    else -> "[每日賓果] 執行中"
+                }
+            }
+            detail.contains("抽抽樂") || safeDetail.contains("抽抽樂") || detail.contains("抽獎") || safeDetail.contains("抽獎") -> {
+                "[抽抽樂] 開啟中"
+            }
+            detail.contains("任務") || safeDetail.contains("任務") -> {
+                "[任務] 領取中"
+            }
+            detail.contains("好友") || safeDetail.contains("好友") || detail.contains("送禮") || safeDetail.contains("送禮") -> {
+                "[好友送禮] 贈送中"
+            }
+            detail.contains("收禮") || safeDetail.contains("收禮") || detail.contains("接收禮物") || safeDetail.contains("接收禮物") -> {
+                "[接收禮物] 領取中"
+            }
+            status.state == com.linewalk.autoad.engine.EngineState.AD_WATCHING || safeDetail.contains("廣告") -> {
+                val secMatch = Regex("""\((\d+)s?\)""").find(safeDetail) ?: Regex("""\((\d+)s?\)""").find(detail)
+                if (secMatch != null) {
+                    "[廣告監控] 播放中 (${secMatch.groupValues[1]}s)"
+                } else {
+                    "[廣告監控] 播放中"
+                }
+            }
+            detail.contains("冷卻") || safeDetail.contains("冷卻") -> {
+                "[巡邏中] 冷卻等待中"
+            }
+            detail.contains("首頁") || detail.contains("移動") -> "[巡邏中] 首頁"
+            detail.contains("步數") -> "[巡邏中] 步數"
+            detail.contains("時間") || detail.contains("放置") -> "[巡邏中] 時間"
+            detail.contains("遊戲") -> "[巡邏中] 遊戲"
+            status.state == com.linewalk.autoad.engine.EngineState.IN_GAME_SCAN -> "[巡邏中] 首頁"
+            else -> "${status.state.shortTitle} (${status.adsCompletedCount})"
+        }
+    }
+
     @SuppressLint("ClickableViewAccessibility")
     private fun createFloatingWidget() {
         val density = resources.displayMetrics.density
@@ -116,6 +280,7 @@ class FloatingOverlayService : Service() {
             cornerRadius = 24f * density / 2f
             setStroke((2 * density).toInt(), Color.parseColor("#334155"))
         }
+        this.bgDrawable = bgDrawable
 
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -131,7 +296,12 @@ class FloatingOverlayService : Service() {
         val headerRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
         }
+        this.headerRow = headerRow
 
         val statusDot = ImageView(this).apply {
             setImageResource(R.drawable.ic_status_dot_slate)
@@ -140,6 +310,7 @@ class FloatingOverlayService : Service() {
                 marginEnd = (6 * density).toInt()
             }
         }
+        this.statusDot = statusDot
 
         val titleTv = TextView(this).apply {
             text = "散步趣助手 · 待命"
@@ -148,19 +319,24 @@ class FloatingOverlayService : Service() {
             typeface = Typeface.DEFAULT_BOLD
             isSingleLine = true
             maxLines = 1
-            ellipsize = android.text.TextUtils.TruncateAt.END
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f)
+            ellipsize = null
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                marginEnd = (6 * density).toInt()
+            }
         }
+        this.titleTv = titleTv
 
         val collapseBtn = ImageView(this).apply {
             setImageResource(R.drawable.ic_minimize)
             val pad = (4 * density).toInt()
             setPadding(pad, pad, pad, pad)
             val btnSize = (22 * density).toInt()
-            layoutParams = LinearLayout.LayoutParams(btnSize, btnSize).apply {
-                marginStart = (6 * density).toInt()
-            }
+            layoutParams = LinearLayout.LayoutParams(btnSize, btnSize)
         }
+        this.collapseBtn = collapseBtn
 
         headerRow.addView(statusDot)
         headerRow.addView(titleTv)
@@ -177,6 +353,7 @@ class FloatingOverlayService : Service() {
             }
             layoutParams = params
         }
+        this.bodyLayout = bodyLayout
 
         val detailTv = TextView(this).apply {
             text = ""
@@ -270,10 +447,7 @@ class FloatingOverlayService : Service() {
         container.addView(bodyLayout)
 
         collapseBtn.setOnClickListener {
-            isCollapsed = !isCollapsed
-            bodyLayout.visibility = if (isCollapsed) View.GONE else View.VISIBLE
-            collapseBtn.setImageResource(if (isCollapsed) R.drawable.ic_expand else R.drawable.ic_minimize)
-            container.post { updateOverlayBoundsOnScreen() }
+            setCollapsedState(!isCollapsed)
         }
 
         val defaultY = (resources.displayMetrics.heightPixels * 0.165f).toInt().coerceAtLeast(280)
@@ -305,17 +479,28 @@ class FloatingOverlayService : Service() {
                 }
 
                 MotionEvent.ACTION_MOVE -> {
-                    wmParams.x = initialX + (event.rawX - touchX).toInt()
-                    wmParams.y = initialY + (event.rawY - touchY).toInt()
-                    windowManager.updateViewLayout(container, wmParams)
-                    updateOverlayBoundsOnScreen()
+                    val displayMetrics = resources.displayMetrics
+                    val viewW = container.width.takeIf { it > 0 } ?: container.measuredWidth.coerceAtLeast(1)
+                    val viewH = container.height.takeIf { it > 0 } ?: container.measuredHeight.coerceAtLeast(1)
+                    val maxX = (displayMetrics.widthPixels - viewW).coerceAtLeast(0)
+                    val maxY = (displayMetrics.heightPixels - viewH).coerceAtLeast(0)
+
+                    val deltaX = (event.rawX - touchX).toInt()
+                    val deltaY = (event.rawY - touchY).toInt()
+                    wmParams.x = (initialX + deltaX).coerceIn(0, maxX)
+                    wmParams.y = (initialY + deltaY).coerceIn(0, maxY)
+                    try {
+                        windowManager.updateViewLayout(container, wmParams)
+                        updateOverlayBoundsOnScreen()
+                    } catch (_: Exception) {
+                    }
                     true
                 }
 
                 MotionEvent.ACTION_UP -> {
                     updateOverlayBoundsOnScreen()
                     if (abs(event.rawX - touchX) < 12f && abs(event.rawY - touchY) < 12f) {
-                        collapseBtn.performClick()
+                        setCollapsedState(!isCollapsed)
                     }
                     true
                 }
@@ -329,12 +514,18 @@ class FloatingOverlayService : Service() {
         windowManager.addView(container, wmParams)
         container.post { updateOverlayBoundsOnScreen() }
 
+        var wasRunning = false
         serviceScope.launch {
             engine.uiStatus.collectLatest { status ->
+                if (status.isRunning && !wasRunning) {
+                    setCollapsedState(true)
+                }
+                wasRunning = status.isRunning
+
                 if (status.isRunning) {
                     statusDot.setImageResource(R.drawable.ic_status_dot_green)
                     bgDrawable.setStroke((2 * density).toInt(), Color.parseColor("#10B981"))
-                    titleTv.text = "${status.state.shortTitle} (${status.adsCompletedCount})"
+                    titleTv.text = formatActiveStatusText(status)
 
                     val cleanDetail = status.overlaySafeDetail
                         .replace("[完成]", "")

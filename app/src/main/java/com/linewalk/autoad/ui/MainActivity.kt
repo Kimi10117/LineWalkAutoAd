@@ -1,5 +1,9 @@
 package com.linewalk.autoad.ui
 
+import android.content.ActivityNotFoundException
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
@@ -11,6 +15,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import com.linewalk.autoad.R
 import com.linewalk.autoad.config.TemplateCategory
 import com.linewalk.autoad.databinding.ActivityMainBinding
 import com.linewalk.autoad.engine.AutomationEngine
@@ -160,6 +165,38 @@ class MainActivity : AppCompatActivity() {
             refreshPermissionAndTemplateStatus()
             Toast.makeText(this, "已清空所有自訂圖示範本", Toast.LENGTH_SHORT).show()
         }
+
+        binding.btnCopyLogs.setOnClickListener {
+            val fullLogs = engine.getFullLogsFormatted()
+            copyLogsToClipboard(fullLogs, showSuccessToast = true)
+        }
+
+        binding.btnExportLogs.setOnClickListener {
+            val fullLogs = engine.getFullLogsFormatted()
+            val exportLogs = engine.getExportLogsFormatted(maxLines = 1500)
+            val safePayload = if (exportLogs.length > 200_000) {
+                val notice = "[注意：日誌量極大，已自動安全截斷以防止系統當機。完整日誌請使用「複製日誌」]\n\n"
+                notice + exportLogs.takeLast(180_000)
+            } else {
+                exportLogs
+            }
+
+            val sendIntent = Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(Intent.EXTRA_SUBJECT, getString(R.string.subject_export_logs))
+                putExtra(Intent.EXTRA_TEXT, safePayload)
+            }
+            val chooser = Intent.createChooser(sendIntent, getString(R.string.chooser_export_logs))
+            try {
+                startActivity(chooser)
+            } catch (e: ActivityNotFoundException) {
+                // Fallback: auto-copy to clipboard and notify user
+                val copied = copyLogsToClipboard(fullLogs, showSuccessToast = false)
+                Toast.makeText(this, R.string.toast_export_fallback_copied, Toast.LENGTH_LONG).show()
+            } catch (e: Exception) {
+                Toast.makeText(this, "匯出日誌失敗：${e.message}", Toast.LENGTH_SHORT).show()
+            }
+        }
     }
 
     private fun refreshPermissionAndTemplateStatus() {
@@ -204,6 +241,25 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
             }
+        }
+    }
+
+    private fun copyLogsToClipboard(logs: String, showSuccessToast: Boolean = true): Boolean {
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+        if (clipboard == null) {
+            Toast.makeText(this, getString(R.string.toast_clipboard_error), Toast.LENGTH_SHORT).show()
+            return false
+        }
+        return try {
+            val clip = ClipData.newPlainText("LineWalkAutoAd_Logs", logs)
+            clipboard.setPrimaryClip(clip)
+            if (showSuccessToast) {
+                Toast.makeText(this, getString(R.string.toast_logs_copied), Toast.LENGTH_SHORT).show()
+            }
+            true
+        } catch (e: Exception) {
+            Toast.makeText(this, "複製日誌失敗：${e.message ?: "未知錯誤"}", Toast.LENGTH_SHORT).show()
+            false
         }
     }
 }

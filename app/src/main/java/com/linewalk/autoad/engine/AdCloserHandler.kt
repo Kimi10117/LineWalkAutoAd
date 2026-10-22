@@ -380,7 +380,8 @@ class AdCloserHandler(
 
         // 8B. 主動安全返回策略與熱區點擊（全面改用 safeNavigateBack，散步趣在前景時絕不發送返回鍵以免跳出至桌面）：
         val now = System.currentTimeMillis()
-        val isSafeToBack = fgPkg != null && fgPkg != "com.linecorp.LGWALK"
+        val isOutsideGame = fgPkg == null || (fgPkg !in config.targetGamePackages && fgPkg != "com.linecorp.LGWALK" && fgPkg != "jp.naver.line.android")
+        val isSafeToBack = fgPkg != null && fgPkg !in config.targetGamePackages && fgPkg != "com.linecorp.LGWALK" && fgPkg != "jp.naver.line.android"
         if (remainingSec == null && elapsedSec >= 5) {
             if (redirectCount > 0 && isSafeToBack) {
                 service.safeNavigateBack()
@@ -389,12 +390,12 @@ class AdCloserHandler(
             }
 
             // 針對互動式可玩小遊戲廣告 (Playable Ad，例如飛刀命中、旋轉輪盤等)：
-            // 在第 5~8 秒且尚未點擊過時，於畫面中央下方輕點一次，推進小遊戲進度喚出結尾卡片與 [X] 關閉鈕！
+            // 僅在遊戲內部時於第 5~8 秒且尚未點擊過時輕點畫面中央下方推進進度，外部應用嚴格禁止！
             val isPlayableAd = ocrItems.any { item ->
                 val t = item.text.uppercase()
                 t.contains("DOWNLOAD") || t.contains("INSTALL") || t.contains("PLAY")
             }
-            if (isPlayableAd && elapsedSec in 5..8 && closeClickCount == 0) {
+            if (!isOutsideGame && isPlayableAd && elapsedSec in 5..8 && closeClickCount == 0) {
                 val interactiveTap = Rect(
                     (sw * 0.45f).toInt(),
                     (sh * 0.65f).toInt(),
@@ -406,7 +407,8 @@ class AdCloserHandler(
                 return AdStepResult.WatchdogBackTriggered(elapsedSec, "互動可玩廣告推進點擊")
             }
 
-            if (now - lastFallbackCornerTimeMs >= 2500L) {
+            // 盲點熱區：當處於非散步趣外部應用時，嚴格停用盲點熱區，防止在外部 App 或手機桌面誤觸！
+            if (!isOutsideGame && now - lastFallbackCornerTimeMs >= 2500L) {
                 val (label, targetRect) = getNextFallbackTarget(sw, sh, ocrItems)
                 lastFallbackCornerTimeMs = now
                 recordAndClick(service, targetRect, allowBlacklist = false)
@@ -426,17 +428,23 @@ class AdCloserHandler(
             }
         }
 
-        // 9. 防卡死 Watchdog：若單支廣告超過最大等待秒數 (預設 32 秒)，持續循環點擊各關閉熱區
+        // 9. 防卡死 Watchdog：若單支廣告超過最大等待秒數 (預設 32 秒)，持續循環點擊各關閉熱區 (外部畫面僅發送安全返回鍵)
         if (elapsedSec >= config.maxAdWaitSeconds) {
-            val (label, targetRect) = getNextFallbackTarget(sw, sh, ocrItems)
-            lastFallbackCornerTimeMs = now
-            recordAndClick(service, targetRect, allowBlacklist = false)
-            if (isSafeToBack) {
+            if (!isOutsideGame) {
+                val (label, targetRect) = getNextFallbackTarget(sw, sh, ocrItems)
+                lastFallbackCornerTimeMs = now
+                recordAndClick(service, targetRect, allowBlacklist = false)
+                if (isSafeToBack) {
+                    service.safeNavigateBack()
+                    lastBackActionTimeMs = now
+                    return AdStepResult.WatchdogBackTriggered(elapsedSec, "強效關閉[$label+安全返回]")
+                } else {
+                    return AdStepResult.WatchdogBackTriggered(elapsedSec, "強效關閉[$label]")
+                }
+            } else if (isSafeToBack && now - lastBackActionTimeMs >= 2000L) {
                 service.safeNavigateBack()
                 lastBackActionTimeMs = now
-                return AdStepResult.WatchdogBackTriggered(elapsedSec, "強效關閉[$label+安全返回]")
-            } else {
-                return AdStepResult.WatchdogBackTriggered(elapsedSec, "強效關閉[$label]")
+                return AdStepResult.WatchdogBackTriggered(elapsedSec, "外部逾時安全返回鍵")
             }
         }
 

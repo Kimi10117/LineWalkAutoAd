@@ -24,6 +24,21 @@ class FriendGiftTask {
         giftedPoints.clear()
     }
 
+    /**
+     * 檢查好友送禮次數是否已達上限 (例如 5/5、今日上限、已達上限)
+     */
+    fun isGiftQuotaFull(ocrItems: List<OcrItem>): Boolean {
+        return ocrItems.any { item ->
+            val t = item.text.replace(" ", "")
+            t.contains("5/5") ||
+            (t.contains("次數") && (t.contains("5/5") || t.contains("上限"))) ||
+            t.contains("今日上限") ||
+            t.contains("已達今日上限") ||
+            t.contains("已達上限") ||
+            (t.contains("贈送次數") && t.contains("0"))
+        }
+    }
+
     fun isFriendsPage(ocrItems: List<OcrItem>, sh: Int = 0): Boolean {
         // 0. 若畫面上出現送禮確認彈窗（如『要向...贈送金幣嗎？』『也送給自己』『剩餘贈送次數』『贈送完畢』），必定屬於好友頁面！
         val hasSendGiftModal = ocrItems.any { item ->

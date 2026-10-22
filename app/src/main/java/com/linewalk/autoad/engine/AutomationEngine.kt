@@ -3,6 +3,7 @@ package com.linewalk.autoad.engine
 import android.content.Context
 import android.graphics.Rect
 import android.graphics.RectF
+import android.os.Build
 import com.linewalk.autoad.config.AppConfig
 import com.linewalk.autoad.config.TemplateCategory
 import com.linewalk.autoad.config.TemplateStorage
@@ -49,6 +50,7 @@ enum class EngineState(val title: String, val shortTitle: String) {
 data class EngineUiStatus(
     val isRunning: Boolean = false,
     val state: EngineState = EngineState.IDLE,
+    val currentRound: Int = 1,
     val statusDetail: String = "點擊懸浮窗 [開始] 啟動自動看廣告",
     val overlaySafeDetail: String = "點擊開始啟動自動巡邏",
     val adsCompletedCount: Int = 0,
@@ -95,7 +97,7 @@ enum class PatrolPhase(val title: String) {
     COMPLETED("全任務完成")
 }
 
-class AutomationEngine private constructor(context: Context) {
+class AutomationEngine private constructor(private val context: Context) {
 
     val config = AppConfig(context)
     val templateStorage = TemplateStorage(context)
@@ -133,31 +135,95 @@ class AutomationEngine private constructor(context: Context) {
     private var popupRetryTicks = 0
     private var rewardClaimRetryTicks = 0
     private var adWatchdogCooldownTicks = 0
-    private var currentTab: MainTab = MainTab.MOVE
+    enum class GuardAction {
+        ALLOW_IN_GAME_SCAN,
+        SAFE_BACK_NAVIGATION,
+        CLICK_AD_CLOSE_X,
+        BLOCK_REGULAR_CLICK
+    }
+
+    data class GuardDecision(
+        val isExternal: Boolean,
+        val recommendedAction: GuardAction,
+        val regularClicksAllowed: Boolean
+    )
+
+    data class CooldownResult(
+        val completedRound: Int,
+        val nextRound: Int,
+        val wasPausedDuringCooldown: Boolean,
+        val cooldownSecondsWaited: Int
+    )
+
+    var currentRound: Int = 1
+        internal set
+
+    var currentTab: MainTab = MainTab.MOVE
+        internal set
     private var needsInitialTabSync = true
     private var tabSwitchRetries = 0
     private var emptyTicksOnCurrentTab = 0
-    private val confirmedEmptyTabs = mutableSetOf<MainTab>()
+    val confirmedEmptyTabs = mutableSetOf<MainTab>()
 
-    private var currentPhase: PatrolPhase = PatrolPhase.MAIN_TABS
-    private var isBingoCompleted = false
-    private var isLotteryCompleted = false
+    var currentPhase: PatrolPhase = PatrolPhase.MAIN_TABS
+        internal set
+    var isBingoCompleted = false
+        internal set
+    var isLotteryCompleted = false
+        internal set
     private var hasClickedLotteryAdReward = false
     private var lotteryResultRewardWaitTicks = 0
-    private var isMissionCompleted = false
-    private var isReceiveGiftCompleted = false
-    private var isFriendGiftCompleted = false
+    var isMissionCompleted = false
+        internal set
+    var isReceiveGiftCompleted = false
+        internal set
+    var isFriendGiftCompleted = false
+        internal set
     private val checkedMissionTabs = mutableSetOf<String>()
     private val missionTabSequence = listOf("特別", "每日", "每週")
     private var friendGiftEmptyTicks = 0
     private var friendGiftReturnHomeTicks = 0
+    private var friendGiftOpenDrawerTicks = 0
+    internal val claimedBingoColumns = mutableSetOf<Int>()
     private var currentPhaseEmptyTicks = 0
-    private var nonGameScreenTicks = 0
+    internal var nonGameScreenTicks = 0
 
     private val _uiStatus = MutableStateFlow(EngineUiStatus())
     val uiStatus: StateFlow<EngineUiStatus> = _uiStatus.asStateFlow()
 
-    fun start() {
+    fun evaluateForegroundPackage(
+        fgPkg: String?,
+        hasAdGeometricX: Boolean = false
+    ): GuardDecision {
+        // 前景未知（系統短暫無焦點）或本助手 App 自身在前景：不點擊、不返回，原地等待
+        if (fgPkg.isNullOrBlank() || fgPkg == context.packageName) {
+            return GuardDecision(
+                isExternal = false,
+                recommendedAction = GuardAction.BLOCK_REGULAR_CLICK,
+                regularClicksAllowed = false
+            )
+        }
+
+        // 僅《LINE 散步趣》本體視為遊戲內；LINE 主程式等其他 App 一律視為外部
+        val isTarget = fgPkg == "com.linecorp.LGWALK" ||
+            (fgPkg in config.targetGamePackages && fgPkg != "jp.naver.line.android")
+        return if (!isTarget) {
+            val action = if (hasAdGeometricX) GuardAction.CLICK_AD_CLOSE_X else GuardAction.SAFE_BACK_NAVIGATION
+            GuardDecision(
+                isExternal = true,
+                recommendedAction = action,
+                regularClicksAllowed = false
+            )
+        } else {
+            GuardDecision(
+                isExternal = false,
+                recommendedAction = GuardAction.ALLOW_IN_GAME_SCAN,
+                regularClicksAllowed = true
+            )
+        }
+    }
+
+    fun start(resetRound: Boolean = false) {
         if (loopJob?.isActive == true) return
         val accService = AutoAdAccessibilityService.instance.value
         if (accService == null) {
@@ -165,12 +231,16 @@ class AutomationEngine private constructor(context: Context) {
             return
         }
 
+        if (resetRound) {
+            currentRound = 1
+        }
         popupRetryTicks = 0
         rewardClaimRetryTicks = 0
         nonGameScreenTicks = 0
         emptyTicksOnCurrentTab = 0
         confirmedEmptyTabs.clear()
         isBingoCompleted = false
+        claimedBingoColumns.clear()
         isLotteryCompleted = false
         hasClickedLotteryAdReward = false
         lotteryResultRewardWaitTicks = 0
@@ -180,6 +250,7 @@ class AutomationEngine private constructor(context: Context) {
         checkedMissionTabs.clear()
         friendGiftEmptyTicks = 0
         friendGiftReturnHomeTicks = 0
+        friendGiftOpenDrawerTicks = 0
         friendGiftTask.resetSession()
         currentPhaseEmptyTicks = 0
         currentTab = tabPriorityOrder.firstOrNull { it.isEnabled(config) } ?: MainTab.MOVE
@@ -207,7 +278,10 @@ class AutomationEngine private constructor(context: Context) {
             detail = "全自動巡邏已啟動，首發階段：【$phaseDesc】...",
             safeOverlayText = "[巡邏] [$phaseDesc]..."
         )
-        _uiStatus.value = _uiStatus.value.copy(isRunning = true)
+        _uiStatus.value = _uiStatus.value.copy(
+            isRunning = true,
+            currentRound = currentRound
+        )
 
         loopJob = scope.launch {
             while (isActive) {
@@ -219,6 +293,10 @@ class AutomationEngine private constructor(context: Context) {
                 delay(config.loopIntervalMs)
             }
         }
+    }
+
+    fun startPatrol(resetRound: Boolean = false) {
+        start(resetRound = resetRound)
     }
 
     fun stop(reason: String = "使用者手動暫停") {
@@ -249,15 +327,16 @@ class AutomationEngine private constructor(context: Context) {
         }
 
         val fgPkg = service.getForegroundPackageName()
-        if (fgPkg != null && fgPkg in AppConfig.EXTERNAL_REDIRECT_PACKAGES) {
-            appendLog("[防護] 偵測到外部套件 ($fgPkg)，自動按返回鍵退回廣告")
-            adCloserHandler.markRecentRedirect()
-            service.navigateBack()
-            if (_uiStatus.value.state != EngineState.AD_WATCHING) {
-                adCloserHandler.onEnterAdMode(preserveRedirectState = true)
-                transitionTo(EngineState.AD_WATCHING, "已關閉外部套件，監控廣告中...", "[廣告] 廣告監控中...")
-            }
+        val guardDecision = evaluateForegroundPackage(fgPkg)
+
+        if (guardDecision.isExternal) {
+            handleExternalAppGuard(service, fgPkg)
             return
+        } else if (!guardDecision.regularClicksAllowed) {
+            updateDetail("[等待] 等待《LINE 散步趣》回到前景...", "[等待] 等待散步趣前景")
+            return
+        } else {
+            nonGameScreenTicks = 0
         }
 
         val currentState = _uiStatus.value.state
@@ -279,6 +358,84 @@ class AutomationEngine private constructor(context: Context) {
             }
         } finally {
             screenBitmap.recycle()
+        }
+    }
+
+    private suspend fun handleExternalAppGuard(
+        service: AutoAdAccessibilityService,
+        fgPkg: String?
+    ) {
+        nonGameScreenTicks++
+        val externalPkg = fgPkg ?: "未知外部應用"
+        val safePkgLabel = if (externalPkg.length > 20) externalPkg.takeLast(20) else externalPkg
+
+        appendLog("[防護] 偵測到非散步趣應用 ($externalPkg)，啟動嚴格防誤點保護 (連續 ${nonGameScreenTicks} 次)")
+        _uiStatus.value = _uiStatus.value.copy(
+            statusDetail = "[防護] 前景非散步趣 ($externalPkg)",
+            overlaySafeDetail = "[外部保護] 非散步趣App ($safePkgLabel)"
+        )
+
+        // 逾時復原：連續外部應用超過 5 個 tick (約 6~8 秒)，強制將散步趣喚醒拉回前景
+        if (nonGameScreenTicks >= 5) {
+            appendLog("[防護] 停留外部應用達 5 次 tick 逾時，嘗試強制喚醒散步趣拉回前景！")
+            val targetPkg = config.targetGamePackages.firstOrNull() ?: "com.linecorp.LGWALK"
+            service.bringAppToFront(targetPkg)
+            nonGameScreenTicks = 0
+            return
+        }
+
+        // 擷取畫面檢查是否有廣告 (X) 關閉鈕
+        val screenBitmap = service.captureScreenBitmap()
+        if (screenBitmap != null) {
+            try {
+                val sw = screenBitmap.width
+                val sh = screenBitmap.height
+
+                // 行為 1: 檢查無障礙節點樹是否有名確廣告關閉節點
+                val rootNode = service.getSafeRootNode()
+                val closeNode = nodeInspector.findAdCloseNode(rootNode, sw, sh, isFullScreenAd = true)
+                if (closeNode != null) {
+                    appendLog("[防護] 外部畫面偵測到廣告關閉按鈕 (${closeNode.label})，安全點擊關閉")
+                    FloatingOverlayService.clickWithOverlayPassthrough(closeNode.bounds) {
+                        service.clickRect(closeNode.bounds)
+                    }
+                    if (_uiStatus.value.state != EngineState.AD_WATCHING) {
+                        adCloserHandler.onEnterAdMode(preserveRedirectState = true)
+                        transitionTo(EngineState.AD_WATCHING, "外部廣告點擊關閉，監控廣告中...", "[廣告] 廣告監控中...")
+                    }
+                    return
+                }
+
+                // 行為 2: 檢查角落幾何 X 關閉鈕
+                val geoMatch = templateMatcher.detectCornerGeometricX(
+                    screenBitmap = screenBitmap,
+                    isRelaxed = false
+                )
+                if (geoMatch != null) {
+                    appendLog("[防護] 外部畫面偵測到幾何廣告關閉鈕 (${geoMatch.label})，安全點擊關閉")
+                    FloatingOverlayService.clickWithOverlayPassthrough(geoMatch.bounds) {
+                        service.clickRect(geoMatch.bounds)
+                    }
+                    if (_uiStatus.value.state != EngineState.AD_WATCHING) {
+                        adCloserHandler.onEnterAdMode(preserveRedirectState = true)
+                        transitionTo(EngineState.AD_WATCHING, "外部廣告點擊關閉，監控廣告中...", "[廣告] 廣告監控中...")
+                    }
+                    return
+                }
+            } finally {
+                screenBitmap.recycle()
+            }
+        }
+
+        // 行為 3: 若無廣告關閉鈕，發送安全返回鍵退出外部應用
+        appendLog("[防護] 前景非散步趣 ($externalPkg) 且無廣告關閉鈕，發送安全返回鍵退出外部 App")
+        service.safeNavigateBack()
+        if (AppConfig.isRedirectPackage(fgPkg)) {
+            adCloserHandler.markRecentRedirect()
+            if (_uiStatus.value.state != EngineState.AD_WATCHING) {
+                adCloserHandler.onEnterAdMode(preserveRedirectState = true)
+                transitionTo(EngineState.AD_WATCHING, "已關閉外部套件，監控廣告中...", "[廣告] 廣告監控中...")
+            }
         }
     }
 
@@ -684,42 +841,46 @@ class AutomationEngine private constructor(context: Context) {
         sw: Int,
         sh: Int
     ) {
-        // 1. 優先檢查是否有連線獎勵按鈕 (例如 1 BINGO 下方的紅底白字 [▶ Get] 或 [領取])
-        val rewardBtn = bingoTask.findConnectionRewardButton(screenBitmap, ocrItems)
-        if (rewardBtn != null) {
-            currentPhaseEmptyTicks = 0
-            appendLog("[賓果] 點擊領取連線獎勵 [Get]！")
-            FloatingOverlayService.clickWithOverlayPassthrough(rewardBtn) {
-                service.clickRect(rewardBtn)
-            }
-            adCloserHandler.onEnterAdMode()
-            transitionTo(EngineState.AD_WATCHING, "已點擊賓果連線獎勵 [Get]，觀看廣告中...", "[廣告] 監控中...")
-            return
-        }
-
-        // 2. 檢查是否有橘色「立即開啟賓果格」按鈕
+        // 1. 【使用者指示第 1 步】：必須先點擊完橘色「立即開啟賓果格」直到全部開完或冷卻！
         val openCellBtn = bingoTask.findOpenCellButton(screenBitmap, ocrItems, templateMatcher)
         if (openCellBtn != null) {
             currentPhaseEmptyTicks = 0
-            appendLog("[目標]【每日賓果】點擊「立即開啟賓果格」！")
+            appendLog("[目標]【每日賓果】先點擊「立即開啟賓果格」！")
             FloatingOverlayService.clickWithOverlayPassthrough(openCellBtn) {
                 service.clickRect(openCellBtn)
             }
-            adCloserHandler.onEnterAdMode()
-            transitionTo(EngineState.AD_WATCHING, "已點擊「立即開啟賓果格」，觀看廣告開格中...", "[廣告] 廣告開格中...")
+            delay(400)
+            popupRetryTicks = 0
+            transitionTo(EngineState.TRIGGER_AD_POPUP, "已點擊「立即開啟賓果格」，等待開格或廣告結果...", "[賓果] 廣告開格中...")
             return
         }
 
-        // 3. 連續 2 次未偵測到可執行項目 (冷卻中或無連線獎勵) -> 關閉賓果彈窗並前往下一階段
+        // 2. 【使用者指示第 2 步】：開格點完後，再依序點擊所有連線獎勵 [Get]，直到沒有 Get 可點！
+        val rewardTarget = bingoTask.findNextClaimableReward(screenBitmap, ocrItems, claimedBingoColumns)
+        if (rewardTarget != null) {
+            currentPhaseEmptyTicks = 0
+            claimedBingoColumns.add(rewardTarget.columnIndex)
+            appendLog("[賓果] 點擊連線獎勵【${rewardTarget.label}】！")
+            FloatingOverlayService.clickWithOverlayPassthrough(rewardTarget.bounds) {
+                service.clickRect(rewardTarget.bounds)
+            }
+            delay(400)
+            popupRetryTicks = 0
+            transitionTo(EngineState.TRIGGER_AD_POPUP, "已點擊賓果連線獎勵 [Get]，等待廣告或領獎結果...", "[賓果] 領取獎勵中...")
+            return
+        }
+
+        // 3. 【使用者指示第 3 步】：無立即開啟且無任何 Get 可點 -> 即完成賓果，點擊 (X) 關閉視窗！
         currentPhaseEmptyTicks++
         if (currentPhaseEmptyTicks < 2) {
-            updateDetail("[賓果] 檢查可開格/連線獎勵中 ($currentPhaseEmptyTicks/2)...", "[賓果] 檢查中...")
+            updateDetail("[賓果] 檢查可開格與 Get 獎勵中 ($currentPhaseEmptyTicks/2)...", "[賓果] 檢查中...")
             return
         }
 
         currentPhaseEmptyTicks = 0
         isBingoCompleted = true
-        appendLog("[完成]【每日賓果】檢查完畢，點擊右上角關閉視窗")
+        claimedBingoColumns.clear()
+        appendLog("[完成]【每日賓果】所有開格與 Get 領取皆已完成，點擊右上角 (X) 關閉視窗")
         val closeBtn = bingoTask.getCloseButtonBounds(sw, sh)
         FloatingOverlayService.clickWithOverlayPassthrough(closeBtn) {
             service.clickRect(closeBtn)
@@ -979,15 +1140,26 @@ class AutomationEngine private constructor(context: Context) {
             return
         }
 
+        // 0B. 檢查贈送次數是否已達上限 (例如 5/5 或 今日上限)
+        if (friendGiftTask.isGiftQuotaFull(ocrItems)) {
+            appendLog("[禮物]【好友送禮】今日贈送次數已達上限 (5/5)，送禮完成！")
+            isFriendGiftCompleted = true
+        }
+
         if (isFriendGiftCompleted) {
             if (config.enableFriendGiftTask && !isReceiveGiftCompleted) {
                 currentPhase = PatrolPhase.RECEIVE_GIFT
-                appendLog("[禮物]【好友送禮】已完成，點擊右上角【禮物盒】開啟收禮視窗！")
+                friendGiftOpenDrawerTicks++
+                appendLog("[禮物]【好友送禮】已完成，點擊右上角【禮物盒】開啟收禮視窗 ($friendGiftOpenDrawerTicks/3)！")
                 val giftBoxRect = receiveGiftTask.getHeaderGiftBoxRect(sw, sh)
                 FloatingOverlayService.clickWithOverlayPassthrough(giftBoxRect) {
                     service.clickRect(giftBoxRect)
                 }
                 updateDetail("[禮物] 送禮已完成，開啟【禮物】視窗接收禮物...", "[禮物] 開啟禮物盒...")
+                if (friendGiftOpenDrawerTicks >= 3) {
+                    val mainTabBtn = friendGiftTask.getBottomMainTabRect(sw, sh, ocrItems)
+                    service.clickRect(mainTabBtn)
+                }
                 delay(600)
                 return
             }
@@ -1009,6 +1181,7 @@ class AutomationEngine private constructor(context: Context) {
         // 1. 最優先檢查：是否跳出送禮確認彈窗（使用者指定：【都以送禮物也送自己為主】！）
         val selfGiftOption = friendGiftTask.findSelfGiftButton(screenBitmap, ocrItems)
         if (selfGiftOption != null) {
+            friendGiftEmptyTicks = 0
             appendLog("[禮物]【好友送禮】點擊【${selfGiftOption.first}】(優先送禮物也送自己)！")
             FloatingOverlayService.clickWithOverlayPassthrough(selfGiftOption.second) {
                 service.clickRect(selfGiftOption.second)
@@ -1031,7 +1204,6 @@ class AutomationEngine private constructor(context: Context) {
         // 2. 搜尋畫面上是否有未贈送的綠色「禮物」按鈕
         val nextGiftBtn = friendGiftTask.findNextGiftButton(screenBitmap, ocrItems)
         if (nextGiftBtn != null) {
-            friendGiftEmptyTicks = 0
             friendGiftTask.markGifted(android.graphics.Point(nextGiftBtn.centerX(), nextGiftBtn.centerY()))
             appendLog("[禮物]【好友送禮】點擊好友排行榜綠色禮物按鈕 (座標: ${nextGiftBtn.centerX()}, ${nextGiftBtn.centerY()})！")
             updateDetail("[禮物] 點擊好友禮物按鈕，等待送禮彈窗...", "[禮物] 贈送禮物中...")
@@ -1042,7 +1214,7 @@ class AutomationEngine private constructor(context: Context) {
             return
         }
 
-        // 3. 畫面上沒有禮物按鈕了，向下滾動清單搜尋更多好友！
+        // 3. 畫面上沒有未贈送的禮物按鈕了，向下滾動清單搜尋更多好友！
         friendGiftEmptyTicks++
         if (friendGiftEmptyTicks <= 2) {
             appendLog("[清單]【好友送禮】向下滾動清單搜尋更多好友 ($friendGiftEmptyTicks/2)...")
@@ -1054,7 +1226,7 @@ class AutomationEngine private constructor(context: Context) {
                 endY = sh * 0.35f,
                 durationMs = 380L
             )
-            friendGiftTask.resetSession()
+            // 注意：絕對不可在此處清空 giftedPoints，避免短清單反覆點擊相同好友！
             delay(600)
             return
         }
@@ -1351,9 +1523,136 @@ class AutomationEngine private constructor(context: Context) {
             }
 
             PatrolPhase.COMPLETED -> {
-                stop("[完成] 全日任務與巡邏獎勵皆已領取完畢！（四大分頁/每日賓果/抽抽樂/任務/送禮/收禮）")
+                handleRoundCompletion(service)
             }
         }
+    }
+
+    internal suspend fun handleRoundCompletion(service: AutoAdAccessibilityService? = null) {
+        val completed = currentRound
+        appendLog("[完成] 第 $completed 輪全日巡邏任務皆已領取完畢！等待 5 秒防風控冷卻時間後開始下一輪")
+        appendLog("[冷卻] 進入防風控冷卻間隔 (約 5 秒)，準備啟動第 ${completed + 1} 輪巡邏...")
+
+        _uiStatus.value = _uiStatus.value.copy(
+            statusDetail = "[巡邏中] 冷卻等待中 (5s)",
+            overlaySafeDetail = "[冷卻] 冷卻等待中 (5s)..."
+        )
+
+        for (sec in 5 downTo 1) {
+            if (!_uiStatus.value.isRunning || !scope.isActive) {
+                appendLog("[冷卻] 巡邏冷卻中偵測到手動暫停，中斷循環")
+                return
+            }
+            updateDetail(
+                "[冷卻] 輪次間隔冷卻中：剩餘 $sec 秒後開始第 ${completed + 1} 輪巡邏...",
+                "[冷卻] 冷卻中 (${sec}s)..."
+            )
+            delay(1000L)
+        }
+
+        if (!_uiStatus.value.isRunning || !scope.isActive) {
+            return
+        }
+
+        currentRound++
+        _uiStatus.value = _uiStatus.value.copy(currentRound = currentRound)
+
+        confirmedEmptyTabs.clear()
+        emptyTicksOnCurrentTab = 0
+        needsInitialTabSync = true
+        tabSwitchRetries = 0
+        popupRetryTicks = 0
+        rewardClaimRetryTicks = 0
+        nonGameScreenTicks = 0
+        currentPhaseEmptyTicks = 0
+
+        isBingoCompleted = false
+        claimedBingoColumns.clear()
+        isLotteryCompleted = false
+        hasClickedLotteryAdReward = false
+        lotteryResultRewardWaitTicks = 0
+        isMissionCompleted = false
+        checkedMissionTabs.clear()
+        isFriendGiftCompleted = false
+        isReceiveGiftCompleted = false
+        friendGiftEmptyTicks = 0
+        friendGiftReturnHomeTicks = 0
+        friendGiftOpenDrawerTicks = 0
+        friendGiftTask.resetSession()
+
+        currentTab = tabPriorityOrder.firstOrNull { it.isEnabled(config) } ?: MainTab.MOVE
+        currentPhase = if (tabPriorityOrder.any { it.isEnabled(config) }) {
+            PatrolPhase.MAIN_TABS
+        } else {
+            getNextPhase(PatrolPhase.MAIN_TABS)
+        }
+
+        appendLog("[循環] 🚀 第 $currentRound 輪自動巡邏已重置啟動！首發階段：【${currentPhase.title}】")
+        transitionTo(
+            newState = EngineState.IN_GAME_SCAN,
+            detail = "第 $currentRound 輪巡邏開始，首發階段：【${currentPhase.title}】...",
+            safeOverlayText = "[第${currentRound}輪] [${currentPhase.title}]..."
+        )
+    }
+
+    fun simulateRoundCompletion(
+        pauseRequestedAtSec: Int? = null,
+        totalCooldownSec: Int = 5
+    ): CooldownResult {
+        val completed = currentRound
+        var waited = 0
+        var paused = false
+
+        for (sec in 1..totalCooldownSec) {
+            waited = sec
+            if (pauseRequestedAtSec != null && sec >= pauseRequestedAtSec) {
+                paused = true
+                stop("巡邏冷卻中手動暫停")
+                break
+            }
+        }
+
+        if (!paused) {
+            currentRound++
+            _uiStatus.value = _uiStatus.value.copy(currentRound = currentRound)
+
+            confirmedEmptyTabs.clear()
+            emptyTicksOnCurrentTab = 0
+            needsInitialTabSync = true
+            tabSwitchRetries = 0
+            popupRetryTicks = 0
+            rewardClaimRetryTicks = 0
+            nonGameScreenTicks = 0
+            currentPhaseEmptyTicks = 0
+
+            isBingoCompleted = false
+            claimedBingoColumns.clear()
+            isLotteryCompleted = false
+            hasClickedLotteryAdReward = false
+            lotteryResultRewardWaitTicks = 0
+            isMissionCompleted = false
+            checkedMissionTabs.clear()
+            isFriendGiftCompleted = false
+            isReceiveGiftCompleted = false
+            friendGiftEmptyTicks = 0
+            friendGiftReturnHomeTicks = 0
+            friendGiftOpenDrawerTicks = 0
+            friendGiftTask.resetSession()
+
+            currentTab = tabPriorityOrder.firstOrNull { it.isEnabled(config) } ?: MainTab.MOVE
+            currentPhase = if (tabPriorityOrder.any { it.isEnabled(config) }) {
+                PatrolPhase.MAIN_TABS
+            } else {
+                getNextPhase(PatrolPhase.MAIN_TABS)
+            }
+        }
+
+        return CooldownResult(
+            completedRound = completed,
+            nextRound = currentRound,
+            wasPausedDuringCooldown = paused,
+            cooldownSecondsWaited = waited
+        )
     }
 
     private fun getNextPhase(after: PatrolPhase): PatrolPhase {
@@ -2106,11 +2405,97 @@ class AutomationEngine private constructor(context: Context) {
         )
     }
 
+    private val _fullSessionLogs = java.util.Collections.synchronizedList(mutableListOf<String>())
+    val fullSessionLogs: List<String>
+        get() = synchronized(_fullSessionLogs) { _fullSessionLogs.toList() }
+
+    private var sessionStartTime: Date = Date()
+
     fun appendLog(message: String) {
-        val timeStr = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
-        val line = "[$timeStr] $message"
+        val date = Date()
+        if (message.contains("全自動巡邏已啟動")) {
+            sessionStartTime = date
+        }
+        val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(date)
+        val line = "[$timestamp] $message"
+        synchronized(_fullSessionLogs) {
+            if (_fullSessionLogs.size >= 5000) {
+                _fullSessionLogs.removeAt(0)
+            }
+            _fullSessionLogs.add(line)
+        }
         val updated = (_uiStatus.value.recentLogs + line).takeLast(40)
         _uiStatus.value = _uiStatus.value.copy(recentLogs = updated)
+    }
+
+    /**
+     * 回傳安全適用於系統 Intent 分享 (IPC) 的格式化日誌。
+     * 限制最大日誌筆數為 [maxLines]（預設 1,500 筆），避免 Android Binder 事務緩衝區 (1MB) 溢位觸發 TransactionTooLargeException。
+     * 若日誌總量超出限制，自動截取最近 [maxLines] 筆並附帶安全提示說明。
+     */
+    fun getExportLogsFormatted(
+        maxLines: Int = 1500,
+        deviceModel: String = "${Build.MANUFACTURER} ${Build.MODEL}".trim(),
+        osVersion: String = "Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})",
+        appVersion: String = "v${try { com.linewalk.autoad.BuildConfig.VERSION_NAME } catch (_: Exception) { "1.15.20" }}"
+    ): String {
+        val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+        val startTimeStr = dateFormat.format(sessionStartTime)
+        val exportTimeStr = dateFormat.format(Date())
+        val logsSnapshot = fullSessionLogs
+        val isTruncated = logsSnapshot.size > maxLines
+        val targetLogs = if (isTruncated) logsSnapshot.takeLast(maxLines) else logsSnapshot
+
+        val sb = StringBuilder()
+        sb.append("========================================\n")
+        sb.append("《LINE 散步趣助手》系統診斷日誌\n")
+        sb.append("應用版本：$appVersion\n")
+        sb.append("裝置型號：$deviceModel\n")
+        sb.append("系統版本：$osVersion\n")
+        sb.append("啟動時間：$startTimeStr\n")
+        sb.append("匯出時間：$exportTimeStr\n")
+        if (isTruncated) {
+            sb.append("日誌筆數：${targetLogs.size} (總計 ${logsSnapshot.size} 筆，已截取最近 1,500 筆記錄)\n")
+        } else {
+            sb.append("日誌筆數：${targetLogs.size}\n")
+        }
+        sb.append("========================================\n\n")
+
+        if (isTruncated) {
+            sb.append("[注意：日誌量龐大，已匯出最近 1,500 筆記錄以防系統溢位。如需完整記錄請使用「複製日誌」功能]\n\n")
+        }
+
+        if (targetLogs.isEmpty()) {
+            sb.append("(目前尚無執行日誌記錄)")
+        } else {
+            targetLogs.forEach { logLine ->
+                sb.append(logLine).append("\n")
+            }
+        }
+        return sb.toString()
+    }
+
+    /**
+     * 回傳包含診斷標頭（應用版本、裝置型號、系統版本、啟動時間、日誌筆數）與完整歷史歷程之格式化日誌字串（不限筆數），供剪貼簿完整複製使用。
+     */
+    fun getFullLogsFormatted(
+        deviceModel: String = "${Build.MANUFACTURER} ${Build.MODEL}".trim(),
+        osVersion: String = "Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})",
+        appVersion: String = "v${try { com.linewalk.autoad.BuildConfig.VERSION_NAME } catch (_: Exception) { "1.15.20" }}"
+    ): String {
+        return getExportLogsFormatted(
+            maxLines = Int.MAX_VALUE,
+            deviceModel = deviceModel,
+            osVersion = osVersion,
+            appVersion = appVersion
+        )
+    }
+
+    fun clearFullLogs() {
+        synchronized(_fullSessionLogs) {
+            _fullSessionLogs.clear()
+        }
+        _uiStatus.value = _uiStatus.value.copy(recentLogs = emptyList())
     }
 
     companion object {

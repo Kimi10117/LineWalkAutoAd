@@ -376,6 +376,35 @@
                 android:text="尚無執行紀錄..."
                 android:textColor="#38BDF8"
                 android:textSize="12sp" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:orientation="horizontal">
+
+                <Button
+                    android:id="@+id/btnExportLogs"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:backgroundTint="#0284C7"
+                    android:text="@string/btn_export_logs"
+                    android:textColor="@color/card_white"
+                    android:textSize="13sp"
+                    android:textStyle="bold" />
+
+                <Button
+                    android:id="@+id/btnCopyLogs"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:layout_weight="1"
+                    android:backgroundTint="#334155"
+                    android:text="@string/btn_copy_logs"
+                    android:textColor="@color/card_white"
+                    android:textSize="13sp" />
+            </LinearLayout>
         </LinearLayout>
 
     </LinearLayout>

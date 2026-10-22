@@ -11,8 +11,8 @@ android {
         applicationId = "com.linewalk.autoad"
         minSdk = 30
         targetSdk = 34
-        versionCode = 53
-        versionName = "1.15.20"
+        versionCode = 54
+        versionName = "1.15.21"
     }
 
     signingConfigs {
@@ -54,6 +54,13 @@ android {
         viewBinding = true
         buildConfig = true
     }
+
+    testOptions {
+        unitTests {
+            isReturnDefaultValues = true
+            isIncludeAndroidResources = true
+        }
+    }
 }
 
 dependencies {
@@ -69,4 +76,13 @@ dependencies {
 
     // Google ML Kit Text Recognition v2 (Bundled Chinese + Latin on-device OCR)
     implementation("com.google.mlkit:text-recognition-chinese:16.0.0")
+
+    // E2E & Unit Test Infrastructure
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.robolectric:robolectric:4.11.1")
+    testImplementation("io.mockk:mockk:1.13.9")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
+    testImplementation("androidx.test:core:1.5.0")
+    testImplementation("androidx.test.ext:junit:1.1.5")
 }
+

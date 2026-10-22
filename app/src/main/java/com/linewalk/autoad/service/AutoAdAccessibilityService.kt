@@ -240,8 +240,8 @@ class AutoAdAccessibilityService : AccessibilityService() {
      */
     fun safeNavigateBack(minIntervalMs: Long = 2000L, allowInGame: Boolean = false): Boolean {
         val fg = getForegroundPackageName()
-        if (!allowInGame && fg == "com.linecorp.LGWALK") {
-            Log.w(TAG, "目前前景為散步趣 (com.linecorp.LGWALK)，禁止發送系統返回鍵以免退回手機桌面！")
+        if (!allowInGame && (fg == "com.linecorp.LGWALK" || fg == "jp.naver.line.android")) {
+            Log.w(TAG, "目前前景為散步趣 ($fg)，禁止發送系統返回鍵以免退回手機桌面！")
             return false
         }
         val now = System.currentTimeMillis()
