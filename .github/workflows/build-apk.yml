@@ -66,13 +66,17 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
             tag_name: latest-apk
-            name: "散步趣助手 v1.15.23 (支援 Meta/Facebook 廣告容器 com.facebook.katana 完整播放與防中斷領獎 - Run #${{ github.run_number }})"
+            name: "散步趣助手 v1.15.24 (徹底修復賓果點完所有Get、廣告容器自動切換防誤退出、延遲盲點防跳轉商店 - Run #${{ github.run_number }})"
             body: |
-              **散步趣助手 v1.15.23 (Run #${{ github.run_number }})**
-              1. **【重要修復：全面支援 Meta / Facebook 與 Google 官方廣告容器 (`com.facebook.katana` 等)】**：
-                 - 徹底修復播放 Meta Audience Network 影音廣告（`Ads served by Meta`, "Ad 1 of 2"）時，被誤判為外部應用（`com.facebook.katana`）而過早發送返回鍵並強制退出，導致廣告無法正常觀看且無法領取獎勵的問題。
-                 - 觀看廣告狀態下合法認可 `com.facebook.katana`、`com.google.android.gms` 等廣告播放容器，完整靜候廣告播放與倒數完畢，並在出現「略過」或「X」關閉按鈕時精確點擊，順暢獲得獎勵！
-              2. **【全面支援台灣版《LINE 散步趣》(com.linecorp.LGWKTW)】**：
+              **散步趣助手 v1.15.24 (Run #${{ github.run_number }})**
+              1. **【重要修復：每日賓果完整點完所有 [Get] 獎勵】**：
+                 - 徹底解決只點一次 Get 就跳去抽抽樂的問題。使用連續重試計數與黑名單保護，每次開格結束後或看廣告領獎後，持續檢查並循環領取所有達成之直欄 [Get] 獎勵，直到畫面上完全沒有任何 Get 可點時才判定完成並關閉賓果彈窗前往抽抽樂。
+              2. **【重要修復：第三方廣告容器（Meta com.facebook.katana 等）自動切換與全域保護】**：
+                 - 徹底修復點擊抽抽樂「50張抽一次」或點擊「立即開啟賓果格」進入 Meta Audience Network 廣告時，因尚未轉入廣告狀態而被誤判為外部應用並發送返回鍵的問題。
+                 - 只要偵測到已知廣告套件（`com.facebook.katana`, `com.google.android.gms` 等），無條件判定為合法廣告畫面，並自動無縫切換至廣告監控狀態，絕不發送返回鍵打斷廣告播放，完整保障獎勵領取。
+              3. **【重要修復：延遲廣告盲點熱區至後期，嚴防誤開 Google Play 商店】**：
+                 - 將盲點角落與安全返回鍵嚴格限制於廣告播放後期（22 秒以上或已獲得獎勵）才允許發送，徹底消除廣告播放前 20 秒因盲點角落誤觸廣告贊助橫幅而頻繁跳轉至 Google Play 商店 (`com.android.vending`) 的嚴重問題。
+              4. **【全面支援台灣版《LINE 散步趣》(com.linecorp.LGWKTW)】**：
                  - 完整支援台灣版套件名稱 `com.linecorp.LGWKTW` 與國際版 `com.linecorp.LGWALK`。
               2. **【懸浮視窗開始預設收折為單行膠囊 + 點擊「+」展開】**：
                  - 點擊「開始」時預設自動收折為緊湊單行膠囊，防止遮擋主畫面任何重要資訊與按鈕。

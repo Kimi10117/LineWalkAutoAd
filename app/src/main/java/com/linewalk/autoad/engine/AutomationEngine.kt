@@ -185,6 +185,7 @@ class AutomationEngine private constructor(private val context: Context) {
     private var friendGiftReturnHomeTicks = 0
     private var friendGiftOpenDrawerTicks = 0
     internal val claimedBingoColumns = mutableSetOf<Int>()
+    internal val bingoColumnRetryCount = mutableMapOf<Int, Int>()
     private var currentPhaseEmptyTicks = 0
     internal var nonGameScreenTicks = 0
 
@@ -206,8 +207,9 @@ class AutomationEngine private constructor(private val context: Context) {
         }
 
         // 僅《LINE 散步趣》本體 (com.linecorp.LGWKTW, com.linecorp.LGWALK) 視為遊戲內；
-        // 當處於觀看廣告狀態 (isWatchingAd) 時，第三方官方廣告容器 (如 Meta com.facebook.katana, Google com.google.android.gms) 亦視為合法前景！
-        val isAd = isWatchingAd && AppConfig.isAdPackage(fgPkg)
+        // 若前景為已知第三方官方廣告服務容器 (Meta com.facebook.katana, Google com.google.android.gms 等)，
+        // 永遠視為合法廣告畫面，嚴禁判定為外部應用！
+        val isAd = AppConfig.isAdPackage(fgPkg)
         val isTarget = AppConfig.isGamePackage(fgPkg) || isAd ||
             (fgPkg in config.targetGamePackages && fgPkg != "jp.naver.line.android")
         return if (!isTarget) {
@@ -244,6 +246,7 @@ class AutomationEngine private constructor(private val context: Context) {
         confirmedEmptyTabs.clear()
         isBingoCompleted = false
         claimedBingoColumns.clear()
+        bingoColumnRetryCount.clear()
         isLotteryCompleted = false
         hasClickedLotteryAdReward = false
         lotteryResultRewardWaitTicks = 0
@@ -331,10 +334,27 @@ class AutomationEngine private constructor(private val context: Context) {
 
         val currentState = _uiStatus.value.state
         val fgPkg = service.getForegroundPackageName()
-        val isWatchingAd = currentState == EngineState.AD_WATCHING
+
+        // 0. 第三方官方廣告容器優先處理 (Meta Audience Network com.facebook.katana, Google AdMob 等)：
+        // 當畫面處於任何第三方廣告套件時，代表廣告已成功啟動播放中，
+        // 絕對不可判定為「外部應用」而發送返回鍵提早退出！
+        // 若當前狀態尚未轉入 AD_WATCHING，立即無縫切換至 AD_WATCHING 啟動廣告監控！
+        if (AppConfig.isAdPackage(fgPkg)) {
+            nonGameScreenTicks = 0
+            if (currentState != EngineState.AD_WATCHING) {
+                appendLog("[廣告] 偵測到第三方廣告容器 ($fgPkg)，自動進入廣告監控模式")
+                adCloserHandler.onEnterAdMode()
+                transitionTo(
+                    newState = EngineState.AD_WATCHING,
+                    detail = "已進入廣告畫面 ($fgPkg)，安全監控中...",
+                    safeOverlayText = "[廣告] 監控中..."
+                )
+            }
+        }
+
         val guardDecision = evaluateForegroundPackage(
             fgPkg = fgPkg,
-            isWatchingAd = isWatchingAd
+            isWatchingAd = true
         )
 
         if (guardDecision.isExternal) {
@@ -609,6 +629,7 @@ class AutomationEngine private constructor(private val context: Context) {
         val modalCloseBtn = ocrRecognizer.findCenterRewardModalCloseButton(screenBitmap, ocrItems)
         if (modalCloseBtn != null) {
             emptyTicksOnCurrentTab = 0
+            bingoColumnRetryCount.clear()
             appendLog("[完成] 點擊領獎完成彈窗: ${modalCloseBtn.first}")
             FloatingOverlayService.clickWithOverlayPassthrough(modalCloseBtn.second) {
                 service.clickRect(modalCloseBtn.second)
@@ -862,11 +883,15 @@ class AutomationEngine private constructor(private val context: Context) {
         }
 
         // 2. 【使用者指示第 2 步】：開格點完後，再依序點擊所有連線獎勵 [Get]，直到沒有 Get 可點！
-        val rewardTarget = bingoTask.findNextClaimableReward(screenBitmap, ocrItems, claimedBingoColumns)
+        val exhaustedCols = bingoColumnRetryCount.filter { it.value >= 3 }.keys
+        val rewardTarget = bingoTask.findNextClaimableReward(screenBitmap, ocrItems, exhaustedCols)
         if (rewardTarget != null) {
             currentPhaseEmptyTicks = 0
-            claimedBingoColumns.add(rewardTarget.columnIndex)
-            appendLog("[賓果] 點擊連線獎勵【${rewardTarget.label}】！")
+            val count = (bingoColumnRetryCount[rewardTarget.columnIndex] ?: 0) + 1
+            bingoColumnRetryCount[rewardTarget.columnIndex] = count
+            claimedBingoColumns.clear()
+            claimedBingoColumns.addAll(bingoColumnRetryCount.filter { it.value >= 3 }.keys)
+            appendLog("[賓果] 點擊連線獎勵【${rewardTarget.label}】(第 $count 次點擊)！")
             FloatingOverlayService.clickWithOverlayPassthrough(rewardTarget.bounds) {
                 service.clickRect(rewardTarget.bounds)
             }
@@ -878,13 +903,14 @@ class AutomationEngine private constructor(private val context: Context) {
 
         // 3. 【使用者指示第 3 步】：無立即開啟且無任何 Get 可點 -> 即完成賓果，點擊 (X) 關閉視窗！
         currentPhaseEmptyTicks++
-        if (currentPhaseEmptyTicks < 2) {
-            updateDetail("[賓果] 檢查可開格與 Get 獎勵中 ($currentPhaseEmptyTicks/2)...", "[賓果] 檢查中...")
+        if (currentPhaseEmptyTicks < 3) {
+            updateDetail("[賓果] 檢查可開格與 Get 獎勵中 ($currentPhaseEmptyTicks/3)...", "[賓果] 檢查中...")
             return
         }
 
         currentPhaseEmptyTicks = 0
         isBingoCompleted = true
+        bingoColumnRetryCount.clear()
         claimedBingoColumns.clear()
         appendLog("[完成]【每日賓果】所有開格與 Get 領取皆已完成，點擊右上角 (X) 關閉視窗")
         val closeBtn = bingoTask.getCloseButtonBounds(sw, sh)
@@ -1574,6 +1600,7 @@ class AutomationEngine private constructor(private val context: Context) {
 
         isBingoCompleted = false
         claimedBingoColumns.clear()
+        bingoColumnRetryCount.clear()
         isLotteryCompleted = false
         hasClickedLotteryAdReward = false
         lotteryResultRewardWaitTicks = 0
@@ -1633,6 +1660,7 @@ class AutomationEngine private constructor(private val context: Context) {
 
             isBingoCompleted = false
             claimedBingoColumns.clear()
+            bingoColumnRetryCount.clear()
             isLotteryCompleted = false
             hasClickedLotteryAdReward = false
             lotteryResultRewardWaitTicks = 0

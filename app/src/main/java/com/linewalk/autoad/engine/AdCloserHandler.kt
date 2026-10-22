@@ -409,8 +409,9 @@ class AdCloserHandler(
                 return AdStepResult.WatchdogBackTriggered(elapsedSec, "互動可玩廣告推進點擊")
             }
 
-            // 盲點熱區：當處於非散步趣外部應用時，嚴格停用盲點熱區，防止在外部 App 或手機桌面誤觸！
-            if (!isOutsideGame && now - lastFallbackCornerTimeMs >= 2500L) {
+            // 盲點熱區：嚴格延遲至廣告播放後期 (22秒以上或已獲獎勵) 且非外部應用時才允許盲點角落！
+            // 絕不可在廣告播放前 20 秒盲點角落，否則會誤觸廣告贊助連結跳轉至 Google Play 商店！
+            if (!isOutsideGame && now - lastFallbackCornerTimeMs >= 2500L && (elapsedSec >= 22 || rewardGrantedOcr != null)) {
                 val (label, targetRect) = getNextFallbackTarget(sw, sh, ocrItems)
                 lastFallbackCornerTimeMs = now
                 recordAndClick(service, targetRect, allowBlacklist = false)
@@ -423,7 +424,7 @@ class AdCloserHandler(
                 }
             }
 
-            if (isSafeToBack && now - lastBackActionTimeMs >= 2500L) {
+            if (isSafeToBack && (elapsedSec >= 22 || rewardGrantedOcr != null) && now - lastBackActionTimeMs >= 2500L) {
                 service.safeNavigateBack()
                 lastBackActionTimeMs = now
                 return AdStepResult.WatchdogBackTriggered(elapsedSec, "安全返回鍵")
