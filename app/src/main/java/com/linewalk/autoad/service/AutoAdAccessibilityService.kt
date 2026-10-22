@@ -142,7 +142,7 @@ class AutoAdAccessibilityService : AccessibilityService() {
     /**
      * 點擊目標矩形區域中心，並自動加入隨機偏移與隨機按壓時長 (65ms ~ 135ms)。
      */
-    suspend fun clickRect(rect: Rect, maxJitterPx: Int = 6): Boolean {
+    suspend fun clickRect(rect: Rect, maxJitterPx: Int = 6, allowTopSafeZone: Boolean = false): Boolean {
         val safeJitterX = minOf(maxJitterPx, (rect.width() / 4).coerceAtLeast(1))
         val safeJitterY = minOf(maxJitterPx, (rect.height() / 4).coerceAtLeast(1))
         val dx = Random.nextInt(-safeJitterX, safeJitterX + 1)
@@ -150,14 +150,20 @@ class AutoAdAccessibilityService : AccessibilityService() {
         return performClick(
             x = (rect.centerX() + dx).toFloat(),
             y = (rect.centerY() + dy).toFloat(),
-            jitterPx = 0
+            jitterPx = 0,
+            allowTopSafeZone = allowTopSafeZone
         )
     }
 
     /**
      * 在螢幕指定座標派發擬真點擊手勢。
      */
-    suspend fun performClick(x: Float, y: Float, jitterPx: Int = 5): Boolean =
+    suspend fun performClick(
+        x: Float,
+        y: Float,
+        jitterPx: Int = 5,
+        allowTopSafeZone: Boolean = false
+    ): Boolean =
         suspendCancellableCoroutine { cont ->
             val maxW = if (lastCapturedWidth > 0) lastCapturedWidth else resources.displayMetrics.widthPixels
             val maxH = if (lastCapturedHeight > 0) lastCapturedHeight else resources.displayMetrics.heightPixels
@@ -165,6 +171,14 @@ class AutoAdAccessibilityService : AccessibilityService() {
             val offsetY = if (jitterPx > 0) Random.nextInt(-jitterPx, jitterPx + 1) else 0
             val targetX = (x + offsetX).coerceIn(5f, (maxW - 5).toFloat())
             val targetY = (y + offsetY).coerceIn(5f, (maxH - 5).toFloat())
+
+            // R1: 頂部通知與即時動態安全禁區 (y < maxH * 0.08f) 嚴格防誤點保護
+            if (!allowTopSafeZone && targetY < maxH * 0.08f) {
+                Log.w(TAG, "[防護禁區] 攔截危險頂部區域點擊 (targetY=$targetY < ${maxH * 0.08f})，已拒絕派發手勢！")
+                if (cont.isActive) cont.resume(false)
+                return@suspendCancellableCoroutine
+            }
+
             val durationMs = Random.nextLong(65L, 138L)
 
             val path = Path().apply {
@@ -234,16 +248,31 @@ class AutoAdAccessibilityService : AccessibilityService() {
 
     /**
      * 安全發送單次系統返回鍵：
-     * 1. 嚴格安全防護：若目前前景為《LINE 散步趣》(com.linecorp.LGWALK)，嚴禁發送系統返回鍵以免退出散步趣回到手機桌面！
-     * 2. 強制至少 2000ms 冷卻間隔，防止連續快速發送返回鍵擊穿廣告層。
-     * 3. 單次發送 (SINGLE BACK KEY ONLY)，杜絕退回手機桌面。
+     * 1. 合法第三方廣告容器絕對防護：無論 allowInGame 為何，無條件嚴禁發送系統返回鍵，避免中斷廣告播放或遺失獎勵！
+     * 2. 散步趣遊戲本體防護：非 allowInGame 時嚴禁發送返回鍵以免退出散步趣回到手機桌面；僅在內部選單放行。
+     * 3. 強制至少 minIntervalMs (預設 2000ms) 冷卻間隔，防止連續快速發送返回鍵擊穿介面。
+     * 4. 單次發送 (SINGLE BACK KEY ONLY)，杜絕退回手機桌面。
      */
     fun safeNavigateBack(minIntervalMs: Long = 2000L, allowInGame: Boolean = false): Boolean {
         val fg = getForegroundPackageName()
-        if (!allowInGame && (com.linewalk.autoad.config.AppConfig.isGamePackage(fg) || fg == "jp.naver.line.android")) {
-            Log.w(TAG, "目前前景為散步趣 ($fg)，禁止發送系統返回鍵以免退回手機桌面！")
+
+        // 1. 合法第三方廣告容器絕對防護：無論 allowInGame 為何，嚴禁發送返回鍵以免中斷廣告
+        if (com.linewalk.autoad.config.AppConfig.isAdPackage(fg)) {
+            Log.w(TAG, "目前前景為合法第三方廣告容器 ($fg)，絕對禁止發送系統返回鍵以免中斷廣告！")
             return false
         }
+
+        // 2. 遊戲本體選單防護：非 allowInGame 時嚴禁發送返回鍵
+        if (!allowInGame && (
+            com.linewalk.autoad.config.AppConfig.isGamePackage(fg) ||
+            fg == "jp.naver.line.android" ||
+            fg == "com.linecorp.LGWALK" ||
+            fg == "com.linecorp.LGWKTW"
+        )) {
+            Log.w(TAG, "目前前景為散步趣 ($fg)，禁止發送系統返回鍵以免退出散步趣！")
+            return false
+        }
+
         val now = System.currentTimeMillis()
         if (now - lastBackActionTimeMs < minIntervalMs) {
             Log.d(TAG, "返回鍵冷卻中 (${now - lastBackActionTimeMs}ms < ${minIntervalMs}ms)，跳過派發")

@@ -26,11 +26,11 @@ class Tier1_F2_ExternalAppGuardTest {
     fun test01_externalAppDetectionForNonGameForegroundPackages() {
         // Authoritative Source: ORIGINAL_REQUEST.md §R2 & PROJECT.md §Feature Inventory F2
         val externalPackages = listOf(
-            "com.android.chrome",
             "com.android.vending",
             "com.google.android.apps.nexuslauncher",
             "com.android.settings",
-            "com.sec.android.app.sbrowser"
+            "com.sec.android.app.sbrowser",
+            "org.mozilla.firefox"
         )
 
         for (pkg in externalPackages) {
@@ -44,7 +44,7 @@ class Tier1_F2_ExternalAppGuardTest {
     fun test02_systemBackTriggerUponExternalAppDetection() {
         // Authoritative Source: ORIGINAL_REQUEST.md §R2 ("在外部 App 期間僅允許執行安全退出行為：發送系統返回鍵（Back）")
         val decision = simulator.evaluateForegroundPackage(
-            fgPkg = "com.android.chrome",
+            fgPkg = "com.sec.android.app.sbrowser",
             hasAdGeometricX = false
         )
 
@@ -61,7 +61,7 @@ class Tier1_F2_ExternalAppGuardTest {
     fun test03_adCloseXClickAllowedInExternalWindow() {
         // Authoritative Source: ORIGINAL_REQUEST.md §R2 ("或點擊廣告右上角的圓形關閉按鈕（X）")
         val decision = simulator.evaluateForegroundPackage(
-            fgPkg = "com.android.chrome",
+            fgPkg = "com.sec.android.app.sbrowser",
             hasAdGeometricX = true
         )
 
@@ -114,15 +114,32 @@ class Tier1_F2_ExternalAppGuardTest {
 
     @Test
     fun test07_metaAdPackagesFlaggedAsExternalWhenNotWatchingAd() {
-        val decision = simulator.evaluateForegroundPackage("com.facebook.katana", isWatchingAd = false)
-        assertTrue("Facebook outside ad watching must be flagged as external", decision.isExternal)
-        assertFalse("Regular clicks must be blocked in external Facebook", decision.regularClicksAllowed)
-        assertEquals(GuardAction.SAFE_BACK_NAVIGATION, decision.recommendedAction)
+        // Authoritative Source: ORIGINAL_REQUEST.md §R3 ("任何前景套件屬於合法廣告服務時，無條件判定為內部廣告播放，嚴禁觸發外部應用保護防護，嚴禁發送返回鍵（Back）")
+        val adPackages = listOf(
+            "com.facebook.katana",
+            "com.facebook.orca",
+            "com.facebook.lite",
+            "com.instagram.android",
+            "com.google.android.gms",
+            "com.google.android.as",
+            "com.google.android.webview",
+            "com.unity3d.player",
+            "com.unity3d.ads",
+            "com.applovin",
+            "com.applovin.sdk",
+            "com.android.chrome"
+        )
+        for (adPkg in adPackages) {
+            val decision = simulator.evaluateForegroundPackage(adPkg, isWatchingAd = false)
+            assertFalse("Ad package '$adPkg' must be unconditionally exempt when isWatchingAd=false", decision.isExternal)
+            assertTrue("Regular clicks/scan must be allowed for ad package '$adPkg'", decision.regularClicksAllowed)
+            assertEquals("ALLOW_IN_GAME_SCAN action without Back navigation for '$adPkg'", GuardAction.ALLOW_IN_GAME_SCAN, decision.recommendedAction)
+        }
     }
 
     @Test
     fun test08_redirectPackagesAlwaysExternalEvenDuringAdWatching() {
-        val redirectPackages = listOf("com.android.chrome", "com.android.vending")
+        val redirectPackages = listOf("com.android.vending", "com.sec.android.app.sbrowser")
         for (pkg in redirectPackages) {
             val decision = simulator.evaluateForegroundPackage(pkg, isWatchingAd = true)
             assertTrue("Browser/store redirect '$pkg' must remain external during ad watching", decision.isExternal)

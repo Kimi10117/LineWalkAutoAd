@@ -479,11 +479,11 @@ class TemplateMatcher {
         val step = max(2, sw / 240)
         val tol = max(1, sw / 360)
 
-        val topLimitY = max((sh * 0.052f).toInt(), 48)
+        val topLimitY = max((sh * 0.082f).toInt(), 60)
         val searchZones = listOf(
-            // 右上角 (最常見，涵蓋螢幕頂部系統列下方與 16:9 劇院黑邊下方區域 y in 5.2%..24%)
+            // 右上角 (避開螢幕頂部系統列/動態島安全禁區 y < 8.2%，涵蓋 y in 8.2%..24%)
             Rect((sw * 0.75f).toInt(), topLimitY, (sw * 0.98f).toInt(), (sh * 0.24f).toInt()),
-            // 左上角 (廣告左上角關閉鈕通常緊貼左上 x < 18%, y in 5.2%..24%)
+            // 左上角 (廣告左上角關閉鈕，避開頂部禁區 y in 8.2%..24%)
             Rect((sw * 0.02f).toInt(), topLimitY, (sw * 0.18f).toInt(), (sh * 0.24f).toInt())
         )
 
@@ -528,6 +528,21 @@ class TemplateMatcher {
                 while (cx < zw - r - tol) {
                     val absX = zone.left + cx
                     val absY = zone.top + cy
+
+                    // R1: 排除頂部安全禁區 (boxTop < sh * 0.08f)
+                    if (absY - r < (sh * 0.08f).toInt()) {
+                        cx += step
+                        continue
+                    }
+
+                    // R1/R2: 嚴格排除每日賓果關閉按鈕座標熱區 (x in 84%..98% sw && y in 8%..16% sh)
+                    val isBingoCloseZone = absX in (sw * 0.84f).toInt()..(sw * 0.98f).toInt() &&
+                        absY in (sh * 0.08f).toInt()..(sh * 0.16f).toInt()
+                    if (isBingoCloseZone) {
+                        cx += step
+                        continue
+                    }
+
                     if (blacklistedCoord?.invoke(absX, absY) != true) {
                         // 上下左右四個非對角扇區（圓形按鈕底色）必須亮度一致
                         val lTop = lum(cx, cy - r)

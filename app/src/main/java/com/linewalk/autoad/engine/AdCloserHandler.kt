@@ -92,9 +92,9 @@ class AdCloserHandler(
 
     private fun isInvalidOrBlacklisted(x: Int, y: Int): Boolean {
         if (FloatingOverlayService.isInsideOverlay(x, y)) return true
-        // 僅排除最頂部系統狀態列 (時間、電量，y < 3.5%)，放行廣告右上角/左上角關閉鈕
+        // R1: 排除頂部安全禁區 (y < 8%)，放行廣告右上角/左上角關閉鈕
         if (currentScreenHeight > 0) {
-            val topLimit = kotlin.math.max(currentScreenHeight * 0.052f, 48f)
+            val topLimit = kotlin.math.max(currentScreenHeight * 0.08f, 60f)
             if (y < topLimit) return true
         }
         return blacklistedPoints.any { pt ->
@@ -115,8 +115,10 @@ class AdCloserHandler(
 
         // 1A. 防迷路檢查：若誤觸跳轉到 Google Play 商店或外部瀏覽器/Chrome Custom Tabs，立即按 BACK 並標記跳轉恢復
         val fgPkg = service.getForegroundPackageName()
-        val isExternal = fgPkg != null && AppConfig.isRedirectPackage(fgPkg)
-        val hasBrowserTitle = ocrItems.any { item ->
+        val isAd = fgPkg != null && AppConfig.isAdPackage(fgPkg)
+        val isGame = fgPkg != null && (AppConfig.isGamePackage(fgPkg) || fgPkg == "jp.naver.line.android")
+        val isExternal = fgPkg != null && AppConfig.isRedirectPackage(fgPkg) && !isAd
+        val hasBrowserTitle = !isAd && ocrItems.any { item ->
             val cy = item.bounds.centerY()
             cy < sh * 0.16f && (
                 item.text.contains("正在載入") ||
@@ -134,21 +136,20 @@ class AdCloserHandler(
             return AdStepResult.RedirectRecovered(fgPkg ?: "InAppBrowser")
         }
 
-        // 1A-2. 檢查是否誤入「選單」(設定) 畫面，自動點擊右上角關閉退回散步趣遊戲介面
+        // 1A-2. 檢查是否誤入「選單」(設定) 畫面，安全返回散步趣遊戲介面
         val isMenuScreen = ocrItems.any { item ->
             val t = item.text.replace(" ", "")
             val cy = item.bounds.centerY().toFloat() / sh
-            (cy < 0.12f && (t == "選單" || t.contains("選單"))) ||
+            (cy in 0.08f..0.22f && (t == "選單" || t == "設定")) ||
             t.contains("應用程式設定") ||
             t.contains("關閉動畫效果") ||
             t.contains("省電模式") ||
             t.contains("位置資訊設定") ||
             t.contains("目前版本")
         }
-        if (isMenuScreen) {
-            val closeMenuRect = Rect((sw * 0.85f).toInt(), (sh * 0.04f).toInt(), (sw * 0.98f).toInt(), (sh * 0.10f).toInt())
-            service.clickRect(closeMenuRect)
-            return AdStepResult.ReturnedToGame(null, "已點擊關閉選單回到散步趣介面")
+        if (isGame && !isAd && isMenuScreen) {
+            service.safeNavigateBack(allowInGame = true)
+            return AdStepResult.ReturnedToGame(null, "已發送安全返回鍵退出選單回到散步趣介面")
         }
 
         // 1A-4. LINE 內部促銷宣傳全螢幕廣告 (如『還沒有邀請好友 實在太可惜了！』『獲得金幣的流程』)：
@@ -166,8 +167,10 @@ class AdCloserHandler(
         // 直接對廣告 Activity 發送系統安全返回鍵 (safeNavigateBack)，安全關閉廣告退回遊戲！
         if (hasRecentRedirect) {
             hasRecentRedirect = false
-            service.safeNavigateBack()
-            return AdStepResult.WatchdogBackTriggered(elapsedSec, "防重定向返回鍵")
+            if (!isAd) {
+                service.safeNavigateBack()
+                return AdStepResult.WatchdogBackTriggered(elapsedSec, "防重定向返回鍵")
+            }
         }
 
         // 1B. 防誤觸 AdChoices 選單檢查：若誤點『ⓘ ▷』彈出『Hide Ad / Report Ad / Why am I seeing this ad?』選單，
@@ -232,7 +235,7 @@ class AdCloserHandler(
         }
 
         // 2A. 若已關閉全螢幕廣告並跳出『獲得15張票券！ / 獲得金幣！』中央領獎彈窗，直接回傳並點擊 [ 關閉 ]！
-        if (elapsedSec >= 2 && (hasAdActuallyShown || elapsedSec >= 3)) {
+        if (!isAd && elapsedSec >= 2 && (hasAdActuallyShown || elapsedSec >= 3)) {
             val modalClose = ocrRecognizer.findCenterRewardModalCloseButton(screenBitmap, ocrItems)
             if (modalClose != null) {
                 return AdStepResult.ReturnedToGame(modalClose.second, "已關閉領獎彈窗 (${modalClose.first})")
@@ -240,7 +243,7 @@ class AdCloserHandler(
         }
 
         // 2B. 若廣告結束後畫面停留在『獲得票券！/ 獲得金幣！』下半部彈窗且按鈕皆在冷卻中 (下方有 [取消] 按鈕)，直接點擊 [取消] 關閉彈窗回到遊戲！
-        if (elapsedSec >= 2 && (hasAdActuallyShown || elapsedSec >= 3)) {
+        if (!isAd && elapsedSec >= 2 && (hasAdActuallyShown || elapsedSec >= 3)) {
             val hasActiveClaim = templateMatcher.findCoralPinkButton(screenBitmap, 0.66f, 0.88f, "彈窗看廣告鈕") != null
             if (!hasActiveClaim) {
                 val cancelBtn = ocrRecognizer.findPopupCancelButton(screenBitmap, ocrItems, templateMatcher)
@@ -461,10 +464,10 @@ class AdCloserHandler(
     ): Pair<String, Rect> {
         val targets = mutableListOf<Pair<String, Rect>>()
 
-        // 1. 螢幕右上角關閉熱區 (標準全螢幕廣告，y in 5.5%..12.5% 避開系統狀態列)
+        // 1. 螢幕右上角關閉熱區 (標準全螢幕廣告，y in 8.5%..12.5% 避開頂部安全禁區)
         targets.add("螢幕右上角熱區" to Rect(
             (sw * 0.88f).toInt(),
-            (sh * 0.055f).toInt(),
+            (sh * 0.085f).toInt(),
             (sw * 0.97f).toInt(),
             (sh * 0.125f).toInt()
         ))
@@ -480,7 +483,7 @@ class AdCloserHandler(
         // 3. 螢幕左上角關閉熱區 (若左上方為 Google Play / 商店推廣徽章，絕對避開以免誤跳轉應用商店)
         val leftTopRect = Rect(
             (sw * 0.03f).toInt(),
-            (sh * 0.055f).toInt(),
+            (sh * 0.085f).toInt(),
             (sw * 0.14f).toInt(),
             (sh * 0.125f).toInt()
         )

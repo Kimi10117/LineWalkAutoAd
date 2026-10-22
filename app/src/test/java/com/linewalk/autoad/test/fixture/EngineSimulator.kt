@@ -108,23 +108,40 @@ class EngineSimulator(
             "com.facebook.katana",
             "com.facebook.orca",
             "com.facebook.lite",
+            "com.facebook.mlite",
+            "com.instagram.android",
             "com.google.android.gms",
             "com.google.android.as",
-            "com.google.android.webview"
+            "com.google.android.webview",
+            "com.unity3d.player",
+            "com.unity3d.ads",
+            "com.applovin",
+            "com.applovin.sdk",
+            "com.android.chrome",
+            "androidx.browser.customtabs"
         )
         if (pkg in knownAdPackages) return true
         val lower = pkg.lowercase()
         return lower.startsWith("com.facebook.ads") ||
+            lower.startsWith("com.facebook.katana") ||
+            lower.startsWith("com.facebook.orca") ||
             lower.contains("audience_network") ||
             lower.contains("admob") ||
-            lower.contains("unity3d.ads") ||
+            lower.contains("google.android.gms") ||
+            lower.contains("google.android.as") ||
+            lower.contains("unity3d") ||
+            lower.contains("unity.ads") ||
+            lower.contains("unityads") ||
             lower.contains("applovin") ||
             lower.contains("ironsource") ||
             lower.contains("vungle") ||
+            lower.contains("liftoff") ||
             lower.contains("mintegral") ||
             lower.contains("mbridge") ||
             lower.contains("pangle") ||
-            lower.startsWith("com.bytedance.pangle")
+            lower.startsWith("com.bytedance.pangle") ||
+            lower.contains("inmobi") ||
+            lower.contains("customtabs")
     }
 
     fun evaluateForegroundPackage(
@@ -141,7 +158,7 @@ class EngineSimulator(
             )
         }
 
-        val isAd = isWatchingAd && isAdPackage(fgPkg)
+        val isAd = isAdPackage(fgPkg)
         val isTarget = fgPkg in targetGamePackages || fgPkg == ownPackage || isAd
         return if (!isTarget) {
             // External app detected: strictly block regular UI clicks

@@ -125,6 +125,7 @@ class AppConfig(context: Context) {
 
         fun isRedirectPackage(pkg: String?): Boolean {
             if (pkg.isNullOrBlank()) return false
+            if (isAdPackage(pkg)) return false
             if (pkg in EXTERNAL_REDIRECT_PACKAGES) return true
             val lower = pkg.lowercase()
             return lower.contains("browser") ||
@@ -133,15 +134,28 @@ class AppConfig(context: Context) {
         }
 
         /**
-         * 已知第三方官方廣告服務提供套件（在觀看廣告狀態下屬於合法前景廣告容器）
+         * 已知第三方官方廣告服務提供套件（合法前景廣告容器，全面豁免外部應用保護）
          */
         val KNOWN_AD_PACKAGES = setOf(
-            "com.facebook.katana",             // Meta Audience Network (Facebook App 廣告容器)
-            "com.facebook.orca",               // Meta Audience Network (Messenger 廣告容器)
-            "com.facebook.lite",               // Meta Audience Network (Facebook Lite 廣告容器)
-            "com.google.android.gms",          // Google Mobile Ads / AdMob (Google Play 服務廣告 Activity)
+            // Meta Audience Network
+            "com.facebook.katana",             // Facebook App 廣告容器
+            "com.facebook.orca",               // Messenger 廣告容器
+            "com.facebook.lite",               // Facebook Lite 廣告容器
+            "com.facebook.mlite",              // Messenger Lite 廣告容器
+            "com.instagram.android",           // Instagram 廣告容器
+            // Google Mobile Ads / AdMob
+            "com.google.android.gms",          // Google Play 服務廣告 Activity (AdActivity)
             "com.google.android.as",           // Android 系統廣告服務
-            "com.google.android.webview"       // WebView 廣告容器
+            "com.google.android.webview",       // WebView 廣告容器
+            // Unity Ads
+            "com.unity3d.player",              // Unity Player 廣告容器
+            "com.unity3d.ads",                 // Unity Ads
+            // AppLovin / MAX
+            "com.applovin",                    // AppLovin
+            "com.applovin.sdk",                // AppLovin SDK
+            // Chrome Custom Tabs 廣告容器
+            "com.android.chrome",              // Chrome Custom Tabs 廣告容器
+            "androidx.browser.customtabs"      // Jetpack Custom Tabs 模組標識
         )
 
         fun isAdPackage(pkg: String?): Boolean {
@@ -149,16 +163,25 @@ class AppConfig(context: Context) {
             if (pkg in KNOWN_AD_PACKAGES) return true
             val lower = pkg.lowercase()
             return lower.startsWith("com.facebook.ads") ||
+                lower.startsWith("com.facebook.katana") ||
+                lower.startsWith("com.facebook.orca") ||
                 lower.contains("audience_network") ||
                 lower.contains("admob") ||
-                lower.contains("unity3d.ads") ||
+                lower.contains("google.android.gms") ||
+                lower.contains("google.android.as") ||
+                lower.contains("unity3d") ||
+                lower.contains("unity.ads") ||
+                lower.contains("unityads") ||
                 lower.contains("applovin") ||
                 lower.contains("ironsource") ||
                 lower.contains("vungle") ||
+                lower.contains("liftoff") ||
                 lower.contains("mintegral") ||
                 lower.contains("mbridge") ||
                 lower.contains("pangle") ||
-                lower.startsWith("com.bytedance.pangle")
+                lower.startsWith("com.bytedance.pangle") ||
+                lower.contains("inmobi") ||
+                lower.contains("customtabs")
         }
     }
 }

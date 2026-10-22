@@ -332,23 +332,24 @@ class AutomationEngine private constructor(private val context: Context) {
             return
         }
 
-        val currentState = _uiStatus.value.state
+        var currentState = _uiStatus.value.state
         val fgPkg = service.getForegroundPackageName()
 
-        // 0. 第三方官方廣告容器優先處理 (Meta Audience Network com.facebook.katana, Google AdMob 等)：
-        // 當畫面處於任何第三方廣告套件時，代表廣告已成功啟動播放中，
+        // 0. 第三方官方廣告容器優先處理 (Meta Audience Network, Google AdMob, Unity, AppLovin, Chrome Custom Tabs 等)：
+        // 當畫面處於任何合法廣告容器套件時，無條件判定為合法廣告播放，
         // 絕對不可判定為「外部應用」而發送返回鍵提早退出！
-        // 若當前狀態尚未轉入 AD_WATCHING，立即無縫切換至 AD_WATCHING 啟動廣告監控！
+        // 若當前狀態尚未轉入 AD_WATCHING，立即無縫切換至 AD_WATCHING 並立即於本 Tick 執行廣告監控！
         if (AppConfig.isAdPackage(fgPkg)) {
             nonGameScreenTicks = 0
             if (currentState != EngineState.AD_WATCHING) {
-                appendLog("[廣告] 偵測到第三方廣告容器 ($fgPkg)，自動進入廣告監控模式")
+                appendLog("[廣告] 偵測到第三方廣告容器 ($fgPkg)，自動無縫切換至廣告監控模式")
                 adCloserHandler.onEnterAdMode()
                 transitionTo(
                     newState = EngineState.AD_WATCHING,
                     detail = "已進入廣告畫面 ($fgPkg)，安全監控中...",
                     safeOverlayText = "[廣告] 監控中..."
                 )
+                currentState = EngineState.AD_WATCHING
             }
         }
 
@@ -432,9 +433,13 @@ class AutomationEngine private constructor(private val context: Context) {
                     return
                 }
 
-                // 行為 2: 檢查角落幾何 X 關閉鈕
+                // 行為 2: 檢查角落幾何 X 關閉鈕 (排除頂部安全禁區 y < sh * 0.08f)
                 val geoMatch = templateMatcher.detectCornerGeometricX(
                     screenBitmap = screenBitmap,
+                    blacklistedCoord = { x, y ->
+                        FloatingOverlayService.isInsideOverlay(x, y) ||
+                        y < screenBitmap.height * 0.08f
+                    },
                     isRelaxed = false
                 )
                 if (geoMatch != null) {
@@ -528,6 +533,57 @@ class AutomationEngine private constructor(private val context: Context) {
         )
     }
 
+    /**
+     * R1 多重條件嚴格驗證「選單/設定」畫面 (isVerifiedMenuScreen)：
+     * 1. 嚴格排除每日賓果彈窗 (isBingoDialogOpen)
+     * 2. 嚴格排除主畫面頂部分頁 (首頁/步數/時間/遊戲)
+     * 3. 嚴格排除主畫面底部導覽列 (集點/好友/使用/精選)
+     * 4. 必須具備安全區域以下的選單標題 (cy in 0.08f..0.22f) 與設定項目，或具備至少 2 個相異設定項
+     */
+    fun isVerifiedMenuScreen(ocrItems: List<OcrItem>, sw: Int, sh: Int): Boolean {
+        // 1. 排除賓果彈窗
+        if (bingoTask.isBingoDialogOpen(ocrItems, sh)) return false
+
+        // 2. 排除主畫面頂部分頁 (cy in 0.08f..0.20f)
+        val hasMainTabs = ocrItems.any { item ->
+            val cy = item.bounds.centerY().toFloat() / sh
+            cy in 0.08f..0.20f && (
+                item.text.contains("首頁") || item.text.contains("步數") ||
+                item.text.contains("時間") || item.text.contains("遊戲")
+            )
+        }
+        if (hasMainTabs) return false
+
+        // 3. 排除底部導覽列 (cy > 0.85f)
+        val hasBottomNav = ocrItems.any { item ->
+            val cy = item.bounds.centerY().toFloat() / sh
+            cy > 0.85f && (
+                item.text.contains("集點") || item.text.contains("好友") ||
+                item.text.contains("使用") || item.text.contains("精選")
+            )
+        }
+        if (hasBottomNav) return false
+
+        // 4. 選單標題 (嚴格位於安全禁區以下 cy in 0.08f..0.22f)
+        val hasMenuTitle = ocrItems.any { item ->
+            val t = item.text.replace(" ", "")
+            val cy = item.bounds.centerY().toFloat() / sh
+            cy in 0.08f..0.22f && (t == "選單" || t == "設定" || t.equals("SETTINGS", ignoreCase = true))
+        }
+
+        // 5. 設定清單項目關鍵字
+        val settingKeywords = listOf(
+            "應用程式設定", "帳號", "提醒", "關於", "條款",
+            "關閉動畫效果", "省電模式", "位置資訊設定", "目前版本",
+            "常見問題", "服務條款", "隱私權政策", "登出"
+        )
+        val matchedSettingKeywords = settingKeywords.filter { kw ->
+            ocrItems.any { it.text.replace(" ", "").contains(kw) }
+        }
+
+        return (hasMenuTitle && matchedSettingKeywords.isNotEmpty()) || matchedSettingKeywords.size >= 2
+    }
+
     private suspend fun handleInGameScan(
         service: AutoAdAccessibilityService,
         screenBitmap: android.graphics.Bitmap,
@@ -585,28 +641,15 @@ class AutomationEngine private constructor(private val context: Context) {
             return
         }
 
-        // 0A. 檢查是否誤入「選單」(設定) 畫面，自動點擊右上角 (X) 或按返回鍵關閉選單退回主畫面！
-        val isMenuScreen = ocrItems.any { item ->
-            val t = item.text.replace(" ", "")
-            val cy = item.bounds.centerY().toFloat() / sh
-            (cy < 0.12f && (t == "選單" || t.contains("選單"))) ||
-            t.contains("應用程式設定") ||
-            t.contains("關閉動畫效果") ||
-            t.contains("省電模式") ||
-            t.contains("位置資訊設定") ||
-            t.contains("目前版本")
-        }
-        if (isMenuScreen) {
-            appendLog("[介面] 偵測到【選單/設定】畫面，自動點擊右上角 (X) 返回主畫面")
-            val closeMenuRect = Rect((sw * 0.86f).toInt(), (sh * 0.045f).toInt(), (sw * 0.96f).toInt(), (sh * 0.09f).toInt())
-            FloatingOverlayService.clickWithOverlayPassthrough(closeMenuRect) {
-                service.clickRect(closeMenuRect)
-            }
-            updateDetail("[介面] 正在關閉【選單】畫面...", "[介面] 關閉選單中...")
+        // 0A. 檢查是否誤入「選單」(設定) 畫面，採用多重條件驗證並安全發送返回鍵退出選單！
+        if (isVerifiedMenuScreen(ocrItems, sw, sh)) {
+            appendLog("[介面] 偵測到經多重驗證之【選單/設定】畫面，安全返回主畫面")
+            service.safeNavigateBack(allowInGame = true)
+            updateDetail("[介面] 正在退出【選單】畫面...", "[介面] 退出選單中...")
             return
         }
 
-        // 0. 檢查是否誤入「輕鬆賺」(adjoe) 服務條款或遊戲推薦頁，自動點擊右上角 (X) 退回遊戲！
+        // 0. 檢查是否誤入「輕鬆賺」(adjoe) 服務條款或遊戲推薦頁，安全返回主畫面！
         val isAdjoeTermsOrOfferwall = ocrItems.any { item ->
             val t = item.text.replace(" ", "")
             t.contains("想體驗更多遊戲") ||
@@ -616,11 +659,8 @@ class AutomationEngine private constructor(private val context: Context) {
             (t.contains("輕鬆賺") && (t.contains("服務條款") || t.contains("條款與條件") || t.contains("使用條款") || t.contains("隱私權政策")))
         }
         if (isAdjoeTermsOrOfferwall) {
-            appendLog("[防護] 偵測到【輕鬆賺】服務條款/推薦頁，自動點擊右上角 (X) 返回主畫面")
-            val closeXRect = Rect((sw * 0.85f).toInt(), (sh * 0.04f).toInt(), (sw * 0.98f).toInt(), (sh * 0.10f).toInt())
-            FloatingOverlayService.clickWithOverlayPassthrough(closeXRect) {
-                service.clickRect(closeXRect)
-            }
+            appendLog("[防護] 偵測到【輕鬆賺】服務條款/推薦頁，發送安全返回鍵退出")
+            service.safeNavigateBack(allowInGame = true)
             updateDetail("[防護] 正在退出【輕鬆賺】廣告頁面...", "[防護] 退出廣告頁中...")
             return
         }
@@ -766,21 +806,24 @@ class AutomationEngine private constructor(private val context: Context) {
         }
 
         // D3. 幾何角落 X 偵測器（如『邀請好友』右上角 X，或全螢幕廣告左上/右上角 X！）
-        val geoX = templateMatcher.detectCornerGeometricX(
-            screenBitmap = screenBitmap,
-            blacklistedCoord = { x, y ->
-                FloatingOverlayService.isInsideOverlay(x, y) ||
-                y < sh * 0.035f
+        // R2: 處於每日賓果彈窗時，嚴格禁止幾何 X 誤關閉賓果！
+        if (!bingoTask.isBingoDialogOpen(ocrItems, sh)) {
+            val geoX = templateMatcher.detectCornerGeometricX(
+                screenBitmap = screenBitmap,
+                blacklistedCoord = { x, y ->
+                    FloatingOverlayService.isInsideOverlay(x, y) ||
+                    y < sh * 0.08f
+                }
+            )
+            if (geoX != null) {
+                nonGameScreenTicks = 0
+                appendLog("[關閉] 偵測到全螢幕宣傳頁/彈窗角落關閉鈕 (${geoX.label})，自動點擊關閉！")
+                FloatingOverlayService.clickWithOverlayPassthrough(geoX.bounds) {
+                    service.clickRect(geoX.bounds)
+                }
+                updateDetail("[關閉] 已點擊關閉按鈕 (${geoX.label})，返回遊戲...", "[關閉] 關閉彈窗中...")
+                return
             }
-        )
-        if (geoX != null) {
-            nonGameScreenTicks = 0
-            appendLog("[關閉] 偵測到全螢幕宣傳頁/彈窗角落關閉鈕 (${geoX.label})，自動點擊關閉！")
-            FloatingOverlayService.clickWithOverlayPassthrough(geoX.bounds) {
-                service.clickRect(geoX.bounds)
-            }
-            updateDetail("[關閉] 已點擊關閉按鈕 (${geoX.label})，返回遊戲...", "[關閉] 關閉彈窗中...")
-            return
         }
 
         // D4. 檢查是否處於下半部真正領獎彈窗（必須同時具備彈窗標題與取消鈕，嚴禁因底層廣告粉紅像素誤判）
@@ -883,14 +926,15 @@ class AutomationEngine private constructor(private val context: Context) {
         }
 
         // 2. 【使用者指示第 2 步】：開格點完後，再依序點擊所有連線獎勵 [Get]，直到沒有 Get 可點！
-        val exhaustedCols = bingoColumnRetryCount.filter { it.value >= 3 }.keys
-        val rewardTarget = bingoTask.findNextClaimableReward(screenBitmap, ocrItems, exhaustedCols)
+        val rewardTarget = bingoTask.findNextClaimableReward(screenBitmap, ocrItems, claimedBingoColumns)
         if (rewardTarget != null) {
             currentPhaseEmptyTicks = 0
             val count = (bingoColumnRetryCount[rewardTarget.columnIndex] ?: 0) + 1
             bingoColumnRetryCount[rewardTarget.columnIndex] = count
-            claimedBingoColumns.clear()
-            claimedBingoColumns.addAll(bingoColumnRetryCount.filter { it.value >= 3 }.keys)
+            // 點擊後若重試>=2次，永久鎖定該欄位，防重複點擊死循環；DO NOT clear on every tick!
+            if (count >= 2) {
+                claimedBingoColumns.add(rewardTarget.columnIndex)
+            }
             appendLog("[賓果] 點擊連線獎勵【${rewardTarget.label}】(第 $count 次點擊)！")
             FloatingOverlayService.clickWithOverlayPassthrough(rewardTarget.bounds) {
                 service.clickRect(rewardTarget.bounds)
@@ -903,21 +947,20 @@ class AutomationEngine private constructor(private val context: Context) {
 
         // 3. 【使用者指示第 3 步】：無立即開啟且無任何 Get 可點 -> 即完成賓果，點擊 (X) 關閉視窗！
         currentPhaseEmptyTicks++
-        if (currentPhaseEmptyTicks < 3) {
-            updateDetail("[賓果] 檢查可開格與 Get 獎勵中 ($currentPhaseEmptyTicks/3)...", "[賓果] 檢查中...")
+        if (currentPhaseEmptyTicks < 2) {
+            updateDetail("[賓果] 檢查可開格與 Get 獎勵中 ($currentPhaseEmptyTicks/2)...", "[賓果] 檢查中...")
             return
         }
 
         currentPhaseEmptyTicks = 0
         isBingoCompleted = true
-        bingoColumnRetryCount.clear()
-        claimedBingoColumns.clear()
+        // 保持 claimedBingoColumns 鎖定，不在此清空，防止關閉後立即重新開格誤觸！
         appendLog("[完成]【每日賓果】所有開格與 Get 領取皆已完成，點擊右上角 (X) 關閉視窗")
         val closeBtn = bingoTask.getCloseButtonBounds(sw, sh)
         FloatingOverlayService.clickWithOverlayPassthrough(closeBtn) {
             service.clickRect(closeBtn)
         }
-        currentPhase = getNextPhase(PatrolPhase.BINGO)
+        currentPhase = PatrolPhase.LOTTERY
         updateDetail("[完成] 每日賓果已完成，準備進入下一項...", "[完成] 賓果完成")
     }
 
@@ -1185,7 +1228,7 @@ class AutomationEngine private constructor(private val context: Context) {
                 appendLog("[禮物]【好友送禮】已完成，點擊右上角【禮物盒】開啟收禮視窗 ($friendGiftOpenDrawerTicks/3)！")
                 val giftBoxRect = receiveGiftTask.getHeaderGiftBoxRect(sw, sh)
                 FloatingOverlayService.clickWithOverlayPassthrough(giftBoxRect) {
-                    service.clickRect(giftBoxRect)
+                    service.clickRect(giftBoxRect, allowTopSafeZone = true)
                 }
                 updateDetail("[禮物] 送禮已完成，開啟【禮物】視窗接收禮物...", "[禮物] 開啟禮物盒...")
                 if (friendGiftOpenDrawerTicks >= 3) {
@@ -1270,7 +1313,7 @@ class AutomationEngine private constructor(private val context: Context) {
             appendLog("[完成]【好友送禮】所有好友禮物皆已贈送完畢！直接點擊右上角【禮物盒】開啟收禮視窗！")
             val giftBoxRect = receiveGiftTask.getHeaderGiftBoxRect(sw, sh)
             FloatingOverlayService.clickWithOverlayPassthrough(giftBoxRect) {
-                service.clickRect(giftBoxRect)
+                service.clickRect(giftBoxRect, allowTopSafeZone = true)
             }
             updateDetail("[禮物] 開啟【禮物】視窗接收禮物中...", "[禮物] 接收禮物中...")
             delay(600)
@@ -1549,7 +1592,7 @@ class AutomationEngine private constructor(private val context: Context) {
                 appendLog("[禮物] 點擊主畫面右上角【禮物盒】圖示按鈕...")
                 val giftBoxRect = receiveGiftTask.getHeaderGiftBoxRect(sw, sh)
                 FloatingOverlayService.clickWithOverlayPassthrough(giftBoxRect) {
-                    service.clickRect(giftBoxRect)
+                    service.clickRect(giftBoxRect, allowTopSafeZone = true)
                 }
                 updateDetail("[禮物] 開啟【禮物】視窗接收禮物中...", "[禮物] 接收禮物中...")
             }
@@ -1871,7 +1914,7 @@ class AutomationEngine private constructor(private val context: Context) {
             screenBitmap = screenBitmap,
             blacklistedCoord = { x, y ->
                 FloatingOverlayService.isInsideOverlay(x, y) ||
-                y < sh * 0.035f
+                y < sh * 0.08f
             }
         )
         val onMainScreenDirect = ocrRecognizer.isLineWalkMainScreenVisible(screenBitmap, ocrItems, templateMatcher)
@@ -1896,15 +1939,22 @@ class AutomationEngine private constructor(private val context: Context) {
         }
 
         val fgPkgDirect = service.getForegroundPackageName()
-        val isExternalDirect = fgPkgDirect != null && AppConfig.isRedirectPackage(fgPkgDirect)
         val isAdPkgDirect = AppConfig.isAdPackage(fgPkgDirect)
+        if (isAdPkgDirect) {
+            appendLog("[廣告] 彈窗觸發偵測到第三方廣告容器 ($fgPkgDirect)，啟動廣告監控流程！")
+            adCloserHandler.onEnterAdMode()
+            transitionTo(EngineState.AD_WATCHING, "已進入廣告畫面 ($fgPkgDirect)，安全監控中...", "[廣告] 監控中...")
+            return
+        }
+
+        val isExternalDirect = fgPkgDirect != null && AppConfig.isRedirectPackage(fgPkgDirect)
         val hasBrowserTitleDirect = ocrItems.any { item ->
             val cy = item.bounds.centerY()
             cy < sh * 0.16f && (item.text.contains("正在載入") || item.text.contains(".com") || item.text.contains("http"))
         }
         val isGameScreen = adCloserHandler.isGameScreenVisible(service, screenBitmap, ocrItems)
         // 嚴格安全防護：若畫面仍在主畫面或領獎下半部彈窗，絕不誤判為全螢幕廣告！
-        if (!onMainScreenDirect && !isStillInSubDialog && !isBottomRewardPopup && (directGeoX != null || isExternalDirect || isAdPkgDirect || hasBrowserTitleDirect || (!isGameScreen && popupRetryTicks >= 2))) {
+        if (!onMainScreenDirect && !isStillInSubDialog && !isBottomRewardPopup && (directGeoX != null || isExternalDirect || hasBrowserTitleDirect || (!isGameScreen && popupRetryTicks >= 2))) {
             appendLog("[廣告] 點擊目標後已直接進入全螢幕廣告/宣傳頁，啟動廣告監控流程！")
             adCloserHandler.onEnterAdMode()
             transitionTo(EngineState.AD_WATCHING, "已進入廣告畫面，安全監控中...", "[廣告] 監控中...")

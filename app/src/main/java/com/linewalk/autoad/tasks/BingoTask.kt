@@ -18,7 +18,72 @@ class BingoTask {
     fun isEnabled(config: AppConfig): Boolean = config.enableBingoTask
 
     fun isBingoDialogOpen(ocrItems: List<OcrItem>, sh: Int = 10000): Boolean {
-        // 嚴格排除主畫面四大分頁特徵
+        // 多維特徵比對：
+        // 1. 標題特徵 (「每日賓果」、「今日賓果」、「BINGO」)
+        // 2. 開格按鈕特徵 (「立即開啟賓果格」、「開啟賓果格」、「立即開啟」)
+        // 3. 冷卻倒數特徵 (「距離下次抽選還有」、「距離下次」、「抽選還有」)
+        // 4. 今日上限特徵 (「今日上限」、「已達到今日上限」、「9/9」、「已全數開啟」)
+        // 5. 連線達成標籤特徵 (「1BINGO」、「3BINGO」、「5BINGO」、「8BINGO」等)
+        var hasTitleFeature = false
+        var hasOpenCellOrCooldownFeature = false
+        var hasConnectionFeature = false
+
+        for (item in ocrItems) {
+            val cy = item.bounds.centerY()
+            val t = item.text.replace(" ", "")
+
+            // 標題特徵
+            if (t.contains("每日賓果") || t.contains("今日賓果") ||
+                (cy < (if (sh < 10000) sh * 0.28f else 600f) && (
+                    t.equals("BINGO", ignoreCase = true) ||
+                    (t.contains("每日") && t.contains("賓果")) ||
+                    (cy > (if (sh < 10000) sh * 0.08f else 100f) && t == "賓果")
+                ))
+            ) {
+                hasTitleFeature = true
+            }
+
+            // 開格 / 冷卻 / 上限特徵
+            if (t.contains("立即開啟賓果格") || t.contains("開啟賓果格") ||
+                (t.contains("立即開啟") && cy > (if (sh < 10000) sh * 0.40f else 600f)) ||
+                t.contains("距離下次抽選還有") || t.contains("距離下次") || t.contains("抽選還有") ||
+                (cy in (if (sh < 10000) (sh * 0.40f).toInt()..(sh * 0.85f).toInt() else 600..1800) && (
+                    t.contains("今日上限") || t.contains("已達到今日上限") || t.contains("9/9") || t.contains("已全數開啟")
+                ))
+            ) {
+                hasOpenCellOrCooldownFeature = true
+            }
+
+            // 連線門檻 / 獎勵標籤特徵
+            if (t.contains("1BINGO") || t.contains("1 BINGO") ||
+                t.contains("3BINGO") || t.contains("3 BINGO") ||
+                t.contains("5BINGO") || t.contains("5 BINGO") ||
+                t.contains("8BINGO") || t.contains("8 BINGO") ||
+                (cy in (if (sh < 10000) (sh * 0.70f).toInt()..(sh * 0.95f).toInt() else 1200..2000) && (
+                    t.contains("Get", ignoreCase = true) || t.contains("Cet", ignoreCase = true) || t.contains("Qet", ignoreCase = true)
+                ))
+            ) {
+                hasConnectionFeature = true
+            }
+        }
+
+        // 當具備強賓果特徵（標題、開格/冷卻/上限、連線標籤任二，或強確定性標題/開格按鈕）時，
+        // 背景透出的主畫面分頁文字絕不具有否決權！
+        val hasStrongBingoSignature = (hasTitleFeature && (hasOpenCellOrCooldownFeature || hasConnectionFeature)) ||
+            (hasOpenCellOrCooldownFeature && hasConnectionFeature) ||
+            ocrItems.any { item ->
+                val t = item.text.replace(" ", "")
+                t.contains("每日賓果") || t.contains("今日賓果") ||
+                t.contains("立即開啟賓果格") || t.contains("開啟賓果格") ||
+                t.contains("距離下次抽選還有") ||
+                t.contains("1BINGO") || t.contains("3BINGO") || t.contains("5BINGO") || t.contains("8BINGO")
+            }
+
+        if (hasStrongBingoSignature) {
+            return true
+        }
+
+        // 若無強特徵，檢查主畫面分頁（若處於主畫面則一票否決）
         val hasMainTabs = ocrItems.any { item ->
             val cy = item.bounds.centerY()
             val inRange = if (sh < 10000) cy in (sh * 0.08f).toInt()..(sh * 0.18f).toInt() else false
@@ -27,19 +92,15 @@ class BingoTask {
         }
         if (hasMainTabs) return false
 
+        // 弱特徵兜底比對
         return ocrItems.any { item ->
             val cy = item.bounds.centerY()
             val t = item.text.trim()
-            (cy < (if (sh < 10000) sh * 0.16f else 350f) && (
-                t.contains("每日賓果") ||
-                t.contains("今日賓果") ||
-                t == "賓果"
-            )) || (cy in (if (sh < 10000) (sh * 0.40f).toInt()..(sh * 0.90f).toInt() else 400..900) && (
-                t.contains("BINGO") ||
-                t.contains("OPEN") ||
-                t.contains("今日上限") ||
-                t.contains("已達到今日上限") ||
-                t.contains("COMPLETE")
+            (cy < (if (sh < 10000) sh * 0.28f else 450f) && (
+                t.contains("每日賓果") || t.contains("今日賓果") || t == "賓果"
+            )) || (cy in (if (sh < 10000) (sh * 0.35f).toInt()..(sh * 0.92f).toInt() else 400..1200) && (
+                t.contains("BINGO") || t.contains("OPEN") || t.contains("今日上限") ||
+                t.contains("已達到今日上限") || t.contains("COMPLETE")
             ))
         }
     }
@@ -61,19 +122,36 @@ class BingoTask {
         val sh = screenBitmap.height
         val sw = screenBitmap.width
 
-        // 0. 若已出現「今日上限」或「已達到今日上限」，代表今日無法再開啟賓果格
+        // 0A. 若已出現「今日上限」、「已達到今日上限」、「9/9」，代表今日無法再開啟賓果格
         val hasReachedLimit = ocrItems.any { item ->
             val t = item.text.replace(" ", "")
             t.contains("今日上限") || t.contains("已達到今日上限") || t.contains("9/9") || t.contains("已全數開啟")
         }
         if (hasReachedLimit) return null
 
+        // 0B. 嚴格檢查冷卻倒數：「距離下次抽選還有」、「\d{1,2}:\d{2}」等倒數計時文字
+        val timeRegex = Regex("""\d{1,2}:\d{2}""")
+        val isCoolingDown = ocrItems.any { item ->
+            val t = item.text.replace(" ", "")
+            val cy = item.bounds.centerY()
+            t.contains("距離下次抽選還有") ||
+            t.contains("距離下次") ||
+            t.contains("抽選還有") ||
+            (cy in (sh * 0.48f).toInt()..(sh * 0.78f).toInt() && (
+                timeRegex.containsMatchIn(t) ||
+                (t.contains("還有") && !t.contains("立即")) ||
+                (t.contains("抽選") && !t.contains("開啟") && !t.contains("立即"))
+            ))
+        }
+        if (isCoolingDown) return null
+
         // 1. OCR 搜尋「立即開啟」/「開啟賓果格」/「開啟賓果」
         val match = ocrItems.firstOrNull { item ->
             val cy = item.bounds.centerY()
             val t = item.text.replace(" ", "")
-            cy in (sh * 0.56f).toInt()..(sh * 0.72f).toInt() &&
-            (t.contains("立即開啟") || t.contains("開啟賓果格") || t.contains("開啟賓果") || t.contains("立即開"))
+            cy in (sh * 0.54f).toInt()..(sh * 0.74f).toInt() &&
+            (t.contains("立即開啟") || t.contains("開啟賓果格") || t.contains("開啟賓果") || t.contains("立即開")) &&
+            !t.contains("還有") && !timeRegex.containsMatchIn(t) && !t.contains("今日上限") && !t.contains("9/9")
         }
         if (match != null) {
             val cy = match.bounds.centerY()
