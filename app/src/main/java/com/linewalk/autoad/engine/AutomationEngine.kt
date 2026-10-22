@@ -193,7 +193,8 @@ class AutomationEngine private constructor(private val context: Context) {
 
     fun evaluateForegroundPackage(
         fgPkg: String?,
-        hasAdGeometricX: Boolean = false
+        hasAdGeometricX: Boolean = false,
+        isWatchingAd: Boolean = false
     ): GuardDecision {
         // 前景未知（系統短暫無焦點）或本助手 App 自身在前景：不點擊、不返回，原地等待
         if (fgPkg.isNullOrBlank() || fgPkg == context.packageName) {
@@ -204,8 +205,10 @@ class AutomationEngine private constructor(private val context: Context) {
             )
         }
 
-        // 僅《LINE 散步趣》本體 (com.linecorp.LGWKTW, com.linecorp.LGWALK) 視為遊戲內；LINE 主程式等其他 App 一律視為外部
-        val isTarget = AppConfig.isGamePackage(fgPkg) ||
+        // 僅《LINE 散步趣》本體 (com.linecorp.LGWKTW, com.linecorp.LGWALK) 視為遊戲內；
+        // 當處於觀看廣告狀態 (isWatchingAd) 時，第三方官方廣告容器 (如 Meta com.facebook.katana, Google com.google.android.gms) 亦視為合法前景！
+        val isAd = isWatchingAd && AppConfig.isAdPackage(fgPkg)
+        val isTarget = AppConfig.isGamePackage(fgPkg) || isAd ||
             (fgPkg in config.targetGamePackages && fgPkg != "jp.naver.line.android")
         return if (!isTarget) {
             val action = if (hasAdGeometricX) GuardAction.CLICK_AD_CLOSE_X else GuardAction.SAFE_BACK_NAVIGATION
@@ -326,8 +329,13 @@ class AutomationEngine private constructor(private val context: Context) {
             return
         }
 
+        val currentState = _uiStatus.value.state
         val fgPkg = service.getForegroundPackageName()
-        val guardDecision = evaluateForegroundPackage(fgPkg)
+        val isWatchingAd = currentState == EngineState.AD_WATCHING
+        val guardDecision = evaluateForegroundPackage(
+            fgPkg = fgPkg,
+            isWatchingAd = isWatchingAd
+        )
 
         if (guardDecision.isExternal) {
             handleExternalAppGuard(service, fgPkg)
@@ -338,8 +346,6 @@ class AutomationEngine private constructor(private val context: Context) {
         } else {
             nonGameScreenTicks = 0
         }
-
-        val currentState = _uiStatus.value.state
         val screenBitmap = service.captureScreenBitmap()
         if (screenBitmap == null) {
             updateDetail("[提示] 無法擷取螢幕畫面，等待重試...", "[提示] 等待畫面擷取...")
@@ -1863,13 +1869,14 @@ class AutomationEngine private constructor(private val context: Context) {
 
         val fgPkgDirect = service.getForegroundPackageName()
         val isExternalDirect = fgPkgDirect != null && AppConfig.isRedirectPackage(fgPkgDirect)
+        val isAdPkgDirect = AppConfig.isAdPackage(fgPkgDirect)
         val hasBrowserTitleDirect = ocrItems.any { item ->
             val cy = item.bounds.centerY()
             cy < sh * 0.16f && (item.text.contains("正在載入") || item.text.contains(".com") || item.text.contains("http"))
         }
         val isGameScreen = adCloserHandler.isGameScreenVisible(service, screenBitmap, ocrItems)
         // 嚴格安全防護：若畫面仍在主畫面或領獎下半部彈窗，絕不誤判為全螢幕廣告！
-        if (!onMainScreenDirect && !isStillInSubDialog && !isBottomRewardPopup && (directGeoX != null || isExternalDirect || hasBrowserTitleDirect || (!isGameScreen && popupRetryTicks >= 2))) {
+        if (!onMainScreenDirect && !isStillInSubDialog && !isBottomRewardPopup && (directGeoX != null || isExternalDirect || isAdPkgDirect || hasBrowserTitleDirect || (!isGameScreen && popupRetryTicks >= 2))) {
             appendLog("[廣告] 點擊目標後已直接進入全螢幕廣告/宣傳頁，啟動廣告監控流程！")
             adCloserHandler.onEnterAdMode()
             transitionTo(EngineState.AD_WATCHING, "已進入廣告畫面，安全監控中...", "[廣告] 監控中...")

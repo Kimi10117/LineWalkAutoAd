@@ -102,9 +102,35 @@ class EngineSimulator(
         val regularClicksAllowed: Boolean
     )
 
+    fun isAdPackage(pkg: String?): Boolean {
+        if (pkg.isNullOrBlank()) return false
+        val knownAdPackages = setOf(
+            "com.facebook.katana",
+            "com.facebook.orca",
+            "com.facebook.lite",
+            "com.google.android.gms",
+            "com.google.android.as",
+            "com.google.android.webview"
+        )
+        if (pkg in knownAdPackages) return true
+        val lower = pkg.lowercase()
+        return lower.startsWith("com.facebook.ads") ||
+            lower.contains("audience_network") ||
+            lower.contains("admob") ||
+            lower.contains("unity3d.ads") ||
+            lower.contains("applovin") ||
+            lower.contains("ironsource") ||
+            lower.contains("vungle") ||
+            lower.contains("mintegral") ||
+            lower.contains("mbridge") ||
+            lower.contains("pangle") ||
+            lower.startsWith("com.bytedance.pangle")
+    }
+
     fun evaluateForegroundPackage(
         fgPkg: String?,
-        hasAdGeometricX: Boolean = false
+        hasAdGeometricX: Boolean = false,
+        isWatchingAd: Boolean = false
     ): GuardDecision {
         if (fgPkg == null) {
             // Safe fallback when package is unknown
@@ -115,7 +141,8 @@ class EngineSimulator(
             )
         }
 
-        val isTarget = fgPkg in targetGamePackages || fgPkg == ownPackage
+        val isAd = isWatchingAd && isAdPackage(fgPkg)
+        val isTarget = fgPkg in targetGamePackages || fgPkg == ownPackage || isAd
         return if (!isTarget) {
             // External app detected: strictly block regular UI clicks
             val action = if (hasAdGeometricX) GuardAction.CLICK_AD_CLOSE_X else GuardAction.SAFE_BACK_NAVIGATION

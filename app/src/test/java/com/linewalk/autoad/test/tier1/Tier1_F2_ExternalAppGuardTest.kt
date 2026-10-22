@@ -95,4 +95,38 @@ class Tier1_F2_ExternalAppGuardTest {
             assertEquals("In-game scan must be permitted", GuardAction.ALLOW_IN_GAME_SCAN, decision.recommendedAction)
         }
     }
+
+    @Test
+    fun test06_metaAndGoogleAdPackagesAllowedDuringAdWatching() {
+        val adPackages = listOf(
+            "com.facebook.katana",
+            "com.facebook.orca",
+            "com.google.android.gms"
+        )
+
+        for (adPkg in adPackages) {
+            val decision = simulator.evaluateForegroundPackage(adPkg, isWatchingAd = true)
+            assertFalse("Ad package '$adPkg' must not be flagged as external during ad watching", decision.isExternal)
+            assertTrue("Clicks should be allowed during ad watching in ad container", decision.regularClicksAllowed)
+            assertEquals(GuardAction.ALLOW_IN_GAME_SCAN, decision.recommendedAction)
+        }
+    }
+
+    @Test
+    fun test07_metaAdPackagesFlaggedAsExternalWhenNotWatchingAd() {
+        val decision = simulator.evaluateForegroundPackage("com.facebook.katana", isWatchingAd = false)
+        assertTrue("Facebook outside ad watching must be flagged as external", decision.isExternal)
+        assertFalse("Regular clicks must be blocked in external Facebook", decision.regularClicksAllowed)
+        assertEquals(GuardAction.SAFE_BACK_NAVIGATION, decision.recommendedAction)
+    }
+
+    @Test
+    fun test08_redirectPackagesAlwaysExternalEvenDuringAdWatching() {
+        val redirectPackages = listOf("com.android.chrome", "com.android.vending")
+        for (pkg in redirectPackages) {
+            val decision = simulator.evaluateForegroundPackage(pkg, isWatchingAd = true)
+            assertTrue("Browser/store redirect '$pkg' must remain external during ad watching", decision.isExternal)
+            assertFalse(decision.regularClicksAllowed)
+        }
+    }
 }
