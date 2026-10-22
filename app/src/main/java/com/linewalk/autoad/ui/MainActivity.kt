@@ -142,7 +142,8 @@ class MainActivity : AppCompatActivity() {
                 startService(overlayIntent)
             }
 
-            val launchGameIntent = packageManager.getLaunchIntentForPackage("com.linecorp.LGWALK")
+            val launchGameIntent = packageManager.getLaunchIntentForPackage("com.linecorp.LGWKTW")
+                ?: packageManager.getLaunchIntentForPackage("com.linecorp.LGWALK")
             if (launchGameIntent != null) {
                 startActivity(launchGameIntent)
             } else {

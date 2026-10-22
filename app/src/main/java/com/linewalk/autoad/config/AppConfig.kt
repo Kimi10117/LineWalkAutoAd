@@ -93,9 +93,17 @@ class AppConfig(context: Context) {
         private const val KEY_TARGET_PACKAGES = "target_game_packages"
 
         val DEFAULT_GAME_PACKAGES = setOf(
-            "com.linecorp.LGWALK",     // LINE 散步趣 / LINE WALK 主套件名
+            "com.linecorp.LGWKTW",     // LINE 散步趣 (台灣版 Google Play)
+            "com.linecorp.LGWALK",     // LINE 散步趣 / LINE WALK 主套件名 (日版/國際版)
             "jp.naver.line.android"    // 若從 LINE 主程式內嵌開啟時的備援識別
         )
+
+        fun isGamePackage(pkg: String?): Boolean {
+            if (pkg.isNullOrBlank()) return false
+            return pkg == "com.linecorp.LGWKTW" ||
+                   pkg == "com.linecorp.LGWALK" ||
+                   pkg.startsWith("com.linecorp.LGWK")
+        }
 
         /** 已知外部跳轉黑名單（誤點廣告跳轉時需立即按 BACK 返回） */
         val EXTERNAL_REDIRECT_PACKAGES = setOf(

@@ -380,8 +380,8 @@ class AdCloserHandler(
 
         // 8B. 主動安全返回策略與熱區點擊（全面改用 safeNavigateBack，散步趣在前景時絕不發送返回鍵以免跳出至桌面）：
         val now = System.currentTimeMillis()
-        val isOutsideGame = fgPkg == null || (fgPkg !in config.targetGamePackages && fgPkg != "com.linecorp.LGWALK" && fgPkg != "jp.naver.line.android")
-        val isSafeToBack = fgPkg != null && fgPkg !in config.targetGamePackages && fgPkg != "com.linecorp.LGWALK" && fgPkg != "jp.naver.line.android"
+        val isOutsideGame = fgPkg == null || (!com.linewalk.autoad.config.AppConfig.isGamePackage(fgPkg) && fgPkg !in config.targetGamePackages && fgPkg != "jp.naver.line.android")
+        val isSafeToBack = fgPkg != null && !com.linewalk.autoad.config.AppConfig.isGamePackage(fgPkg) && fgPkg !in config.targetGamePackages && fgPkg != "jp.naver.line.android"
         if (remainingSec == null && elapsedSec >= 5) {
             if (redirectCount > 0 && isSafeToBack) {
                 service.safeNavigateBack()

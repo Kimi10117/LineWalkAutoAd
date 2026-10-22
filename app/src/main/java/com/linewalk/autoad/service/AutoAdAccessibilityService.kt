@@ -240,7 +240,7 @@ class AutoAdAccessibilityService : AccessibilityService() {
      */
     fun safeNavigateBack(minIntervalMs: Long = 2000L, allowInGame: Boolean = false): Boolean {
         val fg = getForegroundPackageName()
-        if (!allowInGame && (fg == "com.linecorp.LGWALK" || fg == "jp.naver.line.android")) {
+        if (!allowInGame && (com.linewalk.autoad.config.AppConfig.isGamePackage(fg) || fg == "jp.naver.line.android")) {
             Log.w(TAG, "目前前景為散步趣 ($fg)，禁止發送系統返回鍵以免退回手機桌面！")
             return false
         }
@@ -263,23 +263,24 @@ class AutoAdAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * 強制將指定的應用程式（如《LINE 散步趣》com.linecorp.LGWALK）喚醒拉回前景。
+     * 強制將指定的應用程式（如《LINE 散步趣》com.linecorp.LGWKTW / com.linecorp.LGWALK）喚醒拉回前景。
      * 用於廣告播放逾時（如超過 40 秒卡死在無關閉鈕的惡意廣告頁面）時強制恢復主畫面。
      */
-    fun bringAppToFront(targetPackage: String = "com.linecorp.LGWALK"): Boolean {
-        return try {
-            val intent = packageManager.getLaunchIntentForPackage(targetPackage)?.apply {
-                addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP)
+    fun bringAppToFront(targetPackage: String = "com.linecorp.LGWKTW"): Boolean {
+        val candidates = listOf(targetPackage, "com.linecorp.LGWKTW", "com.linecorp.LGWALK")
+        for (pkg in candidates) {
+            try {
+                val intent = packageManager.getLaunchIntentForPackage(pkg)?.apply {
+                    addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                }
+                if (intent != null) {
+                    startActivity(intent)
+                    return true
+                }
+            } catch (_: Exception) {
             }
-            if (intent != null) {
-                startActivity(intent)
-                true
-            } else {
-                false
-            }
-        } catch (_: Exception) {
-            false
         }
+        return false
     }
 
     companion object {

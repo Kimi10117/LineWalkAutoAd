@@ -86,7 +86,7 @@ class Tier1_F2_ExternalAppGuardTest {
     @Test
     fun test05_packageTransitionBackToGameResumesPatrolScan() {
         // Authoritative Source: ORIGINAL_REQUEST.md §R2 ("確保返回散步趣 App 後才恢復巡邏")
-        val gamePackages = listOf("com.linecorp.LGWALK", "jp.naver.line.android", "com.linewalk.autoad")
+        val gamePackages = listOf("com.linecorp.LGWKTW", "com.linecorp.LGWALK", "jp.naver.line.android", "com.linewalk.autoad")
 
         for (gamePkg in gamePackages) {
             val decision = simulator.evaluateForegroundPackage(gamePkg)

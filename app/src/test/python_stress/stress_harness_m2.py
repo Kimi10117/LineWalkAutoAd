@@ -15,7 +15,7 @@ def test_tier1_f2_external_app_guard():
     print("=== [TEST SUITE 1] Tier 1 Feature 2: External App Guard (R2) ===")
     results = []
 
-    TARGET_GAME_PACKAGES = {"com.linecorp.LGWALK", "jp.naver.line.android"}
+    TARGET_GAME_PACKAGES = {"com.linecorp.LGWKTW", "com.linecorp.LGWALK", "jp.naver.line.android"}
     OWN_PACKAGE = "com.linewalk.autoad"
 
     class GuardAction:
@@ -74,7 +74,7 @@ def test_tier1_f2_external_app_guard():
     results.append(("test04_rejectionOfRegularInGameUIClicksInExternalApp", "PASS"))
 
     # Test 5: Game packages transition
-    game_packages = ["com.linecorp.LGWALK", "jp.naver.line.android", "com.linewalk.autoad"]
+    game_packages = ["com.linecorp.LGWKTW", "com.linecorp.LGWALK", "jp.naver.line.android", "com.linewalk.autoad"]
     for pkg in game_packages:
         d_game = evaluate_foreground_package(pkg)
         assert d_game.is_external is False
@@ -209,7 +209,7 @@ def test_tier2_boundaries_f2_and_f3():
     def eval_pkg(pkg, has_x=False):
         if not pkg or not pkg.strip():
             return {"is_external": True, "action": "SAFE_BACK", "allowed": False}
-        if pkg in ("com.linecorp.LGWALK", "jp.naver.line.android", "com.linewalk.autoad"):
+        if pkg in ("com.linecorp.LGWKTW", "com.linecorp.LGWALK", "jp.naver.line.android", "com.linewalk.autoad"):
             return {"is_external": False, "action": "SCAN", "allowed": True}
         return {"is_external": True, "action": "CLICK_X" if has_x else "SAFE_BACK", "allowed": False}
 

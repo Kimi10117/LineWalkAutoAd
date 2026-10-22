@@ -66,10 +66,13 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
             tag_name: latest-apk
-            name: "散步趣助手 v1.15.21 (修復賓果先開格再領Get、防短清單死循環點擊、修復好友送禮自動開收禮抽屜、懸浮窗預設摺疊防截斷、離開App防誤點、全任務循環巡邏、App日誌匯出 - Run #${{ github.run_number }})"
+            name: "散步趣助手 v1.15.22 (全面支援台灣版散步趣 com.linecorp.LGWKTW、解除誤判外部保護安全退出、修復賓果與好友送禮收禮 - Run #${{ github.run_number }})"
             body: |
-              **散步趣助手 v1.15.21 (Run #${{ github.run_number }})**
-              1. **【懸浮視窗開始預設收折為單行膠囊 + 點擊「+」展開】**：
+              **散步趣助手 v1.15.22 (Run #${{ github.run_number }})**
+              1. **【重要修復：全面支援台灣版《LINE 散步趣》(com.linecorp.LGWKTW)】**：
+                 - 徹底修復在台灣版散步趣內被誤判為外部應用程式並跳出「[外部保護] 安全退出中 / 非散步趣App (com.linecorp.LGWKTW)」的問題。
+                 - 系統全面納入台灣版 Google Play 套件名 `com.linecorp.LGWKTW` 與國際版 `com.linecorp.LGWALK`，完美在散步趣內順暢巡邏與執行自動任務。
+              2. **【懸浮視窗開始預設收折為單行膠囊 + 點擊「+」展開】**：
                  - 點擊「開始」時預設自動收折為緊湊單行膠囊，防止遮擋主畫面任何重要資訊與按鈕。
                  - 徹底重構收折佈局：移除所有固定小寬度限制，文字與狀態一律單行完整顯示，不換行、不省略截斷（零出現 ...）。
                  - 增加邊界保護與動態螢幕旋轉適應，點擊「+」即可隨時展開控制面板。

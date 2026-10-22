@@ -204,8 +204,8 @@ class AutomationEngine private constructor(private val context: Context) {
             )
         }
 
-        // 僅《LINE 散步趣》本體視為遊戲內；LINE 主程式等其他 App 一律視為外部
-        val isTarget = fgPkg == "com.linecorp.LGWALK" ||
+        // 僅《LINE 散步趣》本體 (com.linecorp.LGWKTW, com.linecorp.LGWALK) 視為遊戲內；LINE 主程式等其他 App 一律視為外部
+        val isTarget = AppConfig.isGamePackage(fgPkg) ||
             (fgPkg in config.targetGamePackages && fgPkg != "jp.naver.line.android")
         return if (!isTarget) {
             val action = if (hasAdGeometricX) GuardAction.CLICK_AD_CLOSE_X else GuardAction.SAFE_BACK_NAVIGATION
@@ -378,7 +378,7 @@ class AutomationEngine private constructor(private val context: Context) {
         // 逾時復原：連續外部應用超過 5 個 tick (約 6~8 秒)，強制將散步趣喚醒拉回前景
         if (nonGameScreenTicks >= 5) {
             appendLog("[防護] 停留外部應用達 5 次 tick 逾時，嘗試強制喚醒散步趣拉回前景！")
-            val targetPkg = config.targetGamePackages.firstOrNull() ?: "com.linecorp.LGWALK"
+            val targetPkg = config.targetGamePackages.firstOrNull { it != "jp.naver.line.android" } ?: "com.linecorp.LGWKTW"
             service.bringAppToFront(targetPkg)
             nonGameScreenTicks = 0
             return
@@ -1992,7 +1992,7 @@ class AutomationEngine private constructor(private val context: Context) {
             appendLog("[警報] 廣告播放達 ${adElapsed}s 超過上限 (${config.maxAdWaitSeconds}s)，強制喚醒散步趣拉回前景！")
             service.safeNavigateBack()
             delay(300)
-            service.bringAppToFront("com.linecorp.LGWALK")
+            service.bringAppToFront("com.linecorp.LGWKTW")
             delay(800)
             adWatchdogCooldownTicks = 4
             transitionTo(EngineState.IN_GAME_SCAN, "廣告逾時強制拉回散步趣主畫面，繼續巡邏...", "[巡邏] 重新巡邏中...")
@@ -2111,7 +2111,7 @@ class AutomationEngine private constructor(private val context: Context) {
                 )
                 if (res.elapsedSec >= config.maxAdWaitSeconds + 8) {
                     appendLog("[警報] 廣告等待達 ${res.elapsedSec}s 逾時仍未關閉，強制喚醒散步趣拉回前景！")
-                    service.bringAppToFront("com.linecorp.LGWALK")
+                    service.bringAppToFront("com.linecorp.LGWKTW")
                     delay(800)
                     adWatchdogCooldownTicks = 4
                     transitionTo(EngineState.IN_GAME_SCAN, "逾時強制拉回散步趣主畫面，繼續巡邏...", "[巡邏] 重新巡邏中...")

@@ -12,7 +12,7 @@ import java.util.Locale
  * Matches specifications in PROJECT.md and ORIGINAL_REQUEST.md.
  */
 class EngineSimulator(
-    val targetGamePackages: Set<String> = setOf("com.linecorp.LGWALK", "jp.naver.line.android"),
+    val targetGamePackages: Set<String> = setOf("com.linecorp.LGWKTW", "com.linecorp.LGWALK", "jp.naver.line.android"),
     val ownPackage: String = "com.linewalk.autoad"
 ) {
 
