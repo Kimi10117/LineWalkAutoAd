@@ -172,9 +172,11 @@ class AutoAdAccessibilityService : AccessibilityService() {
             val targetX = (x + offsetX).coerceIn(5f, (maxW - 5).toFloat())
             val targetY = (y + offsetY).coerceIn(5f, (maxH - 5).toFloat())
 
-            // R1: 頂部通知與即時動態安全禁區 (y < maxH * 0.08f) 嚴格防誤點保護
-            if (!allowTopSafeZone && targetY < maxH * 0.08f) {
-                Log.w(TAG, "[防護禁區] 攔截危險頂部區域點擊 (targetY=$targetY < ${maxH * 0.08f})，已拒絕派發手勢！")
+            // R1: 頂部通知與即時動態安全禁區 (嚴格保護螢幕中央 x in 18%..82% 與 y < 8% 的通知/動態島區域，放行兩側角落廣告關閉/略過鈕)
+            val isCenterNotificationIslandZone = targetX in (maxW * 0.18f)..(maxW * 0.82f) && targetY < maxH * 0.08f
+            val isTopStatusBarEdge = targetY < maxH * 0.038f
+            if (!allowTopSafeZone && (isCenterNotificationIslandZone || isTopStatusBarEdge)) {
+                Log.w(TAG, "[防護禁區] 攔截危險頂部中央通知/即時動態點擊 (targetX=$targetX, targetY=$targetY)，已拒絕派發手勢！")
                 if (cont.isActive) cont.resume(false)
                 return@suspendCancellableCoroutine
             }

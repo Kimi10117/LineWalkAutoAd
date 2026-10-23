@@ -92,10 +92,13 @@ class AdCloserHandler(
 
     private fun isInvalidOrBlacklisted(x: Int, y: Int): Boolean {
         if (FloatingOverlayService.isInsideOverlay(x, y)) return true
-        // R1: 排除頂部安全禁區 (y < 8%)，放行廣告右上角/左上角關閉鈕
         if (currentScreenHeight > 0) {
-            val topLimit = kotlin.math.max(currentScreenHeight * 0.08f, 60f)
-            if (y < topLimit) return true
+            val sw = if (currentScreenWidth > 0) currentScreenWidth else 1080
+            val sh = currentScreenHeight
+            // 排除頂部中央通知/即時動態熱區 (x in 18%..82% && y < 8%)
+            if (x in (sw * 0.18f).toInt()..(sw * 0.82f).toInt() && y < (sh * 0.08f).toInt()) return true
+            // 排除最頂部系統狀態列 (y < 3.8%)
+            if (y < (sh * 0.038f).toInt()) return true
         }
         return blacklistedPoints.any { pt ->
             hypot((pt.x - x).toDouble(), (pt.y - y).toDouble()) < BLACKLIST_RADIUS_PX
@@ -287,6 +290,18 @@ class AdCloserHandler(
             return AdStepResult.ClickedCloseOrSkip(closeNode.label, closeNode.bounds)
         }
 
+        // 4A-2. 專用幾何角落「▶|」略過圖示偵測器 (Meta Audience Network "Ad 1 of 2", Unity, Google 快速略過鈕)
+        if (elapsedSec >= 4) {
+            val skipMatch = templateMatcher.detectCornerSkipButton(
+                screenBitmap = screenBitmap,
+                blacklistedCoord = ::isInvalidOrBlacklisted
+            )
+            if (skipMatch != null) {
+                recordAndClick(service, skipMatch.bounds, allowBlacklist = false)
+                return AdStepResult.ClickedCloseOrSkip(skipMatch.label, skipMatch.bounds)
+            }
+        }
+
         // 4B. 全畫面 OCR 明確略過按鈕搜尋 (文字長度放寬至 16，避免截斷 "略過廣告 ▶|", "広告をスキップ", "Skip Ad")
         // 注意：AD_CLOSE_EXCLUDE_KEYWORDS 已排除 "秒後"、"還有"，因此「5秒後可略過廣告」絕不會被誤判，
         // 只有倒數結束變為真正可按的「略過廣告」時才會命中！
@@ -462,12 +477,12 @@ class AdCloserHandler(
     ): Pair<String, Rect> {
         val targets = mutableListOf<Pair<String, Rect>>()
 
-        // 1. 螢幕右上角關閉熱區 (標準全螢幕廣告，y in 8.5%..12.5% 避開頂部安全禁區)
+        // 1. 螢幕右上角關閉熱區 (標準全螢幕廣告，y in 5.2%..10.5% 涵蓋 0.072sh 的關閉/略過鈕)
         targets.add("螢幕右上角熱區" to Rect(
-            (sw * 0.88f).toInt(),
-            (sh * 0.085f).toInt(),
+            (sw * 0.85f).toInt(),
+            (sh * 0.052f).toInt(),
             (sw * 0.97f).toInt(),
-            (sh * 0.125f).toInt()
+            (sh * 0.105f).toInt()
         ))
 
         // 2. 內容右上角關閉熱區 (專門應對 16:9 / 4:3 劇院黑邊廣告，點擊黑邊下方的內容角落)
@@ -481,9 +496,9 @@ class AdCloserHandler(
         // 3. 螢幕左上角關閉熱區 (若左上方為 Google Play / 商店推廣徽章，絕對避開以免誤跳轉應用商店)
         val leftTopRect = Rect(
             (sw * 0.03f).toInt(),
-            (sh * 0.085f).toInt(),
+            (sh * 0.052f).toInt(),
             (sw * 0.14f).toInt(),
-            (sh * 0.125f).toInt()
+            (sh * 0.105f).toInt()
         )
         val hasStoreBadgeOnLeft = ocrItems.any { item ->
             val t = item.text.lowercase()
@@ -533,7 +548,7 @@ class AdCloserHandler(
         }
         closeClickCount++
         FloatingOverlayService.clickWithOverlayPassthrough(rect) {
-            service.clickRect(rect, maxJitterPx = 2)
+            service.clickRect(rect, maxJitterPx = 2, allowTopSafeZone = true)
         }
     }
 
