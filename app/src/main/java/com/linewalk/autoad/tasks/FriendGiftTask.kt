@@ -24,11 +24,29 @@ class FriendGiftTask {
         giftedPoints.clear()
     }
 
+    fun clearGiftedPoints() {
+        giftedPoints.clear()
+    }
+
+    /**
+     * 檢查畫面上是否仍顯示剩餘贈送額度 (例如 5/5、4/5、3/5、2/5、1/5、剩餘 3 次 等)
+     */
+    fun hasRemainingGiftQuota(ocrItems: List<OcrItem>): Boolean {
+        return ocrItems.any { item ->
+            val t = item.text.replace(" ", "")
+            val match = Regex("([1-5])/5").find(t)
+            match != null ||
+            (t.contains("次數") && (t.contains("1/5") || t.contains("2/5") || t.contains("3/5") || t.contains("4/5") || t.contains("5/5"))) ||
+            (t.contains("剩餘") && Regex("[1-5]").find(t) != null && !t.contains("0"))
+        }
+    }
+
     /**
      * 檢查好友送禮次數是否已達上限 (例如 0/5、今日上限、已達上限、贈送完畢)
      * 注意：LINE 散步趣的「禮物次數 5/5」代表今日剩餘 5 次完整額度，0/5 才代表額度用罄！
      */
     fun isGiftQuotaFull(ocrItems: List<OcrItem>): Boolean {
+        if (hasRemainingGiftQuota(ocrItems)) return false
         return ocrItems.any { item ->
             val t = item.text.replace(" ", "")
             t.contains("0/5") ||
@@ -179,6 +197,12 @@ class FriendGiftTask {
                     return rect
                 }
             }
+            // 若畫面上找得到綠色按鈕群組，但全都被 isAlreadyGifted 阻擋：
+            // 代表是滑動清單後座標重疊或遮罩過大，立即清空重置，避免漏失好友！
+            if (clusters.isNotEmpty()) {
+                giftedPoints.clear()
+                return clusters.first()
+            }
         }
 
         // 2. OCR 備援：辨識「禮物」文字 (x > 0.75f, y in 0.38f..0.85f)
@@ -203,6 +227,17 @@ class FriendGiftTask {
                     btnCenterY + (sh * 0.030f).toInt()
                 )
             }
+        }
+        if (giftOcrItems.isNotEmpty()) {
+            giftedPoints.clear()
+            val item = giftOcrItems.first()
+            val btnCenterY = item.bounds.centerY() - (sh * 0.035f).toInt()
+            return Rect(
+                (sw * 0.78f).toInt(),
+                btnCenterY - (sh * 0.030f).toInt(),
+                (sw * 0.94f).toInt(),
+                btnCenterY + (sh * 0.030f).toInt()
+            )
         }
 
         return null
@@ -296,7 +331,7 @@ class FriendGiftTask {
     }
 
     private fun isAlreadyGifted(x: Int, y: Int, sh: Int): Boolean {
-        val radius = (sh * 0.045f).toDouble()
+        val radius = (sh * 0.020f).toDouble()
         return giftedPoints.any { pt ->
             hypot((pt.x - x).toDouble(), (pt.y - y).toDouble()) < radius
         }

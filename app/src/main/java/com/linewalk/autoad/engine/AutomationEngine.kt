@@ -769,6 +769,16 @@ class AutomationEngine private constructor(private val context: Context) {
         // D5. 檢查是否正在底部導覽列「好友」頁面
         if (friendGiftTask.isFriendsPage(ocrItems, sh)) {
             nonGameScreenTicks = 0
+            if (currentPhase != PatrolPhase.FRIEND_GIFT && currentPhase != PatrolPhase.RECEIVE_GIFT) {
+                appendLog("[切換] 巡邏起始於【好友】分頁，先切換回底部【集點】以執行【首頁(移動)】巡邏！")
+                updateDetail("[切換] 切換回集點首頁...", "[切換] 回首頁...")
+                val mainTabBtn = friendGiftTask.getBottomMainTabRect(sw, sh, ocrItems)
+                FloatingOverlayService.clickWithOverlayPassthrough(mainTabBtn) {
+                    service.clickRect(mainTabBtn)
+                }
+                delay(600)
+                return
+            }
             handleFriendsPage(service, screenBitmap, ocrItems, sw, sh)
             return
         }
@@ -1229,6 +1239,7 @@ class AutomationEngine private constructor(private val context: Context) {
         // 0. 最優先檢查：是否跳出送禮結束的「贈送完畢」彈窗（已贈送金幣給你自己和XXX。[關閉]）！
         val completedCloseBtn = friendGiftTask.findSentCompletedCloseButton(screenBitmap, ocrItems)
         if (completedCloseBtn != null) {
+            friendGiftTask.clearGiftedPoints()
             appendLog("[禮物]【好友送禮】偵測到「贈送完畢」彈窗，點擊 [關閉] 繼續送禮！")
             FloatingOverlayService.clickWithOverlayPassthrough(completedCloseBtn) {
                 service.clickRect(completedCloseBtn)
@@ -1240,6 +1251,7 @@ class AutomationEngine private constructor(private val context: Context) {
 
         // 0B. 檢查贈送次數是否已達上限 (例如 0/5 或 今日上限)，且畫面上已無任何可點擊之綠色禮物按鈕
         val hasGiftQuotaFull = friendGiftTask.isGiftQuotaFull(ocrItems)
+        val hasRemainingQuota = friendGiftTask.hasRemainingGiftQuota(ocrItems)
         val hasAnyGiftButton = friendGiftTask.findNextGiftButton(screenBitmap, ocrItems) != null
         if (hasGiftQuotaFull && !hasAnyGiftButton) {
             appendLog("[禮物]【好友送禮】今日贈送次數已達上限 (0/5)，送禮完成！")
@@ -1304,6 +1316,7 @@ class AutomationEngine private constructor(private val context: Context) {
         // 2. 搜尋畫面上是否有未贈送的綠色「禮物」按鈕
         val nextGiftBtn = friendGiftTask.findNextGiftButton(screenBitmap, ocrItems)
         if (nextGiftBtn != null) {
+            friendGiftEmptyTicks = 0
             friendGiftTask.markGifted(android.graphics.Point(nextGiftBtn.centerX(), nextGiftBtn.centerY()))
             appendLog("[禮物]【好友送禮】點擊好友排行榜綠色禮物按鈕 (座標: ${nextGiftBtn.centerX()}, ${nextGiftBtn.centerY()})！")
             updateDetail("[禮物] 點擊好友禮物按鈕，等待送禮彈窗...", "[禮物] 贈送禮物中...")
@@ -1319,6 +1332,7 @@ class AutomationEngine private constructor(private val context: Context) {
         if (friendGiftEmptyTicks <= 2) {
             appendLog("[清單]【好友送禮】向下滾動清單搜尋更多好友 ($friendGiftEmptyTicks/2)...")
             updateDetail("[清單] 滾動清單搜尋更多好友 ($friendGiftEmptyTicks/2)...", "[清單] 滾動好友清單...")
+            friendGiftTask.clearGiftedPoints()
             service.performSwipe(
                 startX = sw * 0.50f,
                 startY = sh * 0.70f,
@@ -1326,16 +1340,33 @@ class AutomationEngine private constructor(private val context: Context) {
                 endY = sh * 0.35f,
                 durationMs = 380L
             )
-            // 注意：絕對不可在此處清空 giftedPoints，避免短清單反覆點擊相同好友！
             delay(600)
             return
         }
 
-        // 4. 連續兩次滾動皆無新禮物按鈕 -> 代表所有好友皆已贈送完畢！
+        // 4. 連續兩次滾動皆無新禮物按鈕：
+        // 嚴格防護：若畫面上仍明確顯示有剩餘額度 (如 3/5)，絕不可直接判定完成！
+        if (hasRemainingQuota) {
+            if (friendGiftEmptyTicks <= 4) {
+                appendLog("[清單]【好友送禮】尚有剩餘額度，向上滾動清單重新檢查 ($friendGiftEmptyTicks/4)...")
+                updateDetail("[清單] 向上滾動清單搜尋好友 ($friendGiftEmptyTicks/4)...", "[清單] 滾動好友清單...")
+                friendGiftTask.clearGiftedPoints()
+                service.performSwipe(
+                    startX = sw * 0.50f,
+                    startY = sh * 0.35f,
+                    endX = sw * 0.50f,
+                    endY = sh * 0.70f,
+                    durationMs = 380L
+                )
+                delay(600)
+                return
+            }
+        }
+
         isFriendGiftCompleted = true
         if (config.enableFriendGiftTask && !isReceiveGiftCompleted) {
             currentPhase = PatrolPhase.RECEIVE_GIFT
-            appendLog("[完成]【好友送禮】所有好友禮物皆已贈送完畢！直接點擊右上角【禮物盒】開啟收禮視窗！")
+            appendLog("[完成]【好友送禮】好友禮物贈送階段結束，直接點擊右上角【禮物盒】開啟收禮視窗！")
             val giftBoxRect = receiveGiftTask.getHeaderGiftBoxRect(sw, sh)
             FloatingOverlayService.clickWithOverlayPassthrough(giftBoxRect) {
                 service.clickRect(giftBoxRect, allowTopSafeZone = true)
@@ -1344,7 +1375,7 @@ class AutomationEngine private constructor(private val context: Context) {
             delay(600)
             return
         } else {
-            appendLog("[完成]【好友送禮】所有好友禮物皆已贈送完畢！自動點擊底部「集點」返回首頁")
+            appendLog("[完成]【好友送禮】好友禮物贈送階段結束，自動點擊底部「集點」返回首頁")
             val mainTabBtn = friendGiftTask.getBottomMainTabRect(sw, sh, ocrItems)
             FloatingOverlayService.clickWithOverlayPassthrough(mainTabBtn) {
                 service.clickRect(mainTabBtn)

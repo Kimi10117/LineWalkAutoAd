@@ -110,4 +110,27 @@ class Tier1_F6_FriendGiftAndReceiveDrawerTest {
         val adAction = action as ReceiveDrawerStepAction.ClaimAdPlayGift
         assertEquals("看廣告領取(▶)", adAction.label)
     }
+
+    @Test
+    fun test06_friendGiftQuotaRemaining3of5IsNotFull() {
+        val task = com.linewalk.autoad.tasks.FriendGiftTask()
+        val ocrItems = listOf(
+            com.linewalk.autoad.vision.OcrItem("禮物次數 3/5", android.graphics.Rect(100, 100, 300, 150)),
+            com.linewalk.autoad.vision.OcrItem("好友排行榜", android.graphics.Rect(100, 200, 300, 250))
+        )
+        assertTrue("3/5 quota must be recognized as remaining quota", task.hasRemainingGiftQuota(ocrItems))
+        assertFalse("3/5 quota must NOT be recognized as quota full", task.isGiftQuotaFull(ocrItems))
+    }
+
+    @Test
+    fun test07_friendGiftQuota0of5IsFull() {
+        val task = com.linewalk.autoad.tasks.FriendGiftTask()
+        val ocrItems = listOf(
+            com.linewalk.autoad.vision.OcrItem("禮物次數 0/5", android.graphics.Rect(100, 100, 300, 150)),
+            com.linewalk.autoad.vision.OcrItem("好友排行榜", android.graphics.Rect(100, 200, 300, 250))
+        )
+        assertFalse("0/5 quota has no remaining quota", task.hasRemainingGiftQuota(ocrItems))
+        assertTrue("0/5 quota must be recognized as quota full", task.isGiftQuotaFull(ocrItems))
+    }
 }
+

@@ -273,32 +273,30 @@ class AdCloserHandler(
             return AdStepResult.WaitingGracePeriod(elapsedSec)
         }
 
-        // 4. 【最高原則：倒數計時中嚴禁任何點擊（落實等略過出現再點原則，復刻 v1.7.0 精髓）】
-        // 只要畫面正在倒數計時（如「還有 15 秒」、「20 秒後可略過」），助手嚴格保持靜候播放，絕不碰觸螢幕！
-        val remainingSec = ocrRecognizer.detectAdCountdownSeconds(ocrItems, sh)
-        val rewardGrantedOcr = ocrRecognizer.findMatch(
-            items = ocrItems,
-            keywords = OcrRecognizer.AD_REWARD_GRANTED_KEYWORDS,
+        // 4. 【最高優先：檢查是否有明確的「略過/跳過」按鈕（一旦略過出現立即秒點，絕不拖延等廣告播完）】
+        // 4A. 無障礙節點樹中的明確略過按鈕 (node.text/desc 包含 略過/跳過/Skip)
+        val rootNode = service.getSafeRootNode()
+        val explicitSkipNode = nodeInspector.findAdCloseNode(
+            root = rootNode,
             screenWidth = sw,
             screenHeight = sh,
-            roiNormalized = RectF(0f, 0f, 1f, 0.25f)
-        )
-        if (remainingSec != null || rewardGrantedOcr != null) {
+            blacklistedCoord = ::isInvalidOrBlacklisted,
+            isFullScreenAd = true
+        )?.takeIf { node ->
+            node.text?.contains("略過") == true ||
+            node.text?.contains("跳過") == true ||
+            node.text?.contains("Skip", ignoreCase = true) == true ||
+            node.contentDesc?.contains("略過") == true ||
+            node.contentDesc?.contains("跳過") == true ||
+            node.contentDesc?.contains("Skip", ignoreCase = true) == true
+        }
+        if (explicitSkipNode != null) {
             hasAdActuallyShown = true
-        }
-        if (remainingSec != null && remainingSec > 1 && rewardGrantedOcr == null) {
-            return AdStepResult.StillCountingDown(remainingSec, elapsedSec)
-        }
-
-        // 5. 第一層辨識：檢查無障礙節點樹是否有官方廣告關閉/略過節點
-        val rootNode = service.getSafeRootNode()
-        val closeNode = nodeInspector.findAdCloseNode(rootNode, sw, sh, ::isInvalidOrBlacklisted, isFullScreenAd = true)
-        if (closeNode != null) {
-            recordAndClick(service, closeNode.bounds)
-            return AdStepResult.ClickedCloseOrSkip(closeNode.label, closeNode.bounds)
+            recordAndClick(service, explicitSkipNode.bounds)
+            return AdStepResult.ClickedCloseOrSkip(explicitSkipNode.label, explicitSkipNode.bounds)
         }
 
-        // 6. 第二層辨識：全畫面 OCR 明確略過按鈕搜尋 (文字長度放寬至 16，涵蓋頂部 y >= 0.04f)
+        // 4B. 全畫面 OCR 明確略過按鈕搜尋 (包含「略過廣告」、「可略過廣告」、「Skip Ad」、「略過」等)
         val explicitSkipOcr = ocrRecognizer.findMatch(
             items = ocrItems,
             keywords = listOf(
@@ -327,11 +325,36 @@ class AdCloserHandler(
         if (explicitSkipOcr != null &&
             !isInvalidOrBlacklisted(explicitSkipOcr.bounds.centerX(), explicitSkipOcr.bounds.centerY())
         ) {
+            hasAdActuallyShown = true
             recordAndClick(service, explicitSkipOcr.bounds, allowBlacklist = true)
             return AdStepResult.ClickedCloseOrSkip("OCR[${explicitSkipOcr.text}]", explicitSkipOcr.bounds)
         }
 
-        // 6. 一般全畫面關閉/確定/確認 OCR 辨識 (當倒數完畢或無倒數計時時)
+        // 5. 【倒數計時防護：無略過按鈕且倒數中時保持靜候】
+        // 若畫面上未出現明確略過按鈕，且正在倒數計時（如「還有 15 秒」），嚴格保持靜候播放，絕不碰觸螢幕！
+        val remainingSec = ocrRecognizer.detectAdCountdownSeconds(ocrItems, sh)
+        val rewardGrantedOcr = ocrRecognizer.findMatch(
+            items = ocrItems,
+            keywords = OcrRecognizer.AD_REWARD_GRANTED_KEYWORDS,
+            screenWidth = sw,
+            screenHeight = sh,
+            roiNormalized = RectF(0f, 0f, 1f, 0.25f)
+        )
+        if (remainingSec != null || rewardGrantedOcr != null) {
+            hasAdActuallyShown = true
+        }
+        if (remainingSec != null && remainingSec > 1 && rewardGrantedOcr == null) {
+            return AdStepResult.StillCountingDown(remainingSec, elapsedSec)
+        }
+
+        // 6. 第一層辨識：檢查無障礙節點樹是否有一般廣告關閉節點 (非略過按鈕，如頂部角落 X 節點)
+        val closeNode = nodeInspector.findAdCloseNode(rootNode, sw, sh, ::isInvalidOrBlacklisted, isFullScreenAd = true)
+        if (closeNode != null) {
+            recordAndClick(service, closeNode.bounds)
+            return AdStepResult.ClickedCloseOrSkip(closeNode.label, closeNode.bounds)
+        }
+
+        // 7. 第二層辨識：一般全畫面關閉/確定/確認 OCR 辨識 (當倒數完畢或無倒數計時時)
         val fullScreenCloseOcr = ocrRecognizer.findMatch(
             items = ocrItems,
             keywords = OcrRecognizer.AD_CLOSE_OCR_KEYWORDS + listOf("確認", "確定"),
