@@ -216,7 +216,6 @@ class LotteryTask {
             t.contains("中獎囉") || t.contains("中獎") || t.contains("Thankyouforwatching") ||
             (t.contains("枚金幣") && t.contains("中獎")) ||
             (t.contains("金幣") && t.contains("中獎")) ||
-            (item.bounds.centerY() < sh * 0.22f && t.contains("抽抽樂")) ||
             (item.bounds.centerY() > sh * 0.65f && (t.contains("分享給好友") || t.contains("分享"))) ||
             (item.bounds.centerY() in (sh * 0.60f).toInt()..(sh * 0.74f).toInt() &&
                 (t.contains("x1", ignoreCase = true) || t.contains("1張")) &&

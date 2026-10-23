@@ -298,17 +298,20 @@ class AdCloserHandler(
             return AdStepResult.ClickedCloseOrSkip(closeNode.label, closeNode.bounds)
         }
 
-        // 6. 第二層辨識：全畫面 OCR 明確略過按鈕搜尋 (文字長度放寬至 16，排除 >> 箭頭避免誤觸影片特效)
+        // 6. 第二層辨識：全畫面 OCR 明確略過按鈕搜尋 (文字長度放寬至 16，涵蓋頂部 y >= 0.04f)
         val explicitSkipOcr = ocrRecognizer.findMatch(
             items = ocrItems,
             keywords = listOf(
+                "可略過廣告",
                 "略過廣告",
                 "跳過廣告",
                 "廣告略過",
+                "可略過",
                 "広告をスキップ",
                 "Skip Ad",
                 "Skip ad",
                 "Skip Ads",
+                "Skip ads",
                 "略過",
                 "跳過",
                 "Skip",
@@ -317,7 +320,7 @@ class AdCloserHandler(
             ),
             screenWidth = sw,
             screenHeight = sh,
-            roiNormalized = RectF(0.01f, 0.08f, 0.99f, 0.96f),
+            roiNormalized = RectF(0.01f, 0.04f, 0.99f, 0.96f),
             excludeKeywords = OcrRecognizer.AD_CLOSE_EXCLUDE_KEYWORDS,
             maxTextLength = 16
         )
@@ -334,7 +337,7 @@ class AdCloserHandler(
             keywords = OcrRecognizer.AD_CLOSE_OCR_KEYWORDS + listOf("確認", "確定"),
             screenWidth = sw,
             screenHeight = sh,
-            roiNormalized = RectF(0.01f, 0.05f, 0.99f, 0.96f),
+            roiNormalized = RectF(0.01f, 0.04f, 0.99f, 0.96f),
             excludeKeywords = OcrRecognizer.AD_CLOSE_EXCLUDE_KEYWORDS,
             maxTextLength = 16
         )
@@ -362,15 +365,18 @@ class AdCloserHandler(
             }
         }
 
-        // 8. 第三層辨識 B：啟動「高精度免樣本幾何角落 X 偵測器」（支援右上角圓底白 X 與左上角 Meta 灰 X）
-        // 只要不是正在倒數中且已播放達 5 秒以上，即可啟動角落 X 偵測（倒數中廣告已在 Step 4 攔截保護）！
-        if (elapsedSec >= 5 || rewardGrantedOcr != null) {
-            val isRelaxed = elapsedSec >= 15 || rewardGrantedOcr != null
+        // 8. 第三層辨識 B：啟動「高精度免樣本幾何角落 X 偵測器」
+        // 嚴格限制：左上角僅限 Meta 廣告容器套件 (com.facebook.katana / com.facebook.orca) 掃描！
+        // Google AdMob / Unity 等影音廣告左上角固定為廣告主圖示或 AdChoices (i) 標籤，誤點必跳轉 Google Play！
+        val isMetaAd = fgPkg == "com.facebook.katana" || fgPkg == "com.facebook.orca"
+        // 延遲至 10 秒以上（或已獲獎勵）才允許幾何 X 偵測，讓略過按鈕能正常於 5~10 秒浮現被 Step 6 OCR 秒點！
+        if (elapsedSec >= 10 || rewardGrantedOcr != null) {
+            val isRelaxed = elapsedSec >= 18 || rewardGrantedOcr != null
             val geoMatch = templateMatcher.detectCornerGeometricX(
                 screenBitmap = screenBitmap,
                 blacklistedCoord = ::isInvalidOrBlacklisted,
                 isRelaxed = isRelaxed,
-                includeLeftZone = true
+                includeLeftZone = isMetaAd
             )
             if (geoMatch != null) {
                 recordAndClick(service, geoMatch.bounds, allowBlacklist = true)

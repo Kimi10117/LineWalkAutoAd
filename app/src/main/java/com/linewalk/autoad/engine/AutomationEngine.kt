@@ -947,9 +947,9 @@ class AutomationEngine private constructor(private val context: Context) {
             FloatingOverlayService.clickWithOverlayPassthrough(rewardTarget.bounds) {
                 service.clickRect(rewardTarget.bounds)
             }
-            delay(400)
-            popupRetryTicks = 0
-            transitionTo(EngineState.TRIGGER_AD_POPUP, "已點擊賓果連線獎勵 [Get]，等待廣告或領獎結果...", "[賓果] 領取獎勵中...")
+            updateDetail("[賓果] 已點擊【${rewardTarget.label}】，繼續領取獎勵...", "[賓果] 領取獎勵中...")
+            delay(350)
+            // 保持在 IN_GAME_SCAN，下一 Tick 立即掃描下一欄，秒速領取所有連線 Get！
             return
         }
 
@@ -1153,6 +1153,21 @@ class AutomationEngine private constructor(private val context: Context) {
         sw: Int,
         sh: Int
     ) {
+        // 若為空抽屜狀態 (例如顯示『尚未收到禮物。』)，立即點擊右上角 (X) 關閉，絕不盲點底層廣告橫幅！
+        if (receiveGiftTask.hasEmptyDrawer(ocrItems)) {
+            currentPhaseEmptyTicks = 0
+            isReceiveGiftCompleted = true
+            appendLog("[禮物]【接收禮物】尚無收到任何好友禮物，點擊右上角 (X) 關閉視窗")
+            val closeBtn = receiveGiftTask.getCloseButtonBounds(sw, sh)
+            FloatingOverlayService.clickWithOverlayPassthrough(closeBtn) {
+                service.clickRect(closeBtn)
+            }
+            currentPhase = getNextPhase(PatrolPhase.RECEIVE_GIFT)
+            updateDetail("[完成] 禮物視窗已關閉 (無待領禮物)，進入下一階段...", "[完成] 收禮完成")
+            delay(500)
+            return
+        }
+
         val claimTarget = receiveGiftTask.findNextClaimGiftButton(screenBitmap, ocrItems)
         if (claimTarget != null) {
             currentPhaseEmptyTicks = 0
@@ -1223,9 +1238,11 @@ class AutomationEngine private constructor(private val context: Context) {
             return
         }
 
-        // 0B. 檢查贈送次數是否已達上限 (例如 5/5 或 今日上限)
-        if (friendGiftTask.isGiftQuotaFull(ocrItems)) {
-            appendLog("[禮物]【好友送禮】今日贈送次數已達上限 (5/5)，送禮完成！")
+        // 0B. 檢查贈送次數是否已達上限 (例如 0/5 或 今日上限)，且畫面上已無任何可點擊之綠色禮物按鈕
+        val hasGiftQuotaFull = friendGiftTask.isGiftQuotaFull(ocrItems)
+        val hasAnyGiftButton = friendGiftTask.findNextGiftButton(screenBitmap, ocrItems) != null
+        if (hasGiftQuotaFull && !hasAnyGiftButton) {
+            appendLog("[禮物]【好友送禮】今日贈送次數已達上限 (0/5)，送禮完成！")
             isFriendGiftCompleted = true
         }
 

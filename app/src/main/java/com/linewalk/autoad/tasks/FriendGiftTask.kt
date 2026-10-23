@@ -25,16 +25,18 @@ class FriendGiftTask {
     }
 
     /**
-     * 檢查好友送禮次數是否已達上限 (例如 5/5、今日上限、已達上限)
+     * 檢查好友送禮次數是否已達上限 (例如 0/5、今日上限、已達上限、贈送完畢)
+     * 注意：LINE 散步趣的「禮物次數 5/5」代表今日剩餘 5 次完整額度，0/5 才代表額度用罄！
      */
     fun isGiftQuotaFull(ocrItems: List<OcrItem>): Boolean {
         return ocrItems.any { item ->
             val t = item.text.replace(" ", "")
-            t.contains("5/5") ||
-            (t.contains("次數") && (t.contains("5/5") || t.contains("上限"))) ||
+            t.contains("0/5") ||
+            (t.contains("次數") && (t.contains("0/5") || t.contains("上限") || t.contains("0次"))) ||
             t.contains("今日上限") ||
             t.contains("已達今日上限") ||
             t.contains("已達上限") ||
+            t.contains("今日已無贈送次數") ||
             (t.contains("贈送次數") && t.contains("0"))
         }
     }

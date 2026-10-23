@@ -43,6 +43,20 @@ class ReceiveGiftTask {
     }
 
     /**
+     * 檢查「禮物」抽屜是否為空（尚未收到禮物、尚無禮物等）
+     */
+    fun hasEmptyDrawer(ocrItems: List<OcrItem>): Boolean {
+        return ocrItems.any { item ->
+            val t = item.text.replace(" ", "")
+            t.contains("尚未收到禮物") ||
+            t.contains("尚未收到") ||
+            t.contains("尚無禮物") ||
+            t.contains("目前沒有禮物") ||
+            t.contains("沒有禮物")
+        }
+    }
+
+    /**
      * 判斷「禮物」抽屜彈窗是否開啟中
      * 注意：因「禮物」抽屜覆蓋於下半部，背景（好友排行榜或主畫面）頂部仍可能在OCR中被偵測到，
      * 故只要確認畫面具備「禮物」抽屜的標題或清單內容，且非送禮確認彈窗，即判定為禮物抽屜開啟！
@@ -56,6 +70,9 @@ class ReceiveGiftTask {
             t.contains("贈送完畢") || (t.contains("已贈送") && t.contains("金幣"))
         }
         if (hasSendGiftModal) return false
+
+        // 檢查是否為空抽屜狀態（『尚未收到禮物。』）
+        if (hasEmptyDrawer(ocrItems)) return true
 
         // 檢查是否具有「禮物」抽屜專屬內容特徵：
         val hasDrawerContent = ocrItems.any { item ->
@@ -85,7 +102,7 @@ class ReceiveGiftTask {
     }
 
     /**
-     * 尋找禮物清單中下一個待領取的按鈕 (x ≈ 0.60f..0.95f, y ≈ 0.25f..0.92f)
+     * 尋找禮物清單中下一個待領取的按鈕 (x ≈ 0.60f..0.95f, y ≈ 0.25f..0.52f)
      * 優先順序：
      * 1. 【最高優先】實心綠色按鈕 [ 領取 ] (免看廣告，直接領取)
      * 2. 【次要優先】綠框播放按鈕 [ ▶ ] (需看廣告領取)
@@ -97,11 +114,16 @@ class ReceiveGiftTask {
         val sh = screenBitmap.height
         val sw = screenBitmap.width
 
-        // 1. 【2D 顏色區域辨識】：搜尋右側按鈕區域 (x ≈ 0.60f..0.95f, y ≈ 0.25f..0.92f)
+        // 若確認為空抽屜狀態（尚未收到禮物），嚴禁尋找按鈕，避免誤點底部的推廣橫幅！
+        if (hasEmptyDrawer(ocrItems)) {
+            return null
+        }
+
+        // 嚴格限定在白底禮物抽屜內部 (y <= 0.52f)，絕不可搜尋至 y > 0.52f 的綠色底層廣告橫幅！
         val x1 = (sw * 0.60f).toInt().coerceIn(0, sw - 1)
         val x2 = (sw * 0.95f).toInt().coerceIn(x1 + 1, sw)
         val y1 = (sh * 0.25f).toInt().coerceIn(0, sh - 1)
-        val y2 = (sh * 0.92f).toInt().coerceIn(y1 + 1, sh)
+        val y2 = (sh * 0.52f).toInt().coerceIn(y1 + 1, sh)
 
         val greenPoints = mutableListOf<android.graphics.Point>()
         var y = y1
@@ -142,12 +164,12 @@ class ReceiveGiftTask {
         }
 
         // 2. 【OCR 輔助搜尋】：
-        // 2A. 尋找「領取」OCR 按鈕 (x > 0.60f, y in 0.25f..0.92f, 嚴格排除「已領取」)
+        // 2A. 尋找「領取」OCR 按鈕 (x > 0.60f, y in 0.25f..0.52f, 嚴格排除「已領取」)
         val directClaimOcr = ocrItems.filter { item ->
             val cy = item.bounds.centerY().toFloat() / sh
             val cx = item.bounds.centerX().toFloat() / sw
             val t = item.text.trim()
-            cy in 0.25f..0.92f && cx > 0.60f && (t == "領取" || (t.contains("領取") && !t.contains("已")))
+            cy in 0.25f..0.52f && cx > 0.60f && (t == "領取" || (t.contains("領取") && !t.contains("已")))
         }.sortedBy { it.bounds.top }
 
         for (item in directClaimOcr) {
@@ -169,7 +191,7 @@ class ReceiveGiftTask {
         val togetherGiftOcr = ocrItems.filter { item ->
             val cy = item.bounds.centerY().toFloat() / sh
             val t = item.text.replace(" ", "")
-            cy in 0.25f..0.92f && t.contains("一起送達")
+            cy in 0.25f..0.52f && t.contains("一起送達")
         }.sortedBy { it.bounds.top }
 
         for (item in togetherGiftOcr) {
@@ -197,7 +219,7 @@ class ReceiveGiftTask {
         val playOcr = ocrItems.filter { item ->
             val cy = item.bounds.centerY().toFloat() / sh
             val cx = item.bounds.centerX().toFloat() / sw
-            cy in 0.25f..0.92f && cx > 0.60f && (item.text.contains("▶") || item.text.contains(">"))
+            cy in 0.25f..0.52f && cx > 0.60f && (item.text.contains("▶") || item.text.contains(">"))
         }.sortedBy { it.bounds.top }
 
         for (item in playOcr) {
@@ -210,7 +232,7 @@ class ReceiveGiftTask {
         val friendGiftTextOcr = ocrItems.filter { item ->
             val cy = item.bounds.centerY().toFloat() / sh
             val t = item.text
-            cy in 0.25f..0.92f && (t.contains("送來的禮物") || (t.contains("收到") && t.contains("禮物")))
+            cy in 0.25f..0.52f && (t.contains("送來的禮物") || (t.contains("收到") && t.contains("禮物")))
         }.sortedBy { it.bounds.top }
 
         for (item in friendGiftTextOcr) {
@@ -228,7 +250,7 @@ class ReceiveGiftTask {
         val deadlineItem = ocrItems.firstOrNull { item ->
             val cy = item.bounds.centerY().toFloat() / sh
             val cx = item.bounds.centerX().toFloat() / sw
-            cy in 0.30f..0.92f && cx > sw * 0.55f &&
+            cy in 0.30f..0.52f && cx > sw * 0.55f &&
             ((item.text.contains("今天") && item.text.contains("止")) ||
              item.text.contains("剩餘") || item.text.contains("剩下") || item.text.contains("天"))
         }
