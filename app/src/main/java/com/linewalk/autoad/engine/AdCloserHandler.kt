@@ -93,12 +93,10 @@ class AdCloserHandler(
     private fun isInvalidOrBlacklisted(x: Int, y: Int): Boolean {
         if (FloatingOverlayService.isInsideOverlay(x, y)) return true
         if (currentScreenHeight > 0) {
-            val sw = if (currentScreenWidth > 0) currentScreenWidth else 1080
             val sh = currentScreenHeight
-            // 排除頂部中央通知/即時動態熱區 (x in 18%..82% && y < 8%)
-            if (x in (sw * 0.18f).toInt()..(sw * 0.82f).toInt() && y < (sh * 0.08f).toInt()) return true
-            // 排除最頂部系統狀態列 (y < 3.8%)
-            if (y < (sh * 0.038f).toInt()) return true
+            // 排除最頂部系統狀態列、通知橫幅 (Discord、LINE 等) 與靈動膠囊 (y < 7.5% sh)
+            // 嚴格防止任何點擊誤觸系統頂部通知而跳出至其他 App！
+            if (y < (sh * 0.075f).toInt()) return true
         }
         return blacklistedPoints.any { pt ->
             hypot((pt.x - x).toDouble(), (pt.y - y).toDouble()) < BLACKLIST_RADIUS_PX
@@ -290,18 +288,6 @@ class AdCloserHandler(
             return AdStepResult.ClickedCloseOrSkip(closeNode.label, closeNode.bounds)
         }
 
-        // 4A-2. 專用幾何角落「▶|」略過圖示偵測器 (Meta Audience Network "Ad 1 of 2", Unity, Google 快速略過鈕)
-        if (elapsedSec >= 4) {
-            val skipMatch = templateMatcher.detectCornerSkipButton(
-                screenBitmap = screenBitmap,
-                blacklistedCoord = ::isInvalidOrBlacklisted
-            )
-            if (skipMatch != null) {
-                recordAndClick(service, skipMatch.bounds, allowBlacklist = true)
-                return AdStepResult.ClickedCloseOrSkip(skipMatch.label, skipMatch.bounds)
-            }
-        }
-
         // 4B. 全畫面 OCR 明確略過按鈕搜尋 (文字長度放寬至 16，避免截斷 "略過廣告 ▶|", "広告をスキップ", "Skip Ad")
         // 注意：AD_CLOSE_EXCLUDE_KEYWORDS 已排除 "秒後"、"還有"，因此「5秒後可略過廣告」絕不會被誤判，
         // 只有倒數結束變為真正可按的「略過廣告」時才會命中！
@@ -310,24 +296,30 @@ class AdCloserHandler(
             keywords = listOf(
                 "略過廣告",
                 "跳過廣告",
+                "廣告略過",
                 "広告をスキップ",
                 "Skip Ad",
+                "Skip ad",
+                "Skip Ads",
                 "略過",
                 "跳過",
                 "Skip",
                 "SKIP",
+                ">>",
+                "＞＞",
+                "»",
                 "スキップ"
             ),
             screenWidth = sw,
             screenHeight = sh,
-            roiNormalized = RectF(0.01f, 0.02f, 0.99f, 0.96f),
+            roiNormalized = RectF(0.01f, 0.05f, 0.99f, 0.96f),
             excludeKeywords = OcrRecognizer.AD_CLOSE_EXCLUDE_KEYWORDS,
             maxTextLength = 16
         )
         if (explicitSkipOcr != null &&
             !isInvalidOrBlacklisted(explicitSkipOcr.bounds.centerX(), explicitSkipOcr.bounds.centerY())
         ) {
-            recordAndClick(service, explicitSkipOcr.bounds, allowBlacklist = false)
+            recordAndClick(service, explicitSkipOcr.bounds, allowBlacklist = true)
             return AdStepResult.ClickedCloseOrSkip("OCR[${explicitSkipOcr.text}]", explicitSkipOcr.bounds)
         }
 
@@ -353,14 +345,14 @@ class AdCloserHandler(
             keywords = OcrRecognizer.AD_CLOSE_OCR_KEYWORDS + listOf("確認", "確定"),
             screenWidth = sw,
             screenHeight = sh,
-            roiNormalized = RectF(0.01f, 0.02f, 0.99f, 0.96f),
+            roiNormalized = RectF(0.01f, 0.05f, 0.99f, 0.96f),
             excludeKeywords = OcrRecognizer.AD_CLOSE_EXCLUDE_KEYWORDS,
             maxTextLength = 16
         )
         if (fullScreenCloseOcr != null &&
             !isInvalidOrBlacklisted(fullScreenCloseOcr.bounds.centerX(), fullScreenCloseOcr.bounds.centerY())
         ) {
-            recordAndClick(service, fullScreenCloseOcr.bounds, allowBlacklist = false)
+            recordAndClick(service, fullScreenCloseOcr.bounds, allowBlacklist = true)
             return AdStepResult.ClickedCloseOrSkip("OCR[${fullScreenCloseOcr.text}]", fullScreenCloseOcr.bounds)
         }
 
@@ -370,21 +362,21 @@ class AdCloserHandler(
             val tplMatch = templateMatcher.findBestTemplateMatch(
                 screenBitmap = screenBitmap,
                 templates = userCloseTemplates,
-                roiNormalized = RectF(0.0f, 0.02f, 1.0f, 0.95f),
+                roiNormalized = RectF(0.0f, 0.05f, 1.0f, 0.95f),
                 threshold = config.templateMatchThreshold,
                 labelPrefix = "自訂X範本",
                 blacklistedCoord = ::isInvalidOrBlacklisted
             )
             if (tplMatch != null) {
-                recordAndClick(service, tplMatch.bounds, allowBlacklist = false)
+                recordAndClick(service, tplMatch.bounds, allowBlacklist = true)
                 return AdStepResult.ClickedCloseOrSkip(tplMatch.label, tplMatch.bounds)
             }
         }
 
         // 8. 第三層辨識 B：啟動「高精度免樣本幾何角落 X 偵測器」（專注右上角圓底白 X 與細線 X）
-        // 大幅加速：2 秒後即開始尋找角落 X；若播放已超過 8 秒或已獲得獎勵，啟動放寬模式 (isRelaxed) 偵測半透明 X！
-        if (elapsedSec >= 2 || rewardGrantedOcr != null) {
-            val isRelaxed = elapsedSec >= 8 || rewardGrantedOcr != null
+        // 嚴格延遲至影片播放後期 (15秒以上) 或已獲獎勵 (rewardGrantedOcr != null) 才尋找角落 X，杜絕播放初期誤觸影片畫面！
+        if (elapsedSec >= 15 || rewardGrantedOcr != null) {
+            val isRelaxed = elapsedSec >= 20 || rewardGrantedOcr != null
             val geoMatch = templateMatcher.detectCornerGeometricX(
                 screenBitmap = screenBitmap,
                 blacklistedCoord = ::isInvalidOrBlacklisted,
@@ -408,30 +400,12 @@ class AdCloserHandler(
                 return AdStepResult.WatchdogBackTriggered(elapsedSec, "重定向安全返回鍵")
             }
 
-            // 針對互動式可玩小遊戲廣告 (Playable Ad，例如飛刀命中、旋轉輪盤等)：
-            // 僅在遊戲內部時於第 5~8 秒且尚未點擊過時輕點畫面中央下方推進進度，外部應用嚴格禁止！
-            val isPlayableAd = ocrItems.any { item ->
-                val t = item.text.uppercase()
-                t.contains("DOWNLOAD") || t.contains("INSTALL") || t.contains("PLAY")
-            }
-            if (!isOutsideGame && isPlayableAd && elapsedSec in 5..8 && closeClickCount == 0) {
-                val interactiveTap = Rect(
-                    (sw * 0.45f).toInt(),
-                    (sh * 0.65f).toInt(),
-                    (sw * 0.55f).toInt(),
-                    (sh * 0.72f).toInt()
-                )
-                closeClickCount++
-                service.clickRect(interactiveTap, maxJitterPx = 2)
-                return AdStepResult.WatchdogBackTriggered(elapsedSec, "互動可玩廣告推進點擊")
-            }
-
-            // 盲點熱區：嚴格延遲至廣告播放後期 (22秒以上或已獲獎勵) 且非外部應用時才允許盲點角落！
-            // 絕不可在廣告播放前 20 秒盲點角落，否則會誤觸廣告贊助連結跳轉至 Google Play 商店！
-            if (!isOutsideGame && now - lastFallbackCornerTimeMs >= 2500L && (elapsedSec >= 22 || rewardGrantedOcr != null)) {
+            // 盲點熱區：嚴格延遲至廣告播放末期 (38秒以上或已獲獎勵) 且非外部應用時才允許盲點角落！
+            // 絕不可在廣告播放前 38 秒盲點角落，否則會誤觸廣告畫面跳轉至 Google Play 商店！
+            if (!isOutsideGame && now - lastFallbackCornerTimeMs >= 3000L && (elapsedSec >= 38 || rewardGrantedOcr != null)) {
                 val (label, targetRect) = getNextFallbackTarget(sw, sh, ocrItems)
                 lastFallbackCornerTimeMs = now
-                recordAndClick(service, targetRect, allowBlacklist = false)
+                recordAndClick(service, targetRect, allowBlacklist = true)
                 if (isSafeToBack) {
                     service.safeNavigateBack()
                     lastBackActionTimeMs = now
@@ -441,7 +415,7 @@ class AdCloserHandler(
                 }
             }
 
-            if (isSafeToBack && (elapsedSec >= 22 || rewardGrantedOcr != null) && now - lastBackActionTimeMs >= 2500L) {
+            if (isSafeToBack && (elapsedSec >= 38 || rewardGrantedOcr != null) && now - lastBackActionTimeMs >= 3000L) {
                 service.safeNavigateBack()
                 lastBackActionTimeMs = now
                 return AdStepResult.WatchdogBackTriggered(elapsedSec, "安全返回鍵")
@@ -478,12 +452,12 @@ class AdCloserHandler(
     ): Pair<String, Rect> {
         val targets = mutableListOf<Pair<String, Rect>>()
 
-        // 1. 螢幕右上角關閉熱區 (標準全螢幕廣告，y in 5.2%..10.5% 涵蓋 0.072sh 的關閉/略過鈕)
+        // 1. 螢幕右上角關閉熱區 (標準全螢幕廣告，y in 8.0%..12.5% 嚴格避開 y < 7.5% 系統頂部通知與即時動態)
         targets.add("螢幕右上角熱區" to Rect(
             (sw * 0.85f).toInt(),
-            (sh * 0.052f).toInt(),
+            (sh * 0.080f).toInt(),
             (sw * 0.97f).toInt(),
-            (sh * 0.105f).toInt()
+            (sh * 0.125f).toInt()
         ))
 
         // 2. 內容右上角關閉熱區 (專門應對 16:9 / 4:3 劇院黑邊廣告，點擊黑邊下方的內容角落)

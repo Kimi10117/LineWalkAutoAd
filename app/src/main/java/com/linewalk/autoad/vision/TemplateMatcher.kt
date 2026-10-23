@@ -480,9 +480,9 @@ class TemplateMatcher {
         val step = max(2, sw / 240)
         val tol = max(1, sw / 360)
 
-        val topLimitY = max((sh * 0.042f).toInt(), 40)
+        val topLimitY = max((sh * 0.075f).toInt(), 70)
         val searchZones = mutableListOf(
-            // 右上角 (唯一標準廣告關閉鈕位置，避開螢幕最頂部系統狀態列 y < 3.8%，涵蓋 y in 4.2%..24%)
+            // 右上角 (唯一標準廣告關閉鈕位置，避開螢幕最頂部系統狀態列與通知橫幅 y < 7.5%，涵蓋 y in 7.5%..24%)
             Rect((sw * 0.75f).toInt(), topLimitY, (sw * 0.98f).toInt(), (sh * 0.24f).toInt())
         )
         if (includeLeftZone) {
@@ -532,8 +532,8 @@ class TemplateMatcher {
                     val absX = zone.left + cx
                     val absY = zone.top + cy
 
-                    // 排除最頂部系統狀態列 (boxTop < sh * 0.038f)
-                    if (absY - r < (sh * 0.038f).toInt()) {
+                    // 排除最頂部系統狀態列與通知橫幅 (boxTop < sh * 0.075f)
+                    if (absY - r < (sh * 0.075f).toInt()) {
                         cx += step
                         continue
                     }
@@ -618,117 +618,4 @@ class TemplateMatcher {
         bestCandidate
     }
 
-    /**
-     * 高精度免樣本幾何角落「▶|」略過圖示偵測器 (Universal Fast-Forward / Skip Ad Detector)：
-     * 專門偵測 Meta Audience Network ("Ad 1 of 2", "Ads served by Meta")、Google AdMob、
-     * Unity Ads 等現代影音廣告在右上角唯一合法位置顯示之深底圓形「▶|」快速略過圖示。
-     * 嚴格禁止掃描左上角（左上角為聲音開關/喇叭圖示，其梯形與音波極易產生假陽性特徵）。
-     */
-    suspend fun detectCornerSkipButton(
-        screenBitmap: Bitmap,
-        blacklistedCoord: ((Int, Int) -> Boolean)? = null
-    ): TemplateMatchResult? = withContext(Dispatchers.Default) {
-        val sw = screenBitmap.width
-        val sh = screenBitmap.height
-        val r = max(6, (sw * 0.035f).toInt())
-        val rInner = max(3, (r * 0.55f).toInt())
-        val step = max(2, sw / 200)
-
-        val topLimitY = max((sh * 0.042f).toInt(), 40)
-        val searchZones = listOf(
-            // 右上角 (影音廣告快速略過鈕唯一標準位置，涵蓋 y in 4.2%..24% 支援劇院模式)
-            Rect((sw * 0.75f).toInt(), topLimitY, (sw * 0.98f).toInt(), (sh * 0.24f).toInt())
-        )
-
-        var bestCandidate: TemplateMatchResult? = null
-        var bestScore = 0f
-
-        val angles = doubleArrayOf(0.0, 45.0, 90.0, 135.0, 180.0, 225.0, 270.0, 315.0)
-        val rads = angles.map { Math.toRadians(it) }
-
-        for ((zoneIdx, zone) in searchZones.withIndex()) {
-            val zw = zone.width()
-            val zh = zone.height()
-            if (zw <= r * 2 + 4 || zh <= r * 2 + 4) continue
-
-            val pixels = IntArray(zw * zh)
-            screenBitmap.getPixels(pixels, 0, zw, zone.left, zone.top, zw, zh)
-
-            fun lum(x: Int, y: Int): Float {
-                val c = pixels[y * zw + x]
-                return 0.299f * ((c shr 16) and 0xFF) +
-                    0.587f * ((c shr 8) and 0xFF) +
-                    0.114f * (c and 0xFF)
-            }
-
-            var cy = r + 2
-            while (cy < zh - r - 2) {
-                var cx = r + 2
-                while (cx < zw - r - 2) {
-                    val absX = zone.left + cx
-                    val absY = zone.top + cy
-
-                    // 排除最頂部系統狀態列 (absY < 3.8% sh)
-                    if (absY < (sh * 0.038f).toInt()) {
-                        cx += step
-                        continue
-                    }
-
-                    // 排除賓果關閉按鈕區域 (84%..98% sw && 8%..16% sh)
-                    val isBingoCloseZone = absX in (sw * 0.84f).toInt()..(sw * 0.98f).toInt() &&
-                        absY in (sh * 0.08f).toInt()..(sh * 0.16f).toInt()
-                    if (isBingoCloseZone) {
-                        cx += step
-                        continue
-                    }
-
-                    if (blacklistedCoord?.invoke(absX, absY) != true) {
-                        // 1. 環形檢查：按鈕外圍為深色圓形底色 (lum <= 125)
-                        var ringSum = 0f
-                        for (rad in rads) {
-                            val rx = (cx + r * kotlin.math.cos(rad)).toInt().coerceIn(0, zw - 1)
-                            val ry = (cy + r * kotlin.math.sin(rad)).toInt().coerceIn(0, zh - 1)
-                            ringSum += lum(rx, ry)
-                        }
-                        val avgRing = ringSum / rads.size
-                        if (avgRing <= 125f) {
-                            // 2. 內部圖示亮度檢查 (白色圖示，中心亮度需高於 155 且對比度 >= 70)
-                            val cLum = lum(cx, cy)
-                            val contrast = cLum - avgRing
-                            if (cLum >= 155f && contrast >= 70f) {
-                                // 3. 幾何特徵：「▶|」右側有一道高亮度垂直線 (直線條 |)
-                                val barX = (cx + rInner * 0.6f).toInt().coerceIn(0, zw - 1)
-                                val barTop = lum(barX, (cy - rInner).coerceIn(0, zh - 1))
-                                val barMid = lum(barX, cy)
-                                val barBot = lum(barX, (cy + rInner).coerceIn(0, zh - 1))
-                                val avgBar = (barTop + barMid + barBot) / 3f
-
-                                // 三角形主體 (cx - rInner * 0.4f)
-                                val triMid = lum((cx - rInner * 0.4f).toInt().coerceIn(0, zw - 1), cy)
-
-                                var score = contrast
-                                if (avgBar > 130f && triMid > 130f) {
-                                    score += 50f
-                                }
-
-                                if (score > bestScore) {
-                                    bestScore = score
-                                    val zoneName = "右上角略過鈕(▶|)"
-                                    val boxR = max(r, 18)
-                                    bestCandidate = TemplateMatchResult(
-                                        score = score,
-                                        bounds = Rect(absX - boxR, absY - boxR, absX + boxR, absY + boxR),
-                                        label = zoneName
-                                    )
-                                }
-                            }
-                        }
-                    }
-                    cx += step
-                }
-                cy += step
-            }
-        }
-        bestCandidate
-    }
 }

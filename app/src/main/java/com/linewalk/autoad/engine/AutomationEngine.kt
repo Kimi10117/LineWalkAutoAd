@@ -2522,7 +2522,7 @@ class AutomationEngine private constructor(private val context: Context) {
         maxLines: Int = 1500,
         deviceModel: String = "${Build.MANUFACTURER} ${Build.MODEL}".trim(),
         osVersion: String = "Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})",
-        appVersion: String = "v${try { com.linewalk.autoad.BuildConfig.VERSION_NAME } catch (_: Exception) { "1.15.27" }}"
+        appVersion: String = "v${try { com.linewalk.autoad.BuildConfig.VERSION_NAME } catch (_: Exception) { "1.15.28" }}"
     ): String {
         val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
         val startTimeStr = dateFormat.format(sessionStartTime)
@@ -2566,7 +2566,7 @@ class AutomationEngine private constructor(private val context: Context) {
     fun getFullLogsFormatted(
         deviceModel: String = "${Build.MANUFACTURER} ${Build.MODEL}".trim(),
         osVersion: String = "Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})",
-        appVersion: String = "v${try { com.linewalk.autoad.BuildConfig.VERSION_NAME } catch (_: Exception) { "1.15.27" }}"
+        appVersion: String = "v${try { com.linewalk.autoad.BuildConfig.VERSION_NAME } catch (_: Exception) { "1.15.28" }}"
     ): String {
         return getExportLogsFormatted(
             maxLines = Int.MAX_VALUE,
