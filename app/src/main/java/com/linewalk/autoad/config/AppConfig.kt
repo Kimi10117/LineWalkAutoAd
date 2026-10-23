@@ -61,9 +61,9 @@ class AppConfig(context: Context) {
         get() = prefs.getLong(KEY_LOOP_INTERVAL_MS, 1200L).coerceIn(1000L, 1800L)
         set(value) = prefs.edit().putLong(KEY_LOOP_INTERVAL_MS, value.coerceIn(1000L, 1800L)).apply()
 
-    /** 廣告單次最長等待秒數，超過則觸發防卡死返回鍵 (預設 32 秒) */
+    /** 廣告單次最長等待秒數，超過則觸發防卡死返回鍵 (預設 48 秒，容許 30~35 秒完整影音播放與 5 秒結算卡片) */
     var maxAdWaitSeconds: Int
-        get() = prefs.getInt(KEY_MAX_AD_WAIT_SEC, 32)
+        get() = prefs.getInt(KEY_MAX_AD_WAIT_SEC, 48)
         set(value) = prefs.edit().putInt(KEY_MAX_AD_WAIT_SEC, value.coerceIn(20, 180)).apply()
 
     /** 圖像模板匹配相似度門檻 (0.70f ~ 0.95f，預設 0.80f) */

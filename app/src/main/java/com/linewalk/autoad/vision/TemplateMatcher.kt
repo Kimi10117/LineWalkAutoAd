@@ -464,13 +464,14 @@ class TemplateMatcher {
 
     /**
      * 高精度免樣本幾何角落「X」偵測器：
-     * 支援細線條 X（含 3x3 鄰域容錯）與深色圓底白 X / 淺色圓底黑 X，
-     * 掃描畫面右上角 (x=75%~98%, y=2%~18%) 與左上角 (x=2%~25%, y=2%~18%)。
+     * 支援細線條 X（含 3x3 鄰域容錯）與深色圓底白 X / 淺色圓底黑 X。
+     * 預設僅掃描畫面右上角 (x=75%~98%, y=4.2%~24%)，嚴格排除左上角靜音喇叭/贊助商圖示以杜絕誤判。
      */
     suspend fun detectCornerGeometricX(
         screenBitmap: Bitmap,
         blacklistedCoord: ((Int, Int) -> Boolean)? = null,
-        isRelaxed: Boolean = false
+        isRelaxed: Boolean = false,
+        includeLeftZone: Boolean = false
     ): TemplateMatchResult? = withContext(Dispatchers.Default) {
         val sw = screenBitmap.width
         val sh = screenBitmap.height
@@ -480,12 +481,14 @@ class TemplateMatcher {
         val tol = max(1, sw / 360)
 
         val topLimitY = max((sh * 0.042f).toInt(), 40)
-        val searchZones = listOf(
-            // 右上角 (避開螢幕最頂部系統狀態列 y < 3.8%，涵蓋 y in 4.2%..24%)
-            Rect((sw * 0.75f).toInt(), topLimitY, (sw * 0.98f).toInt(), (sh * 0.24f).toInt()),
-            // 左上角 (廣告左上角關閉鈕，避開狀態列 y in 4.2%..24%)
-            Rect((sw * 0.02f).toInt(), topLimitY, (sw * 0.18f).toInt(), (sh * 0.24f).toInt())
+        val searchZones = mutableListOf(
+            // 右上角 (唯一標準廣告關閉鈕位置，避開螢幕最頂部系統狀態列 y < 3.8%，涵蓋 y in 4.2%..24%)
+            Rect((sw * 0.75f).toInt(), topLimitY, (sw * 0.98f).toInt(), (sh * 0.24f).toInt())
         )
+        if (includeLeftZone) {
+            // 左上角 (僅在特定非影音純靜態彈窗且明確指定時才納入掃描，影音廣告嚴格禁止以防誤判喇叭靜音圖示)
+            searchZones.add(Rect((sw * 0.02f).toInt(), topLimitY, (sw * 0.18f).toInt(), (sh * 0.24f).toInt()))
+        }
 
         var bestCandidate: TemplateMatchResult? = null
         var bestRawScore = if (isRelaxed) 65f else 82f
@@ -618,7 +621,8 @@ class TemplateMatcher {
     /**
      * 高精度免樣本幾何角落「▶|」略過圖示偵測器 (Universal Fast-Forward / Skip Ad Detector)：
      * 專門偵測 Meta Audience Network ("Ad 1 of 2", "Ads served by Meta")、Google AdMob、
-     * Unity Ads 等現代影音廣告在右上角/左上角顯示之深底圓形「▶|」快速略過/跳過圖示。
+     * Unity Ads 等現代影音廣告在右上角唯一合法位置顯示之深底圓形「▶|」快速略過圖示。
+     * 嚴格禁止掃描左上角（左上角為聲音開關/喇叭圖示，其梯形與音波極易產生假陽性特徵）。
      */
     suspend fun detectCornerSkipButton(
         screenBitmap: Bitmap,
@@ -632,10 +636,8 @@ class TemplateMatcher {
 
         val topLimitY = max((sh * 0.042f).toInt(), 40)
         val searchZones = listOf(
-            // 右上角 (最常見，涵蓋 y in 4.2%..20%)
-            Rect((sw * 0.75f).toInt(), topLimitY, (sw * 0.98f).toInt(), (sh * 0.20f).toInt()),
-            // 左上角 (少數廣告右上為靜音時可能置於左上，涵蓋 y in 4.2%..20%)
-            Rect((sw * 0.02f).toInt(), topLimitY, (sw * 0.22f).toInt(), (sh * 0.20f).toInt())
+            // 右上角 (影音廣告快速略過鈕唯一標準位置，涵蓋 y in 4.2%..24% 支援劇院模式)
+            Rect((sw * 0.75f).toInt(), topLimitY, (sw * 0.98f).toInt(), (sh * 0.24f).toInt())
         )
 
         var bestCandidate: TemplateMatchResult? = null
@@ -711,7 +713,7 @@ class TemplateMatcher {
 
                                 if (score > bestScore) {
                                     bestScore = score
-                                    val zoneName = if (zoneIdx == 0) "右上角略過鈕(▶|)" else "左上角略過鈕(▶|)"
+                                    val zoneName = "右上角略過鈕(▶|)"
                                     val boxR = max(r, 18)
                                     bestCandidate = TemplateMatchResult(
                                         score = score,

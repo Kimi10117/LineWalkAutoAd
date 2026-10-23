@@ -297,7 +297,7 @@ class AdCloserHandler(
                 blacklistedCoord = ::isInvalidOrBlacklisted
             )
             if (skipMatch != null) {
-                recordAndClick(service, skipMatch.bounds, allowBlacklist = false)
+                recordAndClick(service, skipMatch.bounds, allowBlacklist = true)
                 return AdStepResult.ClickedCloseOrSkip(skipMatch.label, skipMatch.bounds)
             }
         }
@@ -381,17 +381,18 @@ class AdCloserHandler(
             }
         }
 
-        // 8. 第三層辨識 B：啟動「高精度免樣本幾何角落 X 偵測器」（支援右上角/左上角圓底白 X 與細線 X）
+        // 8. 第三層辨識 B：啟動「高精度免樣本幾何角落 X 偵測器」（專注右上角圓底白 X 與細線 X）
         // 大幅加速：2 秒後即開始尋找角落 X；若播放已超過 8 秒或已獲得獎勵，啟動放寬模式 (isRelaxed) 偵測半透明 X！
         if (elapsedSec >= 2 || rewardGrantedOcr != null) {
             val isRelaxed = elapsedSec >= 8 || rewardGrantedOcr != null
             val geoMatch = templateMatcher.detectCornerGeometricX(
                 screenBitmap = screenBitmap,
                 blacklistedCoord = ::isInvalidOrBlacklisted,
-                isRelaxed = isRelaxed
+                isRelaxed = isRelaxed,
+                includeLeftZone = false
             )
             if (geoMatch != null) {
-                recordAndClick(service, geoMatch.bounds, allowBlacklist = false)
+                recordAndClick(service, geoMatch.bounds, allowBlacklist = true)
                 return AdStepResult.ClickedCloseOrSkip(geoMatch.label, geoMatch.bounds)
             }
         }
@@ -493,36 +494,13 @@ class AdCloserHandler(
             (sh * 0.230f).toInt()
         ))
 
-        // 3. 螢幕左上角關閉熱區 (若左上方為 Google Play / 商店推廣徽章，絕對避開以免誤跳轉應用商店)
-        val leftTopRect = Rect(
-            (sw * 0.03f).toInt(),
-            (sh * 0.052f).toInt(),
-            (sw * 0.14f).toInt(),
-            (sh * 0.105f).toInt()
-        )
-        val hasStoreBadgeOnLeft = ocrItems.any { item ->
-            val t = item.text.lowercase()
-            (t.contains("google") || t.contains("play") || t.contains("install") || t.contains("下載") || t.contains("安裝")) &&
-                item.bounds.centerY() < sh * 0.18f && item.bounds.centerX() < sw * 0.45f
-        }
-        if (!hasStoreBadgeOnLeft) {
-            targets.add("螢幕左上角熱區" to leftTopRect)
-        }
-
-        // 4. 內容左上角關閉熱區 (避開左側可能的商店徽章或懸浮窗)
-        val hasStoreBadgeOnContentLeft = ocrItems.any { item ->
-            val t = item.text.lowercase()
-            (t.contains("google") || t.contains("play") || t.contains("install")) &&
-                item.bounds.centerY() in (sh * 0.15f).toInt()..(sh * 0.28f).toInt() && item.bounds.centerX() < sw * 0.35f
-        }
-        if (!hasStoreBadgeOnContentLeft) {
-            targets.add("內容左上角熱區" to Rect(
-                (sw * 0.03f).toInt(),
-                (sh * 0.165f).toInt(),
-                (sw * 0.14f).toInt(),
-                (sh * 0.230f).toInt()
-            ))
-        }
+        // 3. 頂部右上安全熱區 (專門應對頂部邊緣微調關閉鈕)
+        targets.add("頂部右上熱區" to Rect(
+            (sw * 0.90f).toInt(),
+            (sh * 0.080f).toInt(),
+            (sw * 0.98f).toInt(),
+            (sh * 0.140f).toInt()
+        ))
 
         val target = targets[fallbackCornerCycle % targets.size]
         fallbackCornerCycle++
@@ -537,14 +515,15 @@ class AdCloserHandler(
         val pt = Point(rect.centerX(), rect.centerY())
         lastClickedPoint = pt
         clickedHistory.add(pt)
-        if (allowBlacklist) {
-            // 只有當同一區域 (半徑 65px 內) 在同支廣告中已被點擊滿 5 次仍未關閉廣告，才加入黑名單避免重複誤觸假 X
-            val nearbyClicks = clickedHistory.count { p ->
-                hypot((p.x - pt.x).toDouble(), (p.y - pt.y).toDouble()) < BLACKLIST_RADIUS_PX
-            }
-            if (nearbyClicks >= 5) {
-                blacklistedPoints.add(pt)
-            }
+        val nearbyClicks = clickedHistory.count { p ->
+            hypot((p.x - pt.x).toDouble(), (p.y - pt.y).toDouble()) < BLACKLIST_RADIUS_PX
+        }
+        if (allowBlacklist && nearbyClicks >= 3) {
+            // 同一區域 (半徑 65px 內) 在同支廣告中已被點擊滿 3 次仍未關閉，加入黑名單避免重複空點
+            blacklistedPoints.add(pt)
+        } else if (!allowBlacklist && nearbyClicks >= 5) {
+            // 即使是不輕易黑名單的目標，若點擊達 5 次仍未關閉廣告，為防止死循環亦強制加入黑名單
+            blacklistedPoints.add(pt)
         }
         closeClickCount++
         FloatingOverlayService.clickWithOverlayPassthrough(rect) {
