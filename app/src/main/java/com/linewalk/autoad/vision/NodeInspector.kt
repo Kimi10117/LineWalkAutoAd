@@ -2,6 +2,7 @@ package com.linewalk.autoad.vision
 
 import android.graphics.Rect
 import android.view.accessibility.AccessibilityNodeInfo
+import com.linewalk.autoad.config.AppConfig
 import com.linewalk.autoad.ui.FloatingOverlayService
 import java.util.ArrayDeque
 
