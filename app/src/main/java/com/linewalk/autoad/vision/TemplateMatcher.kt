@@ -538,14 +538,6 @@ class TemplateMatcher {
                         continue
                     }
 
-                    // R1/R2: 嚴格排除每日賓果關閉按鈕座標熱區 (x in 84%..98% sw && y in 8%..16% sh)
-                    val isBingoCloseZone = absX in (sw * 0.84f).toInt()..(sw * 0.98f).toInt() &&
-                        absY in (sh * 0.08f).toInt()..(sh * 0.16f).toInt()
-                    if (isBingoCloseZone) {
-                        cx += step
-                        continue
-                    }
-
                     if (blacklistedCoord?.invoke(absX, absY) != true) {
                         // 上下左右四個非對角扇區（圓形按鈕底色）必須亮度一致
                         val lTop = lum(cx, cy - r)

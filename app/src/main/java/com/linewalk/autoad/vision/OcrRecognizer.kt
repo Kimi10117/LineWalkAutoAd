@@ -269,24 +269,50 @@ class OcrRecognizer {
     }
 
     /**
-     * 判定是否處於 LINE 內部宣傳促銷全螢幕/半螢幕廣告 (如『還沒有邀請好友 實在太可惜了！』『獲得金幣的流程』)。
+     * 判定是否處於 LINE 內部宣傳促銷全螢幕/半螢幕廣告 (如『還沒有邀請好友 實在太可惜了！』『邀請好友 快來領取吧！！』『獲得金幣的流程』)。
      * 此類別為遊戲內跳出之推廣廣告，在觀看廣告前後或點擊廣告時皆可能出現，應立即點擊右上角 (X) 關閉。
      */
     fun isLineInHousePromoAd(items: List<OcrItem>): Boolean {
-        return items.any { item ->
+        var hasPromoKeyword = false
+        var hasInviteText = false
+        var hasCoinsOrRewardText = false
+
+        for (item in items) {
             val t = item.text.replace(" ", "")
-            t.contains("還沒有邀請") ||
-            t.contains("太可惜了") ||
-            t.contains("獲得金幣的流程") ||
-            t.contains("邀請好友吧") ||
-            t.contains("邀請任務觸發") ||
-            t.contains("都能獲得幣") ||
-            t.contains("完成邀請任務") ||
-            (t.contains("邀請好友") && items.any {
-                val o = it.text.replace(" ", "")
-                o.contains("流程") || o.contains("都能獲得") || o.contains("太可惜") || o.contains("10000")
-            })
+            if (t.contains("還沒有邀請") ||
+                t.contains("太可惜了") ||
+                t.contains("太可惜") ||
+                t.contains("獲得金幣的流程") ||
+                t.contains("快來領取") ||
+                t.contains("邀請好友吧") ||
+                t.contains("邀請任務觸發") ||
+                t.contains("都能獲得") ||
+                t.contains("雙方都") ||
+                t.contains("雙方") ||
+                t.contains("完成邀請任務") ||
+                t.contains("被邀請的好友") ||
+                t.contains("被邀請") ||
+                t.contains("邀請好友賺")
+            ) {
+                hasPromoKeyword = true
+            }
+
+            if (t.contains("邀請好友") || t.contains("邀請")) {
+                hasInviteText = true
+            }
+
+            if (t.contains("金幣") || t.contains("10000") || t.contains("000")) {
+                hasCoinsOrRewardText = true
+            }
         }
+
+        if (hasPromoKeyword) return true
+        if (hasInviteText && hasCoinsOrRewardText && items.any {
+            val t = it.text.replace(" ", "")
+            t.contains("領取") || t.contains("獲得") || t.contains("任務") || t.contains("流程") || t.contains("完成")
+        }) return true
+
+        return false
     }
 
     /**

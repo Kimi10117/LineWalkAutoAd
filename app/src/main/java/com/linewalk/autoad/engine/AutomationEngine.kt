@@ -681,6 +681,19 @@ class AutomationEngine private constructor(private val context: Context) {
             return
         }
 
+        // A0. 最優先檢查是否跳出 LINE 內部宣傳促銷全螢幕廣告（如『邀請好友 快來領取吧！！』『還沒有邀請好友 實在太可惜了！』）
+        if (ocrRecognizer.isLineInHousePromoAd(ocrItems)) {
+            nonGameScreenTicks = 0
+            val closeBtn = ocrRecognizer.getLineInHousePromoCloseButton(sw, sh)
+            appendLog("[廣告] 偵測到 LINE 宣傳廣告/促銷彈窗，點擊右上角 (X) 關閉視窗")
+            updateDetail("[關閉] 正在關閉宣傳廣告視窗...", "[關閉] 關閉宣傳廣告中...")
+            FloatingOverlayService.clickWithOverlayPassthrough(closeBtn) {
+                service.clickRect(closeBtn)
+            }
+            delay(500)
+            return
+        }
+
         // B. 檢查四大分頁下半部是否彈出領獎彈窗（優先點可用的『跳過廣告(糖果)』，其次點『紅利 15/60/x1 獲得』）！
         val popupAction = findPopupActionTarget(screenBitmap, ocrItems)
         if (popupAction != null) {
@@ -929,13 +942,8 @@ class AutomationEngine private constructor(private val context: Context) {
         val rewardTarget = bingoTask.findNextClaimableReward(screenBitmap, ocrItems, claimedBingoColumns)
         if (rewardTarget != null) {
             currentPhaseEmptyTicks = 0
-            val count = (bingoColumnRetryCount[rewardTarget.columnIndex] ?: 0) + 1
-            bingoColumnRetryCount[rewardTarget.columnIndex] = count
-            // 點擊後若重試>=2次，永久鎖定該欄位，防重複點擊死循環；DO NOT clear on every tick!
-            if (count >= 2) {
-                claimedBingoColumns.add(rewardTarget.columnIndex)
-            }
-            appendLog("[賓果] 點擊連線獎勵【${rewardTarget.label}】(第 $count 次點擊)！")
+            claimedBingoColumns.add(rewardTarget.columnIndex)
+            appendLog("[賓果] 點擊連線獎勵【${rewardTarget.label}】！")
             FloatingOverlayService.clickWithOverlayPassthrough(rewardTarget.bounds) {
                 service.clickRect(rewardTarget.bounds)
             }
@@ -1961,7 +1969,7 @@ class AutomationEngine private constructor(private val context: Context) {
             return
         }
 
-        if (isStillInSubDialog && popupRetryTicks >= 2) {
+        if (isStillInSubDialog && popupRetryTicks >= 1) {
             transitionTo(EngineState.IN_GAME_SCAN, "已領取獎勵，繼續彈窗內部巡邏...", "[巡邏] 檢查彈窗中...")
             return
         }
