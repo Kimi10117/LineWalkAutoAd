@@ -610,4 +610,100 @@ class TemplateMatcher {
         bestCandidate
     }
 
+    /**
+     * 偵測全螢幕影音廣告 (如 Meta Audience Network, AppLovin 等) 右上角的『快轉/略過按鈕』(▶| 或 >>)。
+     * 此類按鈕為深色圓形底圖內嵌高亮白色圖示，非純文字 OCR 所能辨識，亦無幾何 X 交叉特徵。
+     * 本偵測器精準計算右上角區域 (x in 84%..96.5%, y in 4.5%..11.5%) 之圓環底色與內部圖示高對比度，
+     * 能在廣告播放滿 4~5 秒略過鈕浮現時立即秒速點擊跳過廣告！
+     */
+    suspend fun detectCornerFastForwardSkip(
+        screenBitmap: Bitmap,
+        blacklistedCoord: ((Int, Int) -> Boolean)? = null
+    ): TemplateMatchResult? = withContext(Dispatchers.Default) {
+        val sw = screenBitmap.width
+        val sh = screenBitmap.height
+        val topLimitY = max((sh * 0.045f).toInt(), 45)
+        val bottomLimitY = (sh * 0.115f).toInt()
+        val leftLimitX = (sw * 0.84f).toInt()
+        val rightLimitX = (sw * 0.965f).toInt()
+
+        val rInner = max(4, (sw * 0.024f).toInt())
+        val rOuter = max(7, (sw * 0.042f).toInt())
+        val step = max(2, sw / 200)
+
+        val zw = rightLimitX - leftLimitX
+        val zh = bottomLimitY - topLimitY
+        if (zw <= rOuter * 2 || zh <= rOuter * 2) return@withContext null
+
+        val pixels = IntArray(zw * zh)
+        screenBitmap.getPixels(pixels, 0, zw, leftLimitX, topLimitY, zw, zh)
+
+        fun lum(x: Int, y: Int): Float {
+            val c = pixels[y * zw + x]
+            return 0.299f * ((c shr 16) and 0xFF) +
+                0.587f * ((c shr 8) and 0xFF) +
+                0.114f * (c and 0xFF)
+        }
+
+        var bestScore = 0f
+        var bestCandidate: TemplateMatchResult? = null
+
+        var cy = rOuter
+        while (cy < zh - rOuter) {
+            var cx = rOuter
+            while (cx < zw - rOuter) {
+                val absX = leftLimitX + cx
+                val absY = topLimitY + cy
+
+                if (blacklistedCoord?.invoke(absX, absY) != true) {
+                    var ringSum = 0f
+                    var ringMax = 0f
+                    for (i in 0 until 12) {
+                        val angle = i * (Math.PI / 6.0)
+                        val px = (cx + rOuter * kotlin.math.cos(angle)).toInt().coerceIn(0, zw - 1)
+                        val py = (cy + rOuter * kotlin.math.sin(angle)).toInt().coerceIn(0, zh - 1)
+                        val l = lum(px, py)
+                        ringSum += l
+                        if (l > ringMax) ringMax = l
+                    }
+                    val ringMean = ringSum / 12f
+
+                    if (ringMean < 115f && ringMax < 135f) {
+                        var innerMax = 0f
+                        var dy = -rInner
+                        while (dy <= rInner) {
+                            var dx = -rInner
+                            while (dx <= rInner) {
+                                if (dx * dx + dy * dy <= rInner * rInner) {
+                                    val px = (cx + dx).coerceIn(0, zw - 1)
+                                    val py = (cy + dy).coerceIn(0, zh - 1)
+                                    val l = lum(px, py)
+                                    if (l > innerMax) innerMax = l
+                                }
+                                dx += 2
+                            }
+                            dy += 2
+                        }
+
+                        val contrast = innerMax - ringMean
+                        if (innerMax > 175f && contrast > 85f) {
+                            if (contrast > bestScore) {
+                                bestScore = contrast
+                                val boxRadius = rOuter + 4
+                                bestCandidate = TemplateMatchResult(
+                                    score = (contrast / 180f).coerceIn(0.85f, 0.99f),
+                                    bounds = Rect(absX - boxRadius, absY - boxRadius, absX + boxRadius, absY + boxRadius),
+                                    label = "右上角略過鈕(▶|)"
+                                )
+                            }
+                        }
+                    }
+                }
+                cx += step
+            }
+            cy += step
+        }
+        bestCandidate
+    }
+
 }

@@ -358,6 +358,22 @@ class AdCloserHandler(
             return AdStepResult.ClickedCloseOrSkip("OCR[${explicitSkipOcr.text}]", explicitSkipOcr.bounds)
         }
 
+        // 4C. 【全螢幕快轉/略過按鈕 (▶| 或 >>) 圖示偵測器】
+        // 專門應對 Meta Audience Network 等現代廣告在右上角的圖形略過按鈕！
+        // 滿 4 秒後只要偵測到右上角略過按鈕浮現，無條件立即秒速點擊跳過廣告！
+        if (elapsedSec >= 4) {
+            val skipMatch = templateMatcher.detectCornerFastForwardSkip(
+                screenBitmap = screenBitmap,
+                blacklistedCoord = ::isInvalidOrBlacklisted
+            )
+            if (skipMatch != null) {
+                hasAdActuallyShown = true
+                lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
+                recordAndClick(service, skipMatch.bounds, allowBlacklist = true)
+                return AdStepResult.ClickedCloseOrSkip(skipMatch.label, skipMatch.bounds)
+            }
+        }
+
         // 5. 【倒數計時防護：無略過按鈕且倒數中時保持靜候】
         // 若畫面上未出現明確略過按鈕，且正在倒數計時（如「還有 15 秒」），嚴格保持靜候播放，絕不碰觸螢幕！
         val remainingSec = ocrRecognizer.detectAdCountdownSeconds(ocrItems, sh)
@@ -484,19 +500,26 @@ class AdCloserHandler(
                 return AdStepResult.WatchdogBackTriggered(elapsedSec, "重定向安全返回鍵")
             }
 
-            // 廣告播放末期 (30 秒以上或已獲得獎勵)：優先派發安全系統返回鍵！
-            if ((elapsedSec >= 30 || rewardGrantedOcr != null) && now - lastBackActionTimeMs >= 3000L) {
+            // 廣告已明確獲得獎勵：優先派發安全系統返回鍵關閉廣告回到遊戲！
+            if (rewardGrantedOcr != null && now - lastBackActionTimeMs >= 2500L) {
                 service.safeNavigateBack(allowInGame = true)
                 lastBackActionTimeMs = now
-                return AdStepResult.WatchdogBackTriggered(elapsedSec, "廣告結束安全返回鍵")
+                return AdStepResult.WatchdogBackTriggered(elapsedSec, "已獲獎勵安全返回鍵")
             }
 
-            // 備援盲點：僅在超過 42 秒且返回鍵未能關閉時，嘗試右上角熱區備援
-            if (now - lastFallbackCornerTimeMs >= 4000L && (elapsedSec >= 42 || rewardGrantedOcr != null)) {
-                val (label, targetRect) = getNextFallbackTarget(sw, sh, ocrItems)
-                lastFallbackCornerTimeMs = now
-                recordAndClick(service, targetRect, allowBlacklist = true)
-                return AdStepResult.WatchdogBackTriggered(elapsedSec, "備援盲點[$label]")
+            // 備援盲點與安全返回：僅在廣告播放超過 40 秒且無關閉鈕時觸發
+            if (elapsedSec >= 40) {
+                if (now - lastFallbackCornerTimeMs >= 3500L) {
+                    val (label, targetRect) = getNextFallbackTarget(sw, sh, ocrItems)
+                    lastFallbackCornerTimeMs = now
+                    recordAndClick(service, targetRect, allowBlacklist = true)
+                    return AdStepResult.WatchdogBackTriggered(elapsedSec, "備援盲點[$label]")
+                }
+                if (now - lastBackActionTimeMs >= 3500L) {
+                    service.safeNavigateBack(allowInGame = true)
+                    lastBackActionTimeMs = now
+                    return AdStepResult.WatchdogBackTriggered(elapsedSec, "超時安全返回鍵")
+                }
             }
         }
 
