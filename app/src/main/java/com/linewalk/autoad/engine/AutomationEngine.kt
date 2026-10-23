@@ -2120,9 +2120,11 @@ class AutomationEngine private constructor(private val context: Context) {
         // 絕對強制發送返回鍵、喚醒《LINE 散步趣》拉回前景並重置引擎狀態，絕不允許任何廣告造成卡死！
         val adElapsed = adCloserHandler.getElapsedSeconds()
         if (adElapsed >= config.maxAdWaitSeconds + 4) {
-            appendLog("[警報] 廣告播放達 ${adElapsed}s 超過上限 (${config.maxAdWaitSeconds}s)，強制喚醒散步趣拉回前景！")
-            service.safeNavigateBack()
-            delay(300)
+            appendLog("[警報] 廣告播放達 ${adElapsed}s 超過上限 (${config.maxAdWaitSeconds}s)，強制關閉廣告拉回散步趣！")
+            service.safeNavigateBack(minIntervalMs = 500L, allowInGame = true)
+            delay(500)
+            service.safeNavigateBack(minIntervalMs = 500L, allowInGame = true)
+            delay(500)
             service.bringAppToFront("com.linecorp.LGWKTW")
             delay(800)
             adWatchdogCooldownTicks = 4
@@ -2253,14 +2255,6 @@ class AutomationEngine private constructor(private val context: Context) {
                 updateDetail(
                     "[搜尋] 搜尋關閉 X 或略過按鈕 (已播 ${res.elapsedSec}s)...",
                     "[搜尋] 搜尋關閉鈕 (${res.elapsedSec}s)..."
-                )
-            }
-
-            is AdStepResult.WokeUpControls -> {
-                appendLog("[廣告] 廣告控制項自動隱藏中，已滑動螢幕喚醒略過/關閉按鈕 (${res.elapsedSec}s)！")
-                updateDetail(
-                    "[廣告] 喚醒略過按鈕中 (${res.elapsedSec}s)...",
-                    "[廣告] 喚醒按鈕..."
                 )
             }
         }

@@ -24,7 +24,6 @@ sealed class AdStepResult {
     data class ClickedCloseOrSkip(val sourceLabel: String, val bounds: Rect) : AdStepResult()
     data class ReturnedToGame(val confirmBounds: Rect?, val label: String) : AdStepResult()
     data class WatchdogBackTriggered(val elapsedSec: Int, val actionLabel: String = "返回鍵") : AdStepResult()
-    data class WokeUpControls(val elapsedSec: Int) : AdStepResult()
     data class ScanningAd(val elapsedSec: Int) : AdStepResult()
 }
 
@@ -52,7 +51,6 @@ class AdCloserHandler(
     private var lastClickedPoint: Point? = null
     private var lastBackActionTimeMs: Long = 0L
     private var lastFallbackCornerTimeMs: Long = 0L
-    private var lastWakeupSwipeTimeMs: Long = 0L
     private var fallbackCornerCycle: Int = 0
     private val clickedHistory = mutableListOf<Point>()
     private val blacklistedPoints = mutableListOf<Point>()
@@ -69,7 +67,6 @@ class AdCloserHandler(
             lastClickedPoint = null
             lastBackActionTimeMs = 0L
             lastFallbackCornerTimeMs = 0L
-            lastWakeupSwipeTimeMs = 0L
             fallbackCornerCycle = 0
             clickedHistory.clear()
             blacklistedPoints.clear()
@@ -121,7 +118,7 @@ class AdCloserHandler(
         val isAd = fgPkg != null && AppConfig.isAdPackage(fgPkg)
         val isGame = fgPkg != null && (AppConfig.isGamePackage(fgPkg) || fgPkg == "jp.naver.line.android")
         val isExternal = fgPkg != null && AppConfig.isRedirectPackage(fgPkg) && !isAd
-        val hasBrowserTitle = !isAd && ocrItems.any { item ->
+        val hasBrowserTitle = !isAd && !isGame && ocrItems.any { item ->
             val cy = item.bounds.centerY()
             cy < sh * 0.16f && (
                 item.text.contains("正在載入") ||
@@ -373,7 +370,6 @@ class AdCloserHandler(
         )
         if (remainingSec != null || rewardGrantedOcr != null) {
             hasAdActuallyShown = true
-            lastWakeupSwipeTimeMs = System.currentTimeMillis()
         }
         if (remainingSec != null && remainingSec > 1 && rewardGrantedOcr == null) {
             return AdStepResult.StillCountingDown(remainingSec, elapsedSec)
@@ -443,72 +439,72 @@ class AdCloserHandler(
             }
         }
 
-        // 8C. 【廣告控制項自動喚醒機制：對抗自動隱藏 UI 的影音/互動廣告】
-        // 當畫面未出現任何略過鈕、倒數計時或關閉按鈕時，代表播放器可能已自動淡出控制介面；
-        // 自動派發中央安全滑動手勢 (Swipe Up ~12%)，立即喚醒隱藏的「略過廣告」按鈕與控制項，且絕不觸發跳轉 Google Play！
         val now = System.currentTimeMillis()
-        if (remainingSec == null && elapsedSec in 5..45 && now - lastWakeupSwipeTimeMs >= 3000L) {
-            lastWakeupSwipeTimeMs = now
-            val startX = sw * 0.50f
-            val startY = sh * 0.62f
-            val endX = sw * 0.50f
-            val endY = sh * 0.50f
-            val swiped = service.performSwipe(startX, startY, endX, endY, durationMs = 200L)
-            if (swiped) {
-                return AdStepResult.WokeUpControls(elapsedSec)
+
+        // 7B. 廣告結束卡片 (End Card) 快速識別與安全返回：
+        // 現代全螢幕廣告 (如 Meta/Google Ads/Facebook) 播放完畢後會顯示純靜態結尾卡片 (如『Download Facebook from Meta』)，
+        // 此類卡片畫面上往往沒有 (X) 亦無倒數計時，需透過 Android 系統返回鍵安全關閉回到遊戲！
+        val isEndCard = elapsedSec >= 5 && remainingSec == null &&
+            ocrItems.any { item ->
+                val t = item.text
+                t.contains("Download", ignoreCase = true) ||
+                t.contains("Google Play", ignoreCase = true) ||
+                t.contains("Play 商店") ||
+                t.contains("Play商店") ||
+                t.contains("from Meta", ignoreCase = true) ||
+                t.contains("免費下載") ||
+                t.contains("立即遊玩") ||
+                t.contains("安裝")
+            } && ocrItems.any { item ->
+                val t = item.text
+                t.contains("Facebook", ignoreCase = true) ||
+                t.contains("Meta", ignoreCase = true) ||
+                t.contains("Google Play", ignoreCase = true) ||
+                t.contains("Play 商店") ||
+                t.contains("Download", ignoreCase = true) ||
+                t.contains("下載") ||
+                t.contains("安裝")
             }
+        if (isEndCard && now - lastBackActionTimeMs >= 2500L) {
+            hasAdActuallyShown = true
+            lastBackActionTimeMs = now
+            lastFallbackCornerTimeMs = now + 4000L
+            service.safeNavigateBack(allowInGame = true)
+            return AdStepResult.WatchdogBackTriggered(elapsedSec, "廣告結束卡片安全返回鍵")
         }
 
-        // 8B. 主動安全返回策略與熱區點擊（全面改用 safeNavigateBack，散步趣在前景時絕不發送返回鍵以免跳出至桌面）：
-        val isOutsideGame = !isGame && !isAd
-        val isSafeToBack = fgPkg != null && !isGame && !isAd
+        // 8B. 主動安全返回策略與熱區防護：
+        // 當廣告已播放超過 30 秒 (或已獲取獎勵)，且畫面仍未看見散步趣主畫面 (因為 line 264 已排除 isGameVisible)，
+        // 代表廣告播放已完成但未自動關閉。此時透過安全返回鍵 (allowInGame = true) 關閉廣告 Activity 最為安全，
+        // 絕不盲目點擊螢幕中央或廣告內容，杜絕誤跳轉至 Google Play 商店！
         if (remainingSec == null && elapsedSec >= 5) {
-            if (redirectCount > 0 && isSafeToBack) {
-                service.safeNavigateBack()
+            if (redirectCount > 0 && now - lastBackActionTimeMs >= 2500L) {
+                service.safeNavigateBack(allowInGame = true)
                 lastBackActionTimeMs = now
                 return AdStepResult.WatchdogBackTriggered(elapsedSec, "重定向安全返回鍵")
             }
 
-            // 盲點熱區：嚴格延遲至廣告播放末期 (42秒以上或已獲獎勵) 且非外部應用時才允許盲點角落！
-            // 絕不可在廣告播放前 42 秒盲點角落，否則會誤觸廣告畫面跳轉至 Google Play 商店！
-            if (!isOutsideGame && now - lastFallbackCornerTimeMs >= 3500L && (elapsedSec >= 42 || rewardGrantedOcr != null)) {
+            // 廣告播放末期 (30 秒以上或已獲得獎勵)：優先派發安全系統返回鍵！
+            if ((elapsedSec >= 30 || rewardGrantedOcr != null) && now - lastBackActionTimeMs >= 3000L) {
+                service.safeNavigateBack(allowInGame = true)
+                lastBackActionTimeMs = now
+                return AdStepResult.WatchdogBackTriggered(elapsedSec, "廣告結束安全返回鍵")
+            }
+
+            // 備援盲點：僅在超過 42 秒且返回鍵未能關閉時，嘗試右上角熱區備援
+            if (now - lastFallbackCornerTimeMs >= 4000L && (elapsedSec >= 42 || rewardGrantedOcr != null)) {
                 val (label, targetRect) = getNextFallbackTarget(sw, sh, ocrItems)
                 lastFallbackCornerTimeMs = now
                 recordAndClick(service, targetRect, allowBlacklist = true)
-                if (isSafeToBack) {
-                    service.safeNavigateBack()
-                    lastBackActionTimeMs = now
-                    return AdStepResult.WatchdogBackTriggered(elapsedSec, "盲點[$label]+安全返回")
-                } else {
-                    return AdStepResult.WatchdogBackTriggered(elapsedSec, "盲點[$label]")
-                }
-            }
-
-            if (isSafeToBack && (elapsedSec >= 42 || rewardGrantedOcr != null) && now - lastBackActionTimeMs >= 3000L) {
-                service.safeNavigateBack()
-                lastBackActionTimeMs = now
-                return AdStepResult.WatchdogBackTriggered(elapsedSec, "安全返回鍵")
+                return AdStepResult.WatchdogBackTriggered(elapsedSec, "備援盲點[$label]")
             }
         }
 
-        // 9. 防卡死 Watchdog：若單支廣告超過最大等待秒數 (預設 48 秒)，持續循環點擊各關閉熱區 (外部畫面僅發送安全返回鍵)
-        if (elapsedSec >= config.maxAdWaitSeconds) {
-            if (!isOutsideGame) {
-                val (label, targetRect) = getNextFallbackTarget(sw, sh, ocrItems)
-                lastFallbackCornerTimeMs = now
-                recordAndClick(service, targetRect, allowBlacklist = true)
-                if (isSafeToBack) {
-                    service.safeNavigateBack()
-                    lastBackActionTimeMs = now
-                    return AdStepResult.WatchdogBackTriggered(elapsedSec, "強效關閉[$label+安全返回]")
-                } else {
-                    return AdStepResult.WatchdogBackTriggered(elapsedSec, "強效關閉[$label]")
-                }
-            } else if (isSafeToBack && now - lastBackActionTimeMs >= 2000L) {
-                service.safeNavigateBack()
-                lastBackActionTimeMs = now
-                return AdStepResult.WatchdogBackTriggered(elapsedSec, "外部逾時安全返回鍵")
-            }
+        // 9. 防卡死 Watchdog：若單支廣告超過最大等待秒數 (預設 48 秒)，以安全返回鍵強制關閉廣告
+        if (elapsedSec >= config.maxAdWaitSeconds && now - lastBackActionTimeMs >= 2000L) {
+            service.safeNavigateBack(allowInGame = true)
+            lastBackActionTimeMs = now
+            return AdStepResult.WatchdogBackTriggered(elapsedSec, "超時安全返回鍵")
         }
 
         return AdStepResult.ScanningAd(elapsedSec)

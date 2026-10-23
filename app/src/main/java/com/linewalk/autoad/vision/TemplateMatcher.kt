@@ -482,8 +482,8 @@ class TemplateMatcher {
 
         val topLimitY = max((sh * 0.045f).toInt(), 45)
         val searchZones = mutableListOf(
-            // 右上角 (廣告標準關閉鈕位置，避開最頂部系統狀態列 y < 4.5%，涵蓋 y in 4.5%..24%)
-            Rect((sw * 0.75f).toInt(), topLimitY, (sw * 0.98f).toInt(), (sh * 0.24f).toInt())
+            // 右上角 (廣告標準關閉鈕位置，避開最頂部系統狀態列 y < 4.5%，涵蓋 y in 4.5%..16%)
+            Rect((sw * 0.75f).toInt(), topLimitY, (sw * 0.98f).toInt(), (sh * 0.16f).toInt())
         )
         if (includeLeftZone) {
             // 左上角 (Meta 輪播/插頁廣告關閉鈕唯一位置，涵蓋 x in 2%..20%)
