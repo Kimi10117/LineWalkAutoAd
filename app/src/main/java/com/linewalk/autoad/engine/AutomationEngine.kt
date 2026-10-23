@@ -186,6 +186,7 @@ class AutomationEngine private constructor(private val context: Context) {
     private var friendGiftOpenDrawerTicks = 0
     internal val claimedBingoColumns = mutableSetOf<Int>()
     internal val bingoColumnRetryCount = mutableMapOf<Int, Int>()
+    internal var bingoOpenCellRetryCount = 0
     private var currentPhaseEmptyTicks = 0
     internal var nonGameScreenTicks = 0
 
@@ -247,6 +248,7 @@ class AutomationEngine private constructor(private val context: Context) {
         isBingoCompleted = false
         claimedBingoColumns.clear()
         bingoColumnRetryCount.clear()
+        bingoOpenCellRetryCount = 0
         isLotteryCompleted = false
         hasClickedLotteryAdReward = false
         lotteryResultRewardWaitTicks = 0
@@ -733,6 +735,15 @@ class AutomationEngine private constructor(private val context: Context) {
         // D1. 優先檢查是否正在「每日賓果」彈窗
         if (bingoTask.isBingoDialogOpen(ocrItems, sh)) {
             nonGameScreenTicks = 0
+            if (isBingoCompleted) {
+                val closeBtn = bingoTask.getCloseButtonBounds(sw, sh)
+                appendLog("[賓果] 每日賓果已完成，點擊右上角 (X) 關閉視窗")
+                FloatingOverlayService.clickWithOverlayPassthrough(closeBtn) {
+                    service.clickRect(closeBtn)
+                }
+                delay(350)
+                return
+            }
             handleBingoDialog(service, screenBitmap, ocrItems, sw, sh)
             return
         }
@@ -936,9 +947,10 @@ class AutomationEngine private constructor(private val context: Context) {
     ) {
         // 1. 【使用者指示第 1 步】：必須先點擊完橘色「立即開啟賓果格」直到全部開完或冷卻！
         val openCellBtn = bingoTask.findOpenCellButton(screenBitmap, ocrItems, templateMatcher)
-        if (openCellBtn != null) {
+        if (openCellBtn != null && bingoOpenCellRetryCount < 2) {
             currentPhaseEmptyTicks = 0
-            appendLog("[目標]【每日賓果】先點擊「立即開啟賓果格」！")
+            bingoOpenCellRetryCount++
+            appendLog("[目標]【每日賓果】先點擊「立即開啟賓果格」！(嘗試: $bingoOpenCellRetryCount/2)")
             FloatingOverlayService.clickWithOverlayPassthrough(openCellBtn) {
                 service.clickRect(openCellBtn)
             }
@@ -946,6 +958,9 @@ class AutomationEngine private constructor(private val context: Context) {
             popupRetryTicks = 0
             transitionTo(EngineState.TRIGGER_AD_POPUP, "已點擊「立即開啟賓果格」，等待開格或廣告結果...", "[賓果] 廣告開格中...")
             return
+        }
+        if (openCellBtn != null && bingoOpenCellRetryCount >= 2) {
+            appendLog("[賓果]「立即開啟賓果格」已達點擊上限 ($bingoOpenCellRetryCount/2，處於冷卻或已無格可開)，跳過開格直接檢查連線獎勵！")
         }
 
         // 2. 【使用者指示第 2 步】：開格點完後，再依序點擊所有連線獎勵 [Get]，直到沒有 Get 可點！
@@ -971,6 +986,7 @@ class AutomationEngine private constructor(private val context: Context) {
         }
 
         currentPhaseEmptyTicks = 0
+        bingoOpenCellRetryCount = 0
         isBingoCompleted = true
         // 保持 claimedBingoColumns 鎖定，不在此清空，防止關閉後立即重新開格誤觸！
         appendLog("[完成]【每日賓果】所有開格與 Get 領取皆已完成，點擊右上角 (X) 關閉視窗")
@@ -1700,6 +1716,7 @@ class AutomationEngine private constructor(private val context: Context) {
         isBingoCompleted = false
         claimedBingoColumns.clear()
         bingoColumnRetryCount.clear()
+        bingoOpenCellRetryCount = 0
         isLotteryCompleted = false
         hasClickedLotteryAdReward = false
         lotteryResultRewardWaitTicks = 0
@@ -1760,6 +1777,7 @@ class AutomationEngine private constructor(private val context: Context) {
             isBingoCompleted = false
             claimedBingoColumns.clear()
             bingoColumnRetryCount.clear()
+            bingoOpenCellRetryCount = 0
             isLotteryCompleted = false
             hasClickedLotteryAdReward = false
             lotteryResultRewardWaitTicks = 0
@@ -2522,6 +2540,9 @@ class AutomationEngine private constructor(private val context: Context) {
     private fun transitionTo(newState: EngineState, detail: String, safeOverlayText: String) {
         if (newState != EngineState.IN_GAME_SCAN) {
             nonGameScreenTicks = 0
+        }
+        if (newState == EngineState.AD_WATCHING) {
+            bingoOpenCellRetryCount = 0
         }
         _uiStatus.value = _uiStatus.value.copy(
             state = newState,

@@ -120,4 +120,46 @@ class Tier1_F4_DailyBingoPriorityTest {
         assertFalse("Must NOT click open cell when daily limit reached", action is BingoStepAction.ClickOpenCell)
         assertTrue("Must close dialog", action is BingoStepAction.CloseDialog)
     }
+
+    @Test
+    fun test06_isBingoDialogOpenRecognizesChineseCooldownAndOccludedText() {
+        val sh = MockFixtures.SCREEN_HEIGHT
+        val sw = MockFixtures.SCREEN_WIDTH
+        val occludedItems = listOf(
+            MockFixtures.createNormalizedOcrItem("每日賓果", 0.35f, 0.08f, 0.65f, 0.14f, sw, sh),
+            MockFixtures.createNormalizedOcrItem("鐘 01 秒", 0.65f, 0.16f, 0.85f, 0.20f, sw, sh),
+            MockFixtures.createNormalizedOcrItem("3 / 9 OPEN", 0.30f, 0.56f, 0.50f, 0.60f, sw, sh),
+            MockFixtures.createNormalizedOcrItem("立即開啟賓果格", 0.20f, 0.61f, 0.80f, 0.67f, sw, sh)
+        )
+        assertTrue("Daily bingo dialog must be recognized even with partially occluded cooldown text",
+            bingoTask.isBingoDialogOpen(occludedItems, sh))
+    }
+
+    @Test
+    fun test07_findOpenCellButtonRejectsChineseCooldownAndOccludedSeconds() {
+        val sh = MockFixtures.SCREEN_HEIGHT
+        val sw = MockFixtures.SCREEN_WIDTH
+        val mockBitmap = io.mockk.mockk<android.graphics.Bitmap>(relaxed = true)
+        io.mockk.every { mockBitmap.height } returns sh
+        io.mockk.every { mockBitmap.width } returns sw
+        val templateMatcher = com.linewalk.autoad.vision.TemplateMatcher()
+
+        // Case A: Full Chinese countdown "距離下次抽選還有 27 分鐘 01 秒"
+        val fullCooldownItems = listOf(
+            MockFixtures.createNormalizedOcrItem("每日賓果", 0.35f, 0.08f, 0.65f, 0.14f, sw, sh),
+            MockFixtures.createNormalizedOcrItem("距離下次抽選還有 27 分鐘 01 秒", 0.20f, 0.16f, 0.80f, 0.20f, sw, sh),
+            MockFixtures.createNormalizedOcrItem("立即開啟賓果格", 0.20f, 0.61f, 0.80f, 0.67f, sw, sh)
+        )
+        val resultA = bingoTask.findOpenCellButton(mockBitmap, fullCooldownItems, templateMatcher)
+        org.junit.Assert.assertNull("findOpenCellButton must return null when Chinese countdown is present", resultA)
+
+        // Case B: Partially occluded text "鐘 01 秒" on the right side of floating overlay
+        val partialCooldownItems = listOf(
+            MockFixtures.createNormalizedOcrItem("每日賓果", 0.35f, 0.08f, 0.65f, 0.14f, sw, sh),
+            MockFixtures.createNormalizedOcrItem("鐘 01 秒", 0.65f, 0.16f, 0.85f, 0.20f, sw, sh),
+            MockFixtures.createNormalizedOcrItem("立即開啟賓果格", 0.20f, 0.61f, 0.80f, 0.67f, sw, sh)
+        )
+        val resultB = bingoTask.findOpenCellButton(mockBitmap, partialCooldownItems, templateMatcher)
+        org.junit.Assert.assertNull("findOpenCellButton must return null when partial countdown '鐘 01 秒' is present", resultB)
+    }
 }

@@ -47,6 +47,7 @@ class BingoTask {
             if (t.contains("立即開啟賓果格") || t.contains("開啟賓果格") ||
                 (t.contains("立即開啟") && cy > (if (sh < 10000) sh * 0.40f else 600f)) ||
                 t.contains("距離下次抽選還有") || t.contains("距離下次") || t.contains("抽選還有") ||
+                t.contains("下次抽選") || (t.contains("鐘") && t.contains("秒")) || t.contains("OPEN") ||
                 (cy in (if (sh < 10000) (sh * 0.40f).toInt()..(sh * 0.85f).toInt() else 600..1800) && (
                     t.contains("今日上限") || t.contains("已達到今日上限") || t.contains("9/9") || t.contains("已全數開啟")
                 ))
@@ -129,16 +130,29 @@ class BingoTask {
         }
         if (hasReachedLimit) return null
 
-        // 0B. 嚴格檢查冷卻倒數：「距離下次抽選還有」、「\d{1,2}:\d{2}」等倒數計時文字
-        val timeRegex = Regex("""\d{1,2}:\d{2}""")
+        // 0B. 嚴格檢查冷卻倒數：「距離下次抽選還有」、「27分鐘01秒」、「\d{1,2}:\d{2}」等倒數計時文字
+        val standardTimeRegex = Regex("""\d{1,2}:\d{2}""")
+        val chineseTimeRegex = Regex("""\d+\s*小時|\d+\s*分鐘|\d+\s*分|\d+\s*秒""")
         val isCoolingDown = ocrItems.any { item ->
             val t = item.text.replace(" ", "")
             val cy = item.bounds.centerY()
+            // 1. 直接命中倒數關鍵詞
             t.contains("距離下次抽選還有") ||
             t.contains("距離下次") ||
+            t.contains("下次抽選") ||
             t.contains("抽選還有") ||
-            (cy in (sh * 0.48f).toInt()..(sh * 0.78f).toInt() && (
-                timeRegex.containsMatchIn(t) ||
+            (t.contains("分鐘") && (t.contains("秒") || t.contains("鐘") || chineseTimeRegex.containsMatchIn(t))) ||
+            (t.contains("鐘") && t.contains("秒")) ||
+            // 2. 在彈窗上半部 (cy < sh * 0.38f) 偵測到倒數時間或冷卻特徵（即使懸浮窗遮住左半「距離下次抽選還有」，右半「27分鐘01秒」或「鐘01秒」依然秒抓！）
+            (cy < (if (sh < 10000) sh * 0.38f else 1200f) && (
+                chineseTimeRegex.containsMatchIn(t) ||
+                standardTimeRegex.containsMatchIn(t) ||
+                ((t.contains("還有") || t.contains("抽選")) && !t.contains("每日") && !t.contains("賓果"))
+            )) ||
+            // 3. 在按鈕周圍 (cy in 0.40f..0.80f) 偵測到倒數計時文字
+            (cy in (if (sh < 10000) (sh * 0.40f).toInt()..(sh * 0.80f).toInt() else 600..2000) && (
+                chineseTimeRegex.containsMatchIn(t) ||
+                standardTimeRegex.containsMatchIn(t) ||
                 (t.contains("還有") && !t.contains("立即")) ||
                 (t.contains("抽選") && !t.contains("開啟") && !t.contains("立即"))
             ))
@@ -151,7 +165,8 @@ class BingoTask {
             val t = item.text.replace(" ", "")
             cy in (sh * 0.54f).toInt()..(sh * 0.74f).toInt() &&
             (t.contains("立即開啟") || t.contains("開啟賓果格") || t.contains("開啟賓果") || t.contains("立即開")) &&
-            !t.contains("還有") && !timeRegex.containsMatchIn(t) && !t.contains("今日上限") && !t.contains("9/9")
+            !t.contains("還有") && !standardTimeRegex.containsMatchIn(t) && !chineseTimeRegex.containsMatchIn(t) &&
+            !t.contains("今日上限") && !t.contains("9/9")
         }
         if (match != null) {
             val cy = match.bounds.centerY()
