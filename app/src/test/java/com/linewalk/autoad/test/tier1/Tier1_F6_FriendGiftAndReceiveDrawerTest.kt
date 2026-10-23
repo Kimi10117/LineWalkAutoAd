@@ -132,5 +132,36 @@ class Tier1_F6_FriendGiftAndReceiveDrawerTest {
         assertFalse("0/5 quota has no remaining quota", task.hasRemainingGiftQuota(ocrItems))
         assertTrue("0/5 quota must be recognized as quota full", task.isGiftQuotaFull(ocrItems))
     }
+
+    @Test
+    fun test08_sentCompletedDialogNotMisidentifiedAsLottery() {
+        val lotteryTask = com.linewalk.autoad.tasks.LotteryTask()
+        val friendGiftTask = com.linewalk.autoad.tasks.FriendGiftTask()
+        val sh = MockFixtures.SCREEN_HEIGHT
+        val sw = MockFixtures.SCREEN_WIDTH
+        val items = listOf(
+            MockFixtures.createNormalizedOcrItem("排行榜", 0.15f, 0.10f, 0.35f, 0.14f, sw, sh),
+            MockFixtures.createNormalizedOcrItem("贈送完畢", 0.30f, 0.26f, 0.70f, 0.32f, sw, sh),
+            MockFixtures.createNormalizedOcrItem("已贈送金幣給你自己和白貓。", 0.20f, 0.34f, 0.80f, 0.40f, sw, sh),
+            MockFixtures.createNormalizedOcrItem("Thank you for watching!", 0.20f, 0.46f, 0.80f, 0.52f, sw, sh),
+            MockFixtures.createNormalizedOcrItem("Tap to learn more about this product", 0.15f, 0.54f, 0.85f, 0.58f, sw, sh),
+            MockFixtures.createNormalizedOcrItem("關閉", 0.40f, 0.71f, 0.60f, 0.75f, sw, sh)
+        )
+
+        // Must NOT be recognized as lottery dialog
+        assertFalse("Sent completed dialog with embedded ad must NOT be recognized as lottery dialog",
+            lotteryTask.isLotteryDialogOpen(items, sh))
+
+        // Must be recognized as friend page
+        assertTrue("Sent completed dialog must be recognized as friend page",
+            friendGiftTask.isFriendsPage(items, sh))
+
+        // Must find [關閉] button
+        val mockBitmap = io.mockk.mockk<android.graphics.Bitmap>(relaxed = true)
+        io.mockk.every { mockBitmap.height } returns sh
+        io.mockk.every { mockBitmap.width } returns sw
+        val closeBtn = friendGiftTask.findSentCompletedCloseButton(mockBitmap, items)
+        org.junit.Assert.assertNotNull("findSentCompletedCloseButton must find close button", closeBtn)
+    }
 }
 

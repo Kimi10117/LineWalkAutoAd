@@ -27,14 +27,26 @@ class LotteryTask {
         }
         if (hasMainTabs) return false
 
+        // 嚴格排除好友頁面與送禮相關彈窗（「贈送完畢」、「已贈送」、「排行榜」、「好友清單」、「也送給自己」、「送自己」等絕不可誤判為抽抽樂！）
+        val hasFriendsFeature = ocrItems.any { item ->
+            val t = item.text.replace(" ", "")
+            t.contains("贈送完畢") || t.contains("已贈送") || t.contains("排行榜") ||
+            t.contains("好友清單") || t.contains("也送給自己") || t.contains("送自己") ||
+            (t.contains("好友") && !t.contains("分享給好友"))
+        }
+        if (hasFriendsFeature) return false
+
         val maxTopY = if (sh > 0) sh * 0.16f else 350f
         return ocrItems.any { item ->
             (item.bounds.centerY() < maxTopY && item.text.contains("抽抽樂")) ||
             item.text.contains("BIG") ||
             (item.text.contains("50張") && item.text.contains("抽")) ||
             item.text.contains("中獎囉") ||
-            item.text.contains("中獎") ||
-            item.text.contains("Thank you for watching")
+            (item.text.contains("中獎") && (item.text.contains("金幣") || item.text.contains("枚") || item.text.contains("囉") || item.text.contains("獲得"))) ||
+            (item.text.contains("Thank you for watching") && ocrItems.any { o ->
+                val ot = o.text.replace(" ", "")
+                ot.contains("中獎") || ot.contains("抽獎") || ot.contains("x1獲得") || ot.contains("1張") || ot.contains("枚金幣")
+            })
         }
     }
 
@@ -211,9 +223,18 @@ class LotteryTask {
         val sh = screenBitmap.height
 
         // 0. 嚴格安全前置檢查：必須處於抽抽樂中獎結果畫面！
+        val hasFriendsFeature = ocrItems.any { item ->
+            val t = item.text.replace(" ", "")
+            t.contains("贈送完畢") || t.contains("已贈送") || t.contains("排行榜") ||
+            t.contains("好友清單") || t.contains("也送給自己") || t.contains("送自己")
+        }
+        if (hasFriendsFeature) {
+            return null
+        }
+
         val hasLotteryResultContext = ocrItems.any { item ->
             val t = item.text.replace(" ", "")
-            t.contains("中獎囉") || t.contains("中獎") || t.contains("Thankyouforwatching") ||
+            t.contains("中獎囉") || (t.contains("中獎") && !t.contains("好友")) ||
             (t.contains("枚金幣") && t.contains("中獎")) ||
             (t.contains("金幣") && t.contains("中獎")) ||
             (item.bounds.centerY() > sh * 0.65f && (t.contains("分享給好友") || t.contains("分享"))) ||
