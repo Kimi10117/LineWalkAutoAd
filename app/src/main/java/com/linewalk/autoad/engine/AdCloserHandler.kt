@@ -94,9 +94,8 @@ class AdCloserHandler(
         if (FloatingOverlayService.isInsideOverlay(x, y)) return true
         if (currentScreenHeight > 0) {
             val sh = currentScreenHeight
-            // 排除最頂部系統狀態列、通知橫幅 (Discord、LINE 等) 與靈動膠囊 (y < 7.5% sh)
-            // 嚴格防止任何點擊誤觸系統頂部通知而跳出至其他 App！
-            if (y < (sh * 0.075f).toInt()) return true
+            // 排除最頂部系統狀態列 (y < 4.2% sh)，放行頂部角落關閉按鈕 (如 Meta 輪播左上角灰 X, y ~ 6.6% sh)
+            if (y < (sh * 0.042f).toInt()) return true
         }
         return blacklistedPoints.any { pt ->
             hypot((pt.x - x).toDouble(), (pt.y - y).toDouble()) < BLACKLIST_RADIUS_PX
@@ -363,15 +362,15 @@ class AdCloserHandler(
             }
         }
 
-        // 8. 第三層辨識 B：啟動「高精度免樣本幾何角落 X 偵測器」（專注右上角圓底白 X 與細線 X）
-        // 嚴格延遲至影片播放後期 (15秒以上) 或已獲獎勵 (rewardGrantedOcr != null) 才尋找角落 X，杜絕播放初期誤觸影片畫面！
-        if (elapsedSec >= 15 || rewardGrantedOcr != null) {
-            val isRelaxed = elapsedSec >= 20 || rewardGrantedOcr != null
+        // 8. 第三層辨識 B：啟動「高精度免樣本幾何角落 X 偵測器」（支援右上角圓底白 X 與左上角 Meta 灰 X）
+        // 只要不是正在倒數中且已播放達 5 秒以上，即可啟動角落 X 偵測（倒數中廣告已在 Step 4 攔截保護）！
+        if (elapsedSec >= 5 || rewardGrantedOcr != null) {
+            val isRelaxed = elapsedSec >= 15 || rewardGrantedOcr != null
             val geoMatch = templateMatcher.detectCornerGeometricX(
                 screenBitmap = screenBitmap,
                 blacklistedCoord = ::isInvalidOrBlacklisted,
                 isRelaxed = isRelaxed,
-                includeLeftZone = false
+                includeLeftZone = true
             )
             if (geoMatch != null) {
                 recordAndClick(service, geoMatch.bounds, allowBlacklist = true)
@@ -442,28 +441,28 @@ class AdCloserHandler(
     ): Pair<String, Rect> {
         val targets = mutableListOf<Pair<String, Rect>>()
 
-        // 1. 螢幕右上角關閉熱區 (標準全螢幕廣告，y in 8.0%..12.5% 嚴格避開 y < 7.5% 系統頂部通知與即時動態)
+        // 1. 螢幕右上角關閉熱區 (標準全螢幕廣告，y in 5.5%..11%)
         targets.add("螢幕右上角熱區" to Rect(
             (sw * 0.85f).toInt(),
-            (sh * 0.080f).toInt(),
+            (sh * 0.055f).toInt(),
             (sw * 0.97f).toInt(),
-            (sh * 0.125f).toInt()
+            (sh * 0.110f).toInt()
         ))
 
-        // 2. 內容右上角關閉熱區 (專門應對 16:9 / 4:3 劇院黑邊廣告，點擊黑邊下方的內容角落)
+        // 2. 螢幕左上角關閉熱區 (專門應對 Meta 輪播/插頁廣告，y in 5.0%..9.5%)
+        targets.add("螢幕左上角熱區" to Rect(
+            (sw * 0.04f).toInt(),
+            (sh * 0.050f).toInt(),
+            (sw * 0.14f).toInt(),
+            (sh * 0.095f).toInt()
+        ))
+
+        // 3. 內容右上角關閉熱區 (專門應對 16:9 / 4:3 劇院黑邊廣告)
         targets.add("內容右上角熱區" to Rect(
             (sw * 0.88f).toInt(),
             (sh * 0.165f).toInt(),
             (sw * 0.97f).toInt(),
             (sh * 0.230f).toInt()
-        ))
-
-        // 3. 頂部右上安全熱區 (專門應對頂部邊緣微調關閉鈕)
-        targets.add("頂部右上熱區" to Rect(
-            (sw * 0.90f).toInt(),
-            (sh * 0.080f).toInt(),
-            (sw * 0.98f).toInt(),
-            (sh * 0.140f).toInt()
         ))
 
         val target = targets[fallbackCornerCycle % targets.size]

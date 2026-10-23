@@ -480,14 +480,14 @@ class TemplateMatcher {
         val step = max(2, sw / 240)
         val tol = max(1, sw / 360)
 
-        val topLimitY = max((sh * 0.075f).toInt(), 70)
+        val topLimitY = max((sh * 0.045f).toInt(), 45)
         val searchZones = mutableListOf(
-            // 右上角 (唯一標準廣告關閉鈕位置，避開螢幕最頂部系統狀態列與通知橫幅 y < 7.5%，涵蓋 y in 7.5%..24%)
+            // 右上角 (廣告標準關閉鈕位置，避開最頂部系統狀態列 y < 4.5%，涵蓋 y in 4.5%..24%)
             Rect((sw * 0.75f).toInt(), topLimitY, (sw * 0.98f).toInt(), (sh * 0.24f).toInt())
         )
         if (includeLeftZone) {
-            // 左上角 (僅在特定非影音純靜態彈窗且明確指定時才納入掃描，影音廣告嚴格禁止以防誤判喇叭靜音圖示)
-            searchZones.add(Rect((sw * 0.02f).toInt(), topLimitY, (sw * 0.18f).toInt(), (sh * 0.24f).toInt()))
+            // 左上角 (Meta 輪播/插頁廣告關閉鈕唯一位置，涵蓋 x in 2%..20%)
+            searchZones.add(Rect((sw * 0.02f).toInt(), topLimitY, (sw * 0.20f).toInt(), (sh * 0.24f).toInt()))
         }
 
         var bestCandidate: TemplateMatchResult? = null
@@ -532,8 +532,8 @@ class TemplateMatcher {
                     val absX = zone.left + cx
                     val absY = zone.top + cy
 
-                    // 排除最頂部系統狀態列與通知橫幅 (boxTop < sh * 0.075f)
-                    if (absY - r < (sh * 0.075f).toInt()) {
+                    // 排除最頂部系統狀態列 (boxTop < sh * 0.040f)
+                    if (absY - r < (sh * 0.040f).toInt()) {
                         cx += step
                         continue
                     }
