@@ -2255,6 +2255,14 @@ class AutomationEngine private constructor(private val context: Context) {
                     "[搜尋] 搜尋關閉鈕 (${res.elapsedSec}s)..."
                 )
             }
+
+            is AdStepResult.WokeUpControls -> {
+                appendLog("[廣告] 廣告控制項自動隱藏中，已滑動螢幕喚醒略過/關閉按鈕 (${res.elapsedSec}s)！")
+                updateDetail(
+                    "[廣告] 喚醒略過按鈕中 (${res.elapsedSec}s)...",
+                    "[廣告] 喚醒按鈕..."
+                )
+            }
         }
     }
 

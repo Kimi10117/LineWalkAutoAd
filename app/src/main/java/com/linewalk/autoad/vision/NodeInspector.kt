@@ -72,8 +72,7 @@ class NodeInspector {
                         val desc = node.contentDescription?.toString()?.trim().orEmpty()
 
                         val idMatch = AD_CLOSE_VIEW_IDS.any { viewId.contains(it) } ||
-                            viewId.endsWith("/close") || viewId.endsWith(":id/close") ||
-                            viewId.endsWith("/skip") || viewId.endsWith(":id/skip")
+                            viewId.contains("skip") || viewId.contains("close")
                         val exactSymbolMatch = text in EXACT_CLOSE_SYMBOLS || desc in EXACT_CLOSE_SYMBOLS
                         val keywordMatch = AD_CLOSE_TEXT_KEYWORDS.any {
                             text.equals(it, ignoreCase = true) ||
@@ -120,10 +119,20 @@ class NodeInspector {
                 (cx > screenWidth * 0.72f || cx < screenWidth * 0.28f)
             val isExplicitSkip = (node.text?.contains("略過") == true) ||
                 (node.text?.contains("跳過") == true) ||
+                (node.text?.contains("略过") == true) ||
+                (node.text?.contains("跳过") == true) ||
                 (node.text?.contains("Skip", ignoreCase = true) == true) ||
+                (node.text?.contains(">>") == true) ||
+                (node.text?.contains("▶") == true) ||
                 (node.contentDesc?.contains("略過") == true) ||
                 (node.contentDesc?.contains("跳過") == true) ||
-                (node.contentDesc?.contains("Skip", ignoreCase = true) == true)
+                (node.contentDesc?.contains("略过") == true) ||
+                (node.contentDesc?.contains("跳过") == true) ||
+                (node.contentDesc?.contains("Skip", ignoreCase = true) == true) ||
+                (node.contentDesc?.contains("Close", ignoreCase = true) == true) ||
+                (node.contentDesc?.contains("關閉") == true) ||
+                (node.contentDesc?.contains("关闭") == true) ||
+                (node.viewId?.contains("skip", ignoreCase = true) == true)
             when {
                 isExplicitSkip -> 0
                 inTopCorner -> 1
@@ -204,7 +213,14 @@ class NodeInspector {
             "al_close",
             "vungle_close",
             "interstitial_close",
-            "ksad_video_close"
+            "ksad_video_close",
+            "skip_button",
+            "btn_skip",
+            "skip_ad",
+            "video_ad_skip",
+            "exo_skip",
+            "ad_skip",
+            "action_skip"
         )
 
         private val EXACT_CLOSE_SYMBOLS = setOf(

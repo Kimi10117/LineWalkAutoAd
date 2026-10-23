@@ -24,6 +24,7 @@ sealed class AdStepResult {
     data class ClickedCloseOrSkip(val sourceLabel: String, val bounds: Rect) : AdStepResult()
     data class ReturnedToGame(val confirmBounds: Rect?, val label: String) : AdStepResult()
     data class WatchdogBackTriggered(val elapsedSec: Int, val actionLabel: String = "返回鍵") : AdStepResult()
+    data class WokeUpControls(val elapsedSec: Int) : AdStepResult()
     data class ScanningAd(val elapsedSec: Int) : AdStepResult()
 }
 
@@ -51,6 +52,7 @@ class AdCloserHandler(
     private var lastClickedPoint: Point? = null
     private var lastBackActionTimeMs: Long = 0L
     private var lastFallbackCornerTimeMs: Long = 0L
+    private var lastWakeupSwipeTimeMs: Long = 0L
     private var fallbackCornerCycle: Int = 0
     private val clickedHistory = mutableListOf<Point>()
     private val blacklistedPoints = mutableListOf<Point>()
@@ -67,6 +69,7 @@ class AdCloserHandler(
             lastClickedPoint = null
             lastBackActionTimeMs = 0L
             lastFallbackCornerTimeMs = 0L
+            lastWakeupSwipeTimeMs = 0L
             fallbackCornerCycle = 0
             clickedHistory.clear()
             blacklistedPoints.clear()
@@ -274,7 +277,8 @@ class AdCloserHandler(
         }
 
         // 4. 【最高優先：檢查是否有明確的「略過/跳過」按鈕（一旦略過出現立即秒點，絕不拖延等廣告播完）】
-        // 4A. 無障礙節點樹中的明確略過按鈕 (node.text/desc 包含 略過/跳過/Skip)
+        // 4. 【最高優先：檢查是否有明確的「略過/跳過」按鈕（一旦略過出現立即秒點，絕不拖延等廣告播完）】
+        // 4A. 無障礙節點樹中的明確略過按鈕 (node.text/desc/id 包含 略過/跳過/Skip/Close)
         val rootNode = service.getSafeRootNode()
         val explicitSkipNode = nodeInspector.findAdCloseNode(
             root = rootNode,
@@ -283,15 +287,19 @@ class AdCloserHandler(
             blacklistedCoord = ::isInvalidOrBlacklisted,
             isFullScreenAd = true
         )?.takeIf { node ->
-            node.text?.contains("略過") == true ||
-            node.text?.contains("跳過") == true ||
-            node.text?.contains("Skip", ignoreCase = true) == true ||
-            node.contentDesc?.contains("略過") == true ||
-            node.contentDesc?.contains("跳過") == true ||
-            node.contentDesc?.contains("Skip", ignoreCase = true) == true
+            val txt = node.text?.toString().orEmpty()
+            val desc = node.contentDesc?.toString().orEmpty()
+            val vid = node.viewId?.toString().orEmpty()
+            txt.contains("略過") || txt.contains("跳過") || txt.contains("略过") || txt.contains("跳过") ||
+            txt.contains("Skip", ignoreCase = true) || txt.contains(">>") || txt.contains("▶") ||
+            desc.contains("略過") || desc.contains("跳過") || desc.contains("略过") || desc.contains("跳过") ||
+            desc.contains("Skip", ignoreCase = true) || desc.contains("Close", ignoreCase = true) ||
+            desc.contains("關閉") || desc.contains("关闭") ||
+            vid.contains("skip", ignoreCase = true) || vid.contains("close", ignoreCase = true)
         }
         if (explicitSkipNode != null) {
             hasAdActuallyShown = true
+            lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
             recordAndClick(service, explicitSkipNode.bounds)
             return AdStepResult.ClickedCloseOrSkip(explicitSkipNode.label, explicitSkipNode.bounds)
         }
@@ -303,18 +311,40 @@ class AdCloserHandler(
                 "可略過廣告",
                 "略過廣告",
                 "跳過廣告",
+                "可跳過廣告",
                 "廣告略過",
+                "廣告跳過",
                 "可略過",
-                "広告をスキップ",
+                "可跳過",
+                "略過",
+                "跳過",
+                "可跳过广告",
+                "跳过广告",
+                "可跳过",
+                "跳过",
+                "略过",
                 "Skip Ad",
                 "Skip ad",
                 "Skip Ads",
                 "Skip ads",
-                "略過",
-                "跳過",
+                "Skip Video",
+                "Skip video",
                 "Skip",
                 "SKIP",
-                "スキップ"
+                "點擊略過",
+                "點擊跳過",
+                "點此略過",
+                "按此略過",
+                "点击跳过",
+                "点击略过",
+                "略過影片",
+                "跳過影片",
+                "広告をスキップ",
+                "スキップ",
+                ">>|",
+                "▶|",
+                ">|",
+                ">>"
             ),
             screenWidth = sw,
             screenHeight = sh,
@@ -326,6 +356,7 @@ class AdCloserHandler(
             !isInvalidOrBlacklisted(explicitSkipOcr.bounds.centerX(), explicitSkipOcr.bounds.centerY())
         ) {
             hasAdActuallyShown = true
+            lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
             recordAndClick(service, explicitSkipOcr.bounds, allowBlacklist = true)
             return AdStepResult.ClickedCloseOrSkip("OCR[${explicitSkipOcr.text}]", explicitSkipOcr.bounds)
         }
@@ -342,6 +373,7 @@ class AdCloserHandler(
         )
         if (remainingSec != null || rewardGrantedOcr != null) {
             hasAdActuallyShown = true
+            lastWakeupSwipeTimeMs = System.currentTimeMillis()
         }
         if (remainingSec != null && remainingSec > 1 && rewardGrantedOcr == null) {
             return AdStepResult.StillCountingDown(remainingSec, elapsedSec)
@@ -350,6 +382,7 @@ class AdCloserHandler(
         // 6. 第一層辨識：檢查無障礙節點樹是否有一般廣告關閉節點 (非略過按鈕，如頂部角落 X 節點)
         val closeNode = nodeInspector.findAdCloseNode(rootNode, sw, sh, ::isInvalidOrBlacklisted, isFullScreenAd = true)
         if (closeNode != null) {
+            lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
             recordAndClick(service, closeNode.bounds)
             return AdStepResult.ClickedCloseOrSkip(closeNode.label, closeNode.bounds)
         }
@@ -367,6 +400,7 @@ class AdCloserHandler(
         if (fullScreenCloseOcr != null &&
             !isInvalidOrBlacklisted(fullScreenCloseOcr.bounds.centerX(), fullScreenCloseOcr.bounds.centerY())
         ) {
+            lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
             recordAndClick(service, fullScreenCloseOcr.bounds, allowBlacklist = true)
             return AdStepResult.ClickedCloseOrSkip("OCR[${fullScreenCloseOcr.text}]", fullScreenCloseOcr.bounds)
         }
@@ -383,6 +417,7 @@ class AdCloserHandler(
                 blacklistedCoord = ::isInvalidOrBlacklisted
             )
             if (tplMatch != null) {
+                lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
                 recordAndClick(service, tplMatch.bounds, allowBlacklist = true)
                 return AdStepResult.ClickedCloseOrSkip(tplMatch.label, tplMatch.bounds)
             }
@@ -402,13 +437,29 @@ class AdCloserHandler(
                 includeLeftZone = isMetaAd
             )
             if (geoMatch != null) {
+                lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
                 recordAndClick(service, geoMatch.bounds, allowBlacklist = true)
                 return AdStepResult.ClickedCloseOrSkip(geoMatch.label, geoMatch.bounds)
             }
         }
 
-        // 8B. 主動安全返回策略與熱區點擊（全面改用 safeNavigateBack，散步趣在前景時絕不發送返回鍵以免跳出至桌面）：
+        // 8C. 【廣告控制項自動喚醒機制：對抗自動隱藏 UI 的影音/互動廣告】
+        // 當畫面未出現任何略過鈕、倒數計時或關閉按鈕時，代表播放器可能已自動淡出控制介面；
+        // 自動派發中央安全滑動手勢 (Swipe Up ~12%)，立即喚醒隱藏的「略過廣告」按鈕與控制項，且絕不觸發跳轉 Google Play！
         val now = System.currentTimeMillis()
+        if (remainingSec == null && elapsedSec in 5..45 && now - lastWakeupSwipeTimeMs >= 3000L) {
+            lastWakeupSwipeTimeMs = now
+            val startX = sw * 0.50f
+            val startY = sh * 0.62f
+            val endX = sw * 0.50f
+            val endY = sh * 0.50f
+            val swiped = service.performSwipe(startX, startY, endX, endY, durationMs = 200L)
+            if (swiped) {
+                return AdStepResult.WokeUpControls(elapsedSec)
+            }
+        }
+
+        // 8B. 主動安全返回策略與熱區點擊（全面改用 safeNavigateBack，散步趣在前景時絕不發送返回鍵以免跳出至桌面）：
         val isOutsideGame = !isGame && !isAd
         val isSafeToBack = fgPkg != null && !isGame && !isAd
         if (remainingSec == null && elapsedSec >= 5) {
@@ -418,9 +469,9 @@ class AdCloserHandler(
                 return AdStepResult.WatchdogBackTriggered(elapsedSec, "重定向安全返回鍵")
             }
 
-            // 盲點熱區：嚴格延遲至廣告播放末期 (38秒以上或已獲獎勵) 且非外部應用時才允許盲點角落！
-            // 絕不可在廣告播放前 38 秒盲點角落，否則會誤觸廣告畫面跳轉至 Google Play 商店！
-            if (!isOutsideGame && now - lastFallbackCornerTimeMs >= 3000L && (elapsedSec >= 38 || rewardGrantedOcr != null)) {
+            // 盲點熱區：嚴格延遲至廣告播放末期 (42秒以上或已獲獎勵) 且非外部應用時才允許盲點角落！
+            // 絕不可在廣告播放前 42 秒盲點角落，否則會誤觸廣告畫面跳轉至 Google Play 商店！
+            if (!isOutsideGame && now - lastFallbackCornerTimeMs >= 3500L && (elapsedSec >= 42 || rewardGrantedOcr != null)) {
                 val (label, targetRect) = getNextFallbackTarget(sw, sh, ocrItems)
                 lastFallbackCornerTimeMs = now
                 recordAndClick(service, targetRect, allowBlacklist = true)
@@ -433,19 +484,19 @@ class AdCloserHandler(
                 }
             }
 
-            if (isSafeToBack && (elapsedSec >= 38 || rewardGrantedOcr != null) && now - lastBackActionTimeMs >= 3000L) {
+            if (isSafeToBack && (elapsedSec >= 42 || rewardGrantedOcr != null) && now - lastBackActionTimeMs >= 3000L) {
                 service.safeNavigateBack()
                 lastBackActionTimeMs = now
                 return AdStepResult.WatchdogBackTriggered(elapsedSec, "安全返回鍵")
             }
         }
 
-        // 9. 防卡死 Watchdog：若單支廣告超過最大等待秒數 (預設 32 秒)，持續循環點擊各關閉熱區 (外部畫面僅發送安全返回鍵)
+        // 9. 防卡死 Watchdog：若單支廣告超過最大等待秒數 (預設 48 秒)，持續循環點擊各關閉熱區 (外部畫面僅發送安全返回鍵)
         if (elapsedSec >= config.maxAdWaitSeconds) {
             if (!isOutsideGame) {
                 val (label, targetRect) = getNextFallbackTarget(sw, sh, ocrItems)
                 lastFallbackCornerTimeMs = now
-                recordAndClick(service, targetRect, allowBlacklist = false)
+                recordAndClick(service, targetRect, allowBlacklist = true)
                 if (isSafeToBack) {
                     service.safeNavigateBack()
                     lastBackActionTimeMs = now
@@ -478,11 +529,11 @@ class AdCloserHandler(
             (sh * 0.110f).toInt()
         ))
 
-        // 2. 螢幕左上角關閉熱區 (專門應對 Meta 輪播/插頁廣告，y in 5.0%..9.5%)
+        // 2. 螢幕左上角關閉熱區 (專門應對 Meta 輪播/插頁廣告，x in 6.5%..15.5%，避開邊緣 0~5% 防誤觸 Samsung 快捷列)
         targets.add("螢幕左上角熱區" to Rect(
-            (sw * 0.04f).toInt(),
+            (sw * 0.065f).toInt(),
             (sh * 0.050f).toInt(),
-            (sw * 0.14f).toInt(),
+            (sw * 0.155f).toInt(),
             (sh * 0.095f).toInt()
         ))
 
