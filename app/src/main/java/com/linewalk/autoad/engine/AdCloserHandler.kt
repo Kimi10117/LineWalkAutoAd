@@ -383,8 +383,6 @@ class AdCloserHandler(
 
         // 8B. 主動安全返回策略與熱區點擊（全面改用 safeNavigateBack，散步趣在前景時絕不發送返回鍵以免跳出至桌面）：
         val now = System.currentTimeMillis()
-        val isAd = AppConfig.isAdPackage(fgPkg)
-        val isGame = AppConfig.isGamePackage(fgPkg) || (fgPkg in config.targetGamePackages && fgPkg != "jp.naver.line.android")
         val isOutsideGame = !isGame && !isAd
         val isSafeToBack = fgPkg != null && !isGame && !isAd
         if (remainingSec == null && elapsedSec >= 5) {
