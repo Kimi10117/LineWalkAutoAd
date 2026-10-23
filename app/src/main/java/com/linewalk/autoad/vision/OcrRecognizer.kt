@@ -295,9 +295,9 @@ class OcrRecognizer {
     fun getLineInHousePromoCloseButton(sw: Int, sh: Int): Rect {
         return Rect(
             (sw * 0.86f).toInt(),
-            (sh * 0.065f).toInt(),
+            (sh * 0.080f).toInt(),
             (sw * 0.98f).toInt(),
-            (sh * 0.13f).toInt()
+            (sh * 0.135f).toInt()
         )
     }
 
@@ -586,6 +586,14 @@ class OcrRecognizer {
             val regexMatch = COUNTDOWN_REGEX.find(t)
             if (regexMatch != null) {
                 val sec = regexMatch.groupValues.drop(1).firstOrNull { it.isNotEmpty() }?.toIntOrNull()
+                if (sec != null && sec in 1..60) {
+                    return sec
+                }
+            }
+            // 支援頂部兩側角落純數字圓圈倒數計時 (如 15、25 等)
+            val trimmed = t.trim()
+            if (trimmed.length in 1..2 && trimmed.all { it.isDigit() }) {
+                val sec = trimmed.toIntOrNull()
                 if (sec != null && sec in 1..60) {
                     return sec
                 }

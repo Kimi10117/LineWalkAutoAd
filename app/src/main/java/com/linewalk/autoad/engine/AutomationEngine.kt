@@ -2058,16 +2058,6 @@ class AutomationEngine private constructor(private val context: Context) {
             return
         }
 
-        // 檢查是否彈出 LINE 內部宣傳促銷全螢幕廣告 (如『還沒有邀請好友 實在太可惜了！』『獲得金幣的流程』)
-        if (ocrRecognizer.isLineInHousePromoAd(ocrItems)) {
-            val promoClose = ocrRecognizer.getLineInHousePromoCloseButton(sw, sh)
-            appendLog("[廣告] 廣告播放期間偵測到 LINE 宣傳廣告/促銷彈窗，點擊右上角 (X) 關閉！")
-            FloatingOverlayService.clickWithOverlayPassthrough(promoClose) {
-                service.clickRect(promoClose)
-            }
-            delay(500)
-            return
-        }
 
         // 0. 全域廣告超時絕對防護 (Global Ad Timeout Watchdog)：
         // 無論後續辨識回傳何種狀態，若單支廣告已播放達 (maxAdWaitSeconds + 4 秒，預設 36 秒) 仍未結束，
@@ -2522,7 +2512,7 @@ class AutomationEngine private constructor(private val context: Context) {
         maxLines: Int = 1500,
         deviceModel: String = "${Build.MANUFACTURER} ${Build.MODEL}".trim(),
         osVersion: String = "Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})",
-        appVersion: String = "v${try { com.linewalk.autoad.BuildConfig.VERSION_NAME } catch (_: Exception) { "1.15.28" }}"
+        appVersion: String = "v${try { com.linewalk.autoad.BuildConfig.VERSION_NAME } catch (_: Exception) { "1.15.29" }}"
     ): String {
         val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
         val startTimeStr = dateFormat.format(sessionStartTime)
@@ -2566,7 +2556,7 @@ class AutomationEngine private constructor(private val context: Context) {
     fun getFullLogsFormatted(
         deviceModel: String = "${Build.MANUFACTURER} ${Build.MODEL}".trim(),
         osVersion: String = "Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})",
-        appVersion: String = "v${try { com.linewalk.autoad.BuildConfig.VERSION_NAME } catch (_: Exception) { "1.15.28" }}"
+        appVersion: String = "v${try { com.linewalk.autoad.BuildConfig.VERSION_NAME } catch (_: Exception) { "1.15.29" }}"
     ): String {
         return getExportLogsFormatted(
             maxLines = Int.MAX_VALUE,

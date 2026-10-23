@@ -155,10 +155,10 @@ class AdCloserHandler(
 
         // 1A-4. LINE 內部促銷宣傳全螢幕廣告 (如『還沒有邀請好友 實在太可惜了！』『獲得金幣的流程』)：
         // 屬於帶點廣告時可能彈出的促銷全螢幕廣告，絕不等待 30 秒倒數，立即點擊右上角圓形白底 (X) 關閉退回遊戲！
-        if (ocrRecognizer.isLineInHousePromoAd(ocrItems)) {
+        if (isGame && !isAd && ocrRecognizer.isLineInHousePromoAd(ocrItems)) {
             val promoCloseRect = ocrRecognizer.getLineInHousePromoCloseButton(sw, sh)
             hasAdActuallyShown = true
-            recordAndClick(service, promoCloseRect, allowBlacklist = false)
+            recordAndClick(service, promoCloseRect, allowBlacklist = true)
             return AdStepResult.ClickedCloseOrSkip("LINE宣傳廣告關閉(X)", promoCloseRect)
         }
 
@@ -269,18 +269,29 @@ class AdCloserHandler(
             }
         }
 
-        // 3. 廣告前保護期 (2.5 秒)：靜候播放
-        if (elapsedSec < 3) {
+        // 3. 廣告前保護期 (4 秒)：靜候播放
+        if (elapsedSec < 4) {
             return AdStepResult.WaitingGracePeriod(elapsedSec)
         }
 
-        // 4. 【最高優先級 - 略過廣告/關閉按鈕急先鋒 (Active Skip & Close Hunter)】
-        // 現代影音廣告（如 LINE チョッキンズ、Unity、Google AdMob）在播放 5 秒後即會出現「略過廣告 / Skip Ad / 広告をスキップ」按鈕，
-        // 但畫面上可能仍持續顯示「還有 25 秒」等影片總長倒數！
-        // 舊邏輯若先判斷 remainingSec > 1 立即返回，會導致整整 30 秒對略過按鈕視而不見！
-        // 因此必須在判定倒數前，先精確偵測無障礙節點與 OCR 畫面中是否已出現可點擊的「略過/跳過」按鈕！
+        // 4. 【最高原則：倒數計時中嚴禁任何點擊（落實等略過出現再點原則，復刻 v1.7.0 精髓）】
+        // 只要畫面正在倒數計時（如「還有 15 秒」、「20 秒後可略過」），助手嚴格保持靜候播放，絕不碰觸螢幕！
+        val remainingSec = ocrRecognizer.detectAdCountdownSeconds(ocrItems, sh)
+        val rewardGrantedOcr = ocrRecognizer.findMatch(
+            items = ocrItems,
+            keywords = OcrRecognizer.AD_REWARD_GRANTED_KEYWORDS,
+            screenWidth = sw,
+            screenHeight = sh,
+            roiNormalized = RectF(0f, 0f, 1f, 0.25f)
+        )
+        if (remainingSec != null || rewardGrantedOcr != null) {
+            hasAdActuallyShown = true
+        }
+        if (remainingSec != null && remainingSec > 1 && rewardGrantedOcr == null) {
+            return AdStepResult.StillCountingDown(remainingSec, elapsedSec)
+        }
 
-        // 4A. 無障礙節點樹優先檢查 (包含 16:9 劇院黑邊廣告內容頂部的略過按鈕)
+        // 5. 第一層辨識：檢查無障礙節點樹是否有官方廣告關閉/略過節點
         val rootNode = service.getSafeRootNode()
         val closeNode = nodeInspector.findAdCloseNode(rootNode, sw, sh, ::isInvalidOrBlacklisted, isFullScreenAd = true)
         if (closeNode != null) {
@@ -288,9 +299,7 @@ class AdCloserHandler(
             return AdStepResult.ClickedCloseOrSkip(closeNode.label, closeNode.bounds)
         }
 
-        // 4B. 全畫面 OCR 明確略過按鈕搜尋 (文字長度放寬至 16，避免截斷 "略過廣告 ▶|", "広告をスキップ", "Skip Ad")
-        // 注意：AD_CLOSE_EXCLUDE_KEYWORDS 已排除 "秒後"、"還有"，因此「5秒後可略過廣告」絕不會被誤判，
-        // 只有倒數結束變為真正可按的「略過廣告」時才會命中！
+        // 6. 第二層辨識：全畫面 OCR 明確略過按鈕搜尋 (文字長度放寬至 16，排除 >> 箭頭避免誤觸影片特效)
         val explicitSkipOcr = ocrRecognizer.findMatch(
             items = ocrItems,
             keywords = listOf(
@@ -305,14 +314,11 @@ class AdCloserHandler(
                 "跳過",
                 "Skip",
                 "SKIP",
-                ">>",
-                "＞＞",
-                "»",
                 "スキップ"
             ),
             screenWidth = sw,
             screenHeight = sh,
-            roiNormalized = RectF(0.01f, 0.05f, 0.99f, 0.96f),
+            roiNormalized = RectF(0.01f, 0.08f, 0.99f, 0.96f),
             excludeKeywords = OcrRecognizer.AD_CLOSE_EXCLUDE_KEYWORDS,
             maxTextLength = 16
         )
@@ -321,22 +327,6 @@ class AdCloserHandler(
         ) {
             recordAndClick(service, explicitSkipOcr.bounds, allowBlacklist = true)
             return AdStepResult.ClickedCloseOrSkip("OCR[${explicitSkipOcr.text}]", explicitSkipOcr.bounds)
-        }
-
-        // 5. 檢查畫面是否有明確的倒數計時（如「還有 15 秒」）或已獲得獎勵
-        val remainingSec = ocrRecognizer.detectAdCountdownSeconds(ocrItems, sh)
-        val rewardGrantedOcr = ocrRecognizer.findMatch(
-            items = ocrItems,
-            keywords = OcrRecognizer.AD_REWARD_GRANTED_KEYWORDS,
-            screenWidth = sw,
-            screenHeight = sh,
-            roiNormalized = RectF(0f, 0f, 1f, 0.25f)
-        )
-        if (remainingSec != null || rewardGrantedOcr != null) {
-            hasAdActuallyShown = true
-        }
-        if (remainingSec != null && remainingSec > 1 && rewardGrantedOcr == null) {
-            return AdStepResult.StillCountingDown(remainingSec, elapsedSec)
         }
 
         // 6. 一般全畫面關閉/確定/確認 OCR 辨識 (當倒數完畢或無倒數計時時)

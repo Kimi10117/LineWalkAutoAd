@@ -44,6 +44,17 @@ class NodeInspector {
                     val cx = rect.centerX()
                     val cy = rect.centerY()
 
+                    val nodePkg = node.packageName?.toString().orEmpty()
+                    // 嚴格拒絕來自外部非廣告/非遊戲應用（如 Discord、SystemUI 通知橫幅、Google Play）的任何節點！
+                    val isAllowedPackage = nodePkg.isEmpty() ||
+                        AppConfig.isAdPackage(nodePkg) ||
+                        AppConfig.isGamePackage(nodePkg) ||
+                        nodePkg == "jp.naver.line.android"
+                    if (!isAllowedPackage) continue
+
+                    // 嚴格排除頂部狀態列與通知橫幅 (y < 8% sh)
+                    if (cy < screenHeight * 0.08f) continue
+
                     // 排除懸浮窗本身、頂部中間 dynamicSpot 動態島
                     // 僅在非全螢幕廣告狀態 (如主畫面彈窗) 排除首頁橫幅廣告區間 (y: 12% ~ 36%)，全螢幕廣告時放行中間內容區的略過按鈕！
                     val inOverlay = FloatingOverlayService.isInsideOverlay(cx, cy)
@@ -59,7 +70,9 @@ class NodeInspector {
                         val text = node.text?.toString()?.trim().orEmpty()
                         val desc = node.contentDescription?.toString()?.trim().orEmpty()
 
-                        val idMatch = AD_CLOSE_VIEW_IDS.any { viewId.contains(it) }
+                        val idMatch = AD_CLOSE_VIEW_IDS.any { viewId.contains(it) } ||
+                            viewId.endsWith("/close") || viewId.endsWith(":id/close") ||
+                            viewId.endsWith("/skip") || viewId.endsWith(":id/skip")
                         val exactSymbolMatch = text in EXACT_CLOSE_SYMBOLS || desc in EXACT_CLOSE_SYMBOLS
                         val keywordMatch = AD_CLOSE_TEXT_KEYWORDS.any {
                             text.equals(it, ignoreCase = true) ||
@@ -177,9 +190,6 @@ class NodeInspector {
 
     companion object {
         private val AD_CLOSE_VIEW_IDS = listOf(
-            "close",
-            "skip",
-            "dismiss",
             "btn_close",
             "ad_close",
             "iv_close",
@@ -189,18 +199,21 @@ class NodeInspector {
             "tt_video_ad_close",
             "ia_tv_close_button",
             "al_skip",
-            "applovin",
-            "vungle_close"
+            "al_btn_close",
+            "al_close",
+            "vungle_close",
+            "interstitial_close",
+            "ksad_video_close"
         )
 
         private val EXACT_CLOSE_SYMBOLS = setOf(
-            "X", "x", "✕", "✖", "×", "╳", ">>", "≫", "＞"
+            "X", "x", "✕", "✖", "×", "╳"
         )
 
         private val AD_CLOSE_TEXT_KEYWORDS = listOf(
             "略過廣告", "跳過廣告", "關閉廣告", "離開廣告", "退出廣告", "廣告略過",
             "略過", "跳過", "關閉", "離開", "退出", "Skip Ad", "Skip ad", "Skip Ads",
-            "Skip", "Close", "Dismiss", "スキップ", "広告をスキップ", "閉じる"
+            "Skip", "Close", "スキップ", "広告をスキップ", "閉じる"
         )
 
         private val COUNTDOWN_HINTS = listOf(
