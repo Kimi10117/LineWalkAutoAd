@@ -863,8 +863,13 @@ class AutomationEngine private constructor(private val context: Context) {
         }
 
         // D3. 幾何角落 X 偵測器（如『邀請好友』右上角 X，或全螢幕廣告左上/右上角 X！）
-        // R2: 處於每日賓果彈窗時，嚴格禁止幾何 X 誤關閉賓果！
-        if (!bingoTask.isBingoDialogOpen(ocrItems, sh)) {
+        // 嚴格安全防護：處於任何功能子視窗（賓果、抽抽樂、任務、收禮、好友頁）時，嚴格禁止幾何 X 誤關閉彈窗！
+        val isAnySubDialog = bingoTask.isBingoDialogOpen(ocrItems, sh) ||
+                             lotteryTask.isLotteryDialogOpen(ocrItems, sh) ||
+                             missionTask.isMissionDialogOpen(ocrItems, sh, screenBitmap) ||
+                             receiveGiftTask.isReceiveGiftDialogOpen(ocrItems, sh) ||
+                             friendGiftTask.isFriendsPage(ocrItems, sh)
+        if (!isAnySubDialog) {
             val geoX = templateMatcher.detectCornerGeometricX(
                 screenBitmap = screenBitmap,
                 blacklistedCoord = { x, y ->
@@ -1029,9 +1034,14 @@ class AutomationEngine private constructor(private val context: Context) {
         sh: Int
     ) {
         val hasFriendsFeature = ocrItems.any { item ->
+            val cy = item.bounds.centerY()
+            val notInBottomNav = if (sh > 0) cy < sh * 0.88f else true
             val t = item.text.replace(" ", "")
-            t.contains("贈送完畢") || t.contains("已贈送") || t.contains("排行榜") ||
-            t.contains("好友清單") || t.contains("也送給自己") || t.contains("送自己")
+            notInBottomNav && (
+                t.contains("贈送完畢") || t.contains("已贈送") || t.contains("排行榜") ||
+                t.contains("好友清單") || t.contains("也送給自己") || t.contains("送自己") ||
+                t.contains("贈送金幣")
+            )
         }
         if (hasFriendsFeature) {
             return

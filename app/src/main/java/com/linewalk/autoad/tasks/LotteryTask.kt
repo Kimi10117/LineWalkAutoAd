@@ -28,15 +28,20 @@ class LotteryTask {
         if (hasMainTabs) return false
 
         // 嚴格排除好友頁面與送禮相關彈窗（「贈送完畢」、「已贈送」、「排行榜」、「好友清單」、「也送給自己」、「送自己」等絕不可誤判為抽抽樂！）
+        // 注意：絕對不可單憑「好友」關鍵字判斷，因為螢幕底部導覽列 (y > 0.88f) 永遠包含「好友」分頁標籤！
         val hasFriendsFeature = ocrItems.any { item ->
+            val cy = item.bounds.centerY()
+            val notInBottomNav = if (sh > 0) cy < sh * 0.88f else true
             val t = item.text.replace(" ", "")
-            t.contains("贈送完畢") || t.contains("已贈送") || t.contains("排行榜") ||
-            t.contains("好友清單") || t.contains("也送給自己") || t.contains("送自己") ||
-            (t.contains("好友") && !t.contains("分享給好友"))
+            notInBottomNav && (
+                t.contains("贈送完畢") || t.contains("已贈送") || t.contains("排行榜") ||
+                t.contains("好友清單") || t.contains("也送給自己") || t.contains("送自己") ||
+                t.contains("贈送金幣")
+            )
         }
         if (hasFriendsFeature) return false
 
-        val maxTopY = if (sh > 0) sh * 0.16f else 350f
+        val maxTopY = if (sh > 0) sh * 0.22f else 450f
         return ocrItems.any { item ->
             (item.bounds.centerY() < maxTopY && item.text.contains("抽抽樂")) ||
             item.text.contains("BIG") ||
@@ -158,7 +163,7 @@ class LotteryTask {
             val maxX = redPts.maxOf { it.x }
             val minY = redPts.minOf { it.y }
             val maxY = redPts.maxOf { it.y }
-            if (maxX - minX >= (sw * 0.30f).toInt() && maxY - minY in 12..(sh * 0.08f).toInt()) {
+            if (maxX - minX >= (sw * 0.30f).toInt() && maxY - minY in 12..(sh * 0.12f).toInt()) {
                 return Rect(minX, minY, maxX, maxY)
             }
         }
@@ -192,7 +197,7 @@ class LotteryTask {
             val maxX = yellowPts.maxOf { it.x }
             val minY = yellowPts.minOf { it.y }
             val maxY = yellowPts.maxOf { it.y }
-            if (maxX - minX >= (sw * 0.28f).toInt() && maxY - minY in 12..(sh * 0.08f).toInt()) {
+            if (maxX - minX >= (sw * 0.28f).toInt() && maxY - minY in 12..(sh * 0.12f).toInt()) {
                 return Rect(minX, minY, maxX, maxY)
             }
         }
@@ -224,9 +229,14 @@ class LotteryTask {
 
         // 0. 嚴格安全前置檢查：必須處於抽抽樂中獎結果畫面！
         val hasFriendsFeature = ocrItems.any { item ->
+            val cy = item.bounds.centerY()
+            val notInBottomNav = if (sh > 0) cy < sh * 0.88f else true
             val t = item.text.replace(" ", "")
-            t.contains("贈送完畢") || t.contains("已贈送") || t.contains("排行榜") ||
-            t.contains("好友清單") || t.contains("也送給自己") || t.contains("送自己")
+            notInBottomNav && (
+                t.contains("贈送完畢") || t.contains("已贈送") || t.contains("排行榜") ||
+                t.contains("好友清單") || t.contains("也送給自己") || t.contains("送自己") ||
+                t.contains("贈送金幣")
+            )
         }
         if (hasFriendsFeature) {
             return null

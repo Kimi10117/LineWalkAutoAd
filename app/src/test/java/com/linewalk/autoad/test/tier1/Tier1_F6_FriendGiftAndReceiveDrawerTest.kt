@@ -163,5 +163,43 @@ class Tier1_F6_FriendGiftAndReceiveDrawerTest {
         val closeBtn = friendGiftTask.findSentCompletedCloseButton(mockBitmap, items)
         org.junit.Assert.assertNotNull("findSentCompletedCloseButton must find close button", closeBtn)
     }
+
+    @Test
+    fun test09_lotteryDialogOpenWithBottomNavBarRecognizedCorrectly() {
+        val lotteryTask = com.linewalk.autoad.tasks.LotteryTask()
+        val friendGiftTask = com.linewalk.autoad.tasks.FriendGiftTask()
+        val templateMatcher = io.mockk.mockk<com.linewalk.autoad.vision.TemplateMatcher>(relaxed = true)
+        val sh = MockFixtures.SCREEN_HEIGHT
+        val sw = MockFixtures.SCREEN_WIDTH
+        val items = listOf(
+            MockFixtures.createNormalizedOcrItem("抽抽樂", 0.40f, 0.12f, 0.60f, 0.16f, sw, sh),
+            MockFixtures.createNormalizedOcrItem("BIG", 0.15f, 0.35f, 0.35f, 0.40f, sw, sh),
+            MockFixtures.createNormalizedOcrItem("50張 抽1次", 0.15f, 0.46f, 0.45f, 0.52f, sw, sh),
+            MockFixtures.createNormalizedOcrItem("5張 抽1次", 0.65f, 0.46f, 0.95f, 0.52f, sw, sh),
+            MockFixtures.createNormalizedOcrItem("免費抽1次", 0.65f, 0.53f, 0.95f, 0.58f, sw, sh),
+            // Bottom navigation tabs visible behind/below dialog:
+            MockFixtures.createNormalizedOcrItem("集點", 0.05f, 0.94f, 0.20f, 0.98f, sw, sh),
+            MockFixtures.createNormalizedOcrItem("好友", 0.30f, 0.94f, 0.45f, 0.98f, sw, sh),
+            MockFixtures.createNormalizedOcrItem("使用", 0.55f, 0.94f, 0.70f, 0.98f, sw, sh),
+            MockFixtures.createNormalizedOcrItem("精選", 0.80f, 0.94f, 0.95f, 0.98f, sw, sh)
+        )
+
+        // Must be recognized as lottery dialog despite bottom nav bar having "好友"
+        assertTrue("Lottery dialog with bottom nav bar visible must be recognized as lottery dialog",
+            lotteryTask.isLotteryDialogOpen(items, sh))
+
+        // Must NOT be recognized as friend page
+        assertFalse("Lottery dialog with bottom nav bar must NOT be recognized as friend page",
+            friendGiftTask.isFriendsPage(items, sh))
+
+        val mockBitmap = io.mockk.mockk<android.graphics.Bitmap>(relaxed = true)
+        io.mockk.every { mockBitmap.height } returns sh
+        io.mockk.every { mockBitmap.width } returns sw
+        io.mockk.every { templateMatcher.isPopupButtonDisabledGray(any(), any()) } returns false
+
+        val target = lotteryTask.findTargetDrawButton(mockBitmap, items, templateMatcher)
+        org.junit.Assert.assertNotNull("Target draw button must not be null", target)
+        org.junit.Assert.assertEquals("50張抽一次", target!!.first)
+    }
 }
 
