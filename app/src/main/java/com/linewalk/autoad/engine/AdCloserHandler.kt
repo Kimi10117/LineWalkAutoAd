@@ -132,6 +132,10 @@ class AdCloserHandler(
         if (isExternal || hasBrowserTitle) {
             hasAdActuallyShown = true
             markRecentRedirect()
+            lastClickedPoint?.let { badPt ->
+                blacklistedPoints.add(badPt)
+                lastClickedPoint = null
+            }
             service.navigateBack()
             return AdStepResult.RedirectRecovered(fgPkg ?: "InAppBrowser")
         }
@@ -358,23 +362,7 @@ class AdCloserHandler(
             return AdStepResult.ClickedCloseOrSkip("OCR[${explicitSkipOcr.text}]", explicitSkipOcr.bounds)
         }
 
-        // 4C. 【全螢幕快轉/略過按鈕 (▶| 或 >>) 圖示偵測器】
-        // 專門應對 Meta Audience Network 等現代廣告在右上角的圖形略過按鈕！
-        // 滿 4 秒後只要偵測到右上角略過按鈕浮現，無條件立即秒速點擊跳過廣告！
-        if (elapsedSec >= 4) {
-            val skipMatch = templateMatcher.detectCornerFastForwardSkip(
-                screenBitmap = screenBitmap,
-                blacklistedCoord = ::isInvalidOrBlacklisted
-            )
-            if (skipMatch != null) {
-                hasAdActuallyShown = true
-                lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
-                recordAndClick(service, skipMatch.bounds, allowBlacklist = true)
-                return AdStepResult.ClickedCloseOrSkip(skipMatch.label, skipMatch.bounds)
-            }
-        }
-
-        // 5. 【倒數計時防護：無略過按鈕且倒數中時保持靜候】
+        // 5. 【倒數計時防護：無明確略過按鈕且倒數中時嚴格保持靜候】
         // 若畫面上未出現明確略過按鈕，且正在倒數計時（如「還有 15 秒」），嚴格保持靜候播放，絕不碰觸螢幕！
         val remainingSec = ocrRecognizer.detectAdCountdownSeconds(ocrItems, sh)
         val rewardGrantedOcr = ocrRecognizer.findMatch(
@@ -389,6 +377,22 @@ class AdCloserHandler(
         }
         if (remainingSec != null && remainingSec > 1 && rewardGrantedOcr == null) {
             return AdStepResult.StillCountingDown(remainingSec, elapsedSec)
+        }
+
+        // 4C. 【全螢幕快轉/略過按鈕 (▶| 或 >>) 圖示偵測器】
+        // 專門應對 Meta Audience Network 等現代廣告在右上角的圖形略過按鈕！
+        // 僅在無倒數計時（或倒數完畢/已獲獎勵）且播放滿 8 秒後才允許觸發，嚴防誤點 AdChoices/音訊圖示跳轉 Google Play！
+        if ((elapsedSec >= 8 || rewardGrantedOcr != null) && (remainingSec == null || remainingSec <= 1 || rewardGrantedOcr != null)) {
+            val skipMatch = templateMatcher.detectCornerFastForwardSkip(
+                screenBitmap = screenBitmap,
+                blacklistedCoord = ::isInvalidOrBlacklisted
+            )
+            if (skipMatch != null) {
+                hasAdActuallyShown = true
+                lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
+                recordAndClick(service, skipMatch.bounds, allowBlacklist = true)
+                return AdStepResult.ClickedCloseOrSkip(skipMatch.label, skipMatch.bounds)
+            }
         }
 
         // 6. 第一層辨識：檢查無障礙節點樹是否有一般廣告關閉節點 (非略過按鈕，如頂部角落 X 節點)

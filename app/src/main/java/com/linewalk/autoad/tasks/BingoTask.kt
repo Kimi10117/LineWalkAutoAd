@@ -130,36 +130,12 @@ class BingoTask {
         }
         if (hasReachedLimit) return null
 
-        // 0B. 嚴格檢查冷卻倒數：「距離下次抽選還有」、「27分鐘01秒」、「\d{1,2}:\d{2}」等倒數計時文字
         val standardTimeRegex = Regex("""\d{1,2}:\d{2}""")
         val chineseTimeRegex = Regex("""\d+\s*小時|\d+\s*分鐘|\d+\s*分|\d+\s*秒""")
-        val isCoolingDown = ocrItems.any { item ->
-            val t = item.text.replace(" ", "")
-            val cy = item.bounds.centerY()
-            // 1. 直接命中倒數關鍵詞
-            t.contains("距離下次抽選還有") ||
-            t.contains("距離下次") ||
-            t.contains("下次抽選") ||
-            t.contains("抽選還有") ||
-            (t.contains("分鐘") && (t.contains("秒") || t.contains("鐘") || chineseTimeRegex.containsMatchIn(t))) ||
-            (t.contains("鐘") && t.contains("秒")) ||
-            // 2. 在彈窗上半部 (cy < sh * 0.38f) 偵測到倒數時間或冷卻特徵（即使懸浮窗遮住左半「距離下次抽選還有」，右半「27分鐘01秒」或「鐘01秒」依然秒抓！）
-            (cy < (if (sh < 10000) sh * 0.38f else 1200f) && (
-                chineseTimeRegex.containsMatchIn(t) ||
-                standardTimeRegex.containsMatchIn(t) ||
-                ((t.contains("還有") || t.contains("抽選")) && !t.contains("每日") && !t.contains("賓果"))
-            )) ||
-            // 3. 在按鈕周圍 (cy in 0.40f..0.80f) 偵測到倒數計時文字
-            (cy in (if (sh < 10000) (sh * 0.40f).toInt()..(sh * 0.80f).toInt() else 600..2000) && (
-                chineseTimeRegex.containsMatchIn(t) ||
-                standardTimeRegex.containsMatchIn(t) ||
-                (t.contains("還有") && !t.contains("立即")) ||
-                (t.contains("抽選") && !t.contains("開啟") && !t.contains("立即"))
-            ))
-        }
-        if (isCoolingDown) return null
 
         // 1. OCR 搜尋「立即開啟」/「開啟賓果格」/「開啟賓果」
+        // 注意：頂部綠色橫幅 (y < 0.35f) 的「距離下次抽選還有 XX 分鐘 XX 秒」為 30 分鐘新票券定時器，
+        // 絕不可作為按鈕冷卻的一票否決條件！只要畫面上存在有效橘色按鈕且非禁用灰色，優先回傳開格！
         val match = ocrItems.firstOrNull { item ->
             val cy = item.bounds.centerY()
             val t = item.text.replace(" ", "")
@@ -204,7 +180,17 @@ class BingoTask {
             val btnH = maxY - minY
             if (btnW > sw * 0.35f && btnH in 15..(sh * 0.12f).toInt()) {
                 val cy = (minY + maxY) / 2
-                if (!templateMatcher.isPopupButtonDisabledGray(screenBitmap, cy)) {
+                // 檢查按鈕本體區域內是否有冷卻倒數文字覆蓋
+                val hasCooldownOnButton = ocrItems.any { item ->
+                    val icy = item.bounds.centerY()
+                    val t = item.text.replace(" ", "")
+                    icy in (minY - 10)..(maxY + 10) && (
+                        chineseTimeRegex.containsMatchIn(t) ||
+                        standardTimeRegex.containsMatchIn(t) ||
+                        t.contains("還有") || t.contains("回復") || t.contains("還需")
+                    )
+                }
+                if (!hasCooldownOnButton && !templateMatcher.isPopupButtonDisabledGray(screenBitmap, cy)) {
                     return Rect(minX, minY, maxX, maxY)
                 }
             }
