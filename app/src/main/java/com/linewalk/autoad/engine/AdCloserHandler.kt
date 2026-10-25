@@ -379,10 +379,11 @@ class AdCloserHandler(
             return AdStepResult.StillCountingDown(remainingSec, elapsedSec)
         }
 
+        val isMetaAd = fgPkg == "com.facebook.katana" || fgPkg == "com.facebook.orca"
         // 4C. 【全螢幕快轉/略過按鈕 (▶| 或 >>) 圖示偵測器】
         // 專門應對 Meta Audience Network 等現代廣告在右上角的圖形略過按鈕！
-        // 僅在無倒數計時（或倒數完畢/已獲獎勵）且播放滿 8 秒後才允許觸發，嚴防誤點 AdChoices/音訊圖示跳轉 Google Play！
-        if ((elapsedSec >= 8 || rewardGrantedOcr != null) && (remainingSec == null || remainingSec <= 1 || rewardGrantedOcr != null)) {
+        // 嚴格限制：僅限 Meta 廣告容器且無倒數時觸發！Google/AdMob 等廣告右上角為 AdChoices(i) 或廣告主標籤，嚴禁觸發避免跳轉 Google Play！
+        if (isMetaAd && (elapsedSec >= 8 || rewardGrantedOcr != null) && (remainingSec == null || remainingSec <= 1 || rewardGrantedOcr != null)) {
             val skipMatch = templateMatcher.detectCornerFastForwardSkip(
                 screenBitmap = screenBitmap,
                 blacklistedCoord = ::isInvalidOrBlacklisted
@@ -442,7 +443,6 @@ class AdCloserHandler(
         // 8. 第三層辨識 B：啟動「高精度免樣本幾何角落 X 偵測器」
         // 嚴格限制：左上角僅限 Meta 廣告容器套件 (com.facebook.katana / com.facebook.orca) 掃描！
         // Google AdMob / Unity 等影音廣告左上角固定為廣告主圖示或 AdChoices (i) 標籤，誤點必跳轉 Google Play！
-        val isMetaAd = fgPkg == "com.facebook.katana" || fgPkg == "com.facebook.orca"
         // 延遲至 10 秒以上（或已獲獎勵）才允許幾何 X 偵測，讓略過按鈕能正常於 5~10 秒浮現被 Step 6 OCR 秒點！
         if (elapsedSec >= 10 || rewardGrantedOcr != null) {
             val isRelaxed = elapsedSec >= 18 || rewardGrantedOcr != null
@@ -513,16 +513,26 @@ class AdCloserHandler(
 
             // 備援盲點與安全返回：僅在廣告播放超過 40 秒且無關閉鈕時觸發
             if (elapsedSec >= 40) {
-                if (now - lastFallbackCornerTimeMs >= 3500L) {
-                    val (label, targetRect) = getNextFallbackTarget(sw, sh, ocrItems)
-                    lastFallbackCornerTimeMs = now
-                    recordAndClick(service, targetRect, allowBlacklist = true)
-                    return AdStepResult.WatchdogBackTriggered(elapsedSec, "備援盲點[$label]")
-                }
-                if (now - lastBackActionTimeMs >= 3500L) {
-                    service.safeNavigateBack(allowInGame = true)
-                    lastBackActionTimeMs = now
-                    return AdStepResult.WatchdogBackTriggered(elapsedSec, "超時安全返回鍵")
+                // 若已經發生過外部重定向，或者非 Meta 廣告（如 Google 廣告），嚴禁盲點角落熱區以免再度跳轉 Google Play！
+                // 直接使用安全系統返回鍵關閉廣告最為可靠！
+                if (redirectCount > 0 || !isMetaAd) {
+                    if (now - lastBackActionTimeMs >= 2000L) {
+                        service.safeNavigateBack(allowInGame = true)
+                        lastBackActionTimeMs = now
+                        return AdStepResult.WatchdogBackTriggered(elapsedSec, "末期安全返回鍵")
+                    }
+                } else {
+                    if (now - lastFallbackCornerTimeMs >= 3500L) {
+                        val (label, targetRect) = getNextFallbackTarget(sw, sh, ocrItems)
+                        lastFallbackCornerTimeMs = now
+                        recordAndClick(service, targetRect, allowBlacklist = true)
+                        return AdStepResult.WatchdogBackTriggered(elapsedSec, "備援盲點[$label]")
+                    }
+                    if (now - lastBackActionTimeMs >= 3500L) {
+                        service.safeNavigateBack(allowInGame = true)
+                        lastBackActionTimeMs = now
+                        return AdStepResult.WatchdogBackTriggered(elapsedSec, "超時安全返回鍵")
+                    }
                 }
             }
         }

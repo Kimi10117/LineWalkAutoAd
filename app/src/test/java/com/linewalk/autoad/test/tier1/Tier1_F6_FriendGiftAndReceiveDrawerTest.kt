@@ -201,5 +201,43 @@ class Tier1_F6_FriendGiftAndReceiveDrawerTest {
         org.junit.Assert.assertNotNull("Target draw button must not be null", target)
         org.junit.Assert.assertEquals("50張抽一次", target!!.first)
     }
+
+    @Test
+    fun test10_friendGiftSendModalDetectionAndDirectGiftFallback() {
+        val friendGiftTask = com.linewalk.autoad.tasks.FriendGiftTask()
+        val sh = MockFixtures.SCREEN_HEIGHT
+        val sw = MockFixtures.SCREEN_WIDTH
+        val items = listOf(
+            MockFixtures.createNormalizedOcrItem("禮物", 0.40f, 0.35f, 0.60f, 0.40f, sw, sh),
+            MockFixtures.createNormalizedOcrItem("要向黃小鬼", 0.30f, 0.40f, 0.70f, 0.44f, sw, sh),
+            MockFixtures.createNormalizedOcrItem("贈送金幣嗎？", 0.30f, 0.44f, 0.70f, 0.48f, sw, sh),
+            MockFixtures.createNormalizedOcrItem("剩餘贈送次數 5/5", 0.30f, 0.48f, 0.70f, 0.52f, sw, sh),
+            MockFixtures.createNormalizedOcrItem("▶ 也送給自己", 0.20f, 0.52f, 0.80f, 0.57f, sw, sh),
+            MockFixtures.createNormalizedOcrItem("或者", 0.45f, 0.57f, 0.55f, 0.60f, sw, sh),
+            MockFixtures.createNormalizedOcrItem("贈送", 0.40f, 0.60f, 0.60f, 0.64f, sw, sh),
+            MockFixtures.createNormalizedOcrItem("取消", 0.45f, 0.66f, 0.55f, 0.69f, sw, sh)
+        )
+
+        // Verify modal recognition
+        assertTrue("Send gift modal must be recognized", friendGiftTask.isSendGiftModalOpen(items))
+
+        val mockBitmap = io.mockk.mockk<android.graphics.Bitmap>(relaxed = true)
+        io.mockk.every { mockBitmap.height } returns sh
+        io.mockk.every { mockBitmap.width } returns sw
+
+        // Priority 1: Self gift (watch ad)
+        val selfGift = friendGiftTask.findSelfGiftButton(mockBitmap, items)
+        org.junit.Assert.assertNotNull("Self gift option must be detected", selfGift)
+        assertTrue("Self gift must contain 也送給自己", selfGift!!.first.contains("也送給自己"))
+
+        // Priority 2: Direct send fallback
+        val normalGift = friendGiftTask.findNormalGiftButton(mockBitmap, items)
+        org.junit.Assert.assertNotNull("Normal gift option must be detected", normalGift)
+        assertTrue("Normal gift must be detected", normalGift.first.contains("贈送"))
+
+        // Cancel button
+        val cancelBtn = friendGiftTask.findSendGiftCancelButton(mockBitmap, items)
+        org.junit.Assert.assertNotNull("Cancel button must be detected", cancelBtn)
+    }
 }
 

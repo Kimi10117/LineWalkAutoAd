@@ -326,6 +326,77 @@ class FriendGiftTask {
         return null
     }
 
+    /**
+     * 判定是否處於送禮確認彈窗中（例如『要向...贈送金幣嗎？』、『也送給自己』、『剩餘贈送次數』）
+     */
+    fun isSendGiftModalOpen(ocrItems: List<OcrItem>): Boolean {
+        return ocrItems.any { item ->
+            val t = item.text.replace(" ", "")
+            t.contains("也送給自己") ||
+            t.contains("送給自己") ||
+            (t.contains("要向") && (t.contains("贈送") || t.contains("金幣"))) ||
+            (t.contains("贈送金幣") && !t.contains("贈送完畢") && !t.contains("已贈送")) ||
+            t.contains("剩餘贈送次數") ||
+            (t.contains("或者") && t.contains("贈送"))
+        }
+    }
+
+    /**
+     * 尋找送禮確認彈窗中的一般白色 [ 贈送 ] 按鈕 (不看廣告，直接贈送好友金幣)
+     */
+    fun findNormalGiftButton(
+        screenBitmap: Bitmap,
+        ocrItems: List<OcrItem>
+    ): Pair<String, Rect> {
+        val sh = screenBitmap.height
+        val sw = screenBitmap.width
+
+        val normalGiftOcr = ocrItems.firstOrNull { item ->
+            val cy = item.bounds.centerY()
+            val t = item.text.trim().replace(" ", "")
+            cy in (sh * 0.55f).toInt()..(sh * 0.65f).toInt() && (
+                t == "贈送" || t == "送出" || t == "確認"
+            )
+        }
+        if (normalGiftOcr != null) {
+            return Pair("直接贈送(OCR)", normalGiftOcr.bounds)
+        }
+
+        // 幾何/座標備援：彈窗中央偏下白色圓角框 [ 贈送 ] 按鈕 (x in 16%..84%, y in 58%..63%)
+        val defaultRect = Rect(
+            (sw * 0.17f).toInt(),
+            (sh * 0.582f).toInt(),
+            (sw * 0.83f).toInt(),
+            (sh * 0.628f).toInt()
+        )
+        return Pair("直接贈送(標準按鈕)", defaultRect)
+    }
+
+    /**
+     * 尋找送禮確認彈窗底部的 [ 取消 ] 按鈕 (x in 38%..62%, y in 65%..69%)
+     */
+    fun findSendGiftCancelButton(
+        screenBitmap: Bitmap,
+        ocrItems: List<OcrItem>
+    ): Rect {
+        val sh = screenBitmap.height
+        val sw = screenBitmap.width
+
+        val cancelOcr = ocrItems.firstOrNull { item ->
+            val cy = item.bounds.centerY()
+            val t = item.text.trim().replace(" ", "")
+            cy in (sh * 0.63f).toInt()..(sh * 0.72f).toInt() && t == "取消"
+        }
+        if (cancelOcr != null) return cancelOcr.bounds
+
+        return Rect(
+            (sw * 0.38f).toInt(),
+            (sh * 0.650f).toInt(),
+            (sw * 0.62f).toInt(),
+            (sh * 0.680f).toInt()
+        )
+    }
+
     fun markGifted(point: android.graphics.Point) {
         giftedPoints.add(point)
     }

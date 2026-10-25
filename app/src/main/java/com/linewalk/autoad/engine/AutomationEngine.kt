@@ -185,6 +185,7 @@ class AutomationEngine private constructor(private val context: Context) {
     private var friendGiftEmptyTicks = 0
     private var friendGiftReturnHomeTicks = 0
     private var friendGiftOpenDrawerTicks = 0
+    private var friendGiftDialogRetryCount = 0
     internal val claimedBingoColumns = mutableSetOf<Int>()
     internal val bingoColumnRetryCount = mutableMapOf<Int, Int>()
     internal var bingoOpenCellRetryCount = 0
@@ -261,6 +262,7 @@ class AutomationEngine private constructor(private val context: Context) {
         friendGiftEmptyTicks = 0
         friendGiftReturnHomeTicks = 0
         friendGiftOpenDrawerTicks = 0
+        friendGiftDialogRetryCount = 0
         friendGiftTask.resetSession()
         currentPhaseEmptyTicks = 0
         currentTab = tabPriorityOrder.firstOrNull { it.isEnabled(config) } ?: MainTab.MOVE
@@ -401,6 +403,7 @@ class AutomationEngine private constructor(private val context: Context) {
         val safePkgLabel = if (externalPkg.length > 20) externalPkg.takeLast(20) else externalPkg
 
         appendLog("[防護] 偵測到非散步趣應用 ($externalPkg)，啟動嚴格防誤點保護 (連續 ${nonGameScreenTicks} 次)")
+        adCloserHandler.markRecentRedirect()
         _uiStatus.value = _uiStatus.value.copy(
             statusDetail = "[防護] 前景非散步趣 ($externalPkg)",
             overlaySafeDetail = "[外部保護] 非散步趣App ($safePkgLabel)"
@@ -1357,32 +1360,64 @@ class AutomationEngine private constructor(private val context: Context) {
         }
 
         // 1. 最優先檢查：是否跳出送禮確認彈窗（使用者指定：【都以送禮物也送自己為主】！）
-        val selfGiftOption = friendGiftTask.findSelfGiftButton(screenBitmap, ocrItems)
-        if (selfGiftOption != null) {
+        val isGiftModalOpen = friendGiftTask.isSendGiftModalOpen(ocrItems)
+        if (isGiftModalOpen) {
             friendGiftEmptyTicks = 0
-            appendLog("[禮物]【好友送禮】點擊【${selfGiftOption.first}】(優先送禮物也送自己)！")
-            FloatingOverlayService.clickWithOverlayPassthrough(selfGiftOption.second) {
-                service.clickRect(selfGiftOption.second)
+            if (friendGiftDialogRetryCount == 0) {
+                val selfGiftOption = friendGiftTask.findSelfGiftButton(screenBitmap, ocrItems)
+                if (selfGiftOption != null) {
+                    friendGiftDialogRetryCount = 1
+                    appendLog("[禮物]【好友送禮】點擊【${selfGiftOption.first}】(優先送禮物也送自己)！")
+                    FloatingOverlayService.clickWithOverlayPassthrough(selfGiftOption.second) {
+                        service.clickRect(selfGiftOption.second)
+                    }
+                    val isAd = selfGiftOption.first.contains("也送給自己") ||
+                               selfGiftOption.first.contains("送給自己") ||
+                               selfGiftOption.first.contains("送自己") ||
+                               selfGiftOption.first.contains("看廣告")
+                    if (isAd) {
+                        updateDetail("[禮物] 點擊【${selfGiftOption.first}】，觀看廣告中...", "[廣告] 廣告監控中...")
+                        adCloserHandler.onEnterAdMode()
+                        transitionTo(EngineState.AD_WATCHING, "送禮物也送自己，觀看廣告中...", "[廣告] 廣告監控中...")
+                    } else {
+                        updateDetail("[禮物] 已贈送好友禮物，繼續檢查下一位...", "[禮物] 贈送完成")
+                        delay(500)
+                    }
+                    return
+                }
             }
-            val isAd = selfGiftOption.first.contains("也送給自己") ||
-                       selfGiftOption.first.contains("送給自己") ||
-                       selfGiftOption.first.contains("送自己") ||
-                       selfGiftOption.first.contains("看廣告")
-            if (isAd) {
-                updateDetail("[禮物] 點擊【${selfGiftOption.first}】，觀看廣告中...", "[廣告] 廣告監控中...")
-                adCloserHandler.onEnterAdMode()
-                transitionTo(EngineState.AD_WATCHING, "送禮物也送自己，觀看廣告中...", "[廣告] 廣告監控中...")
+
+            if (friendGiftDialogRetryCount == 1) {
+                // 已嘗試過「也送給自己」但彈窗仍在（廣告未啟動、無庫存或已看完未關閉），後備改點「贈送」按鈕直接送禮！
+                val normalGiftBtn = friendGiftTask.findNormalGiftButton(screenBitmap, ocrItems)
+                friendGiftDialogRetryCount = 2
+                appendLog("[禮物]【好友送禮】「也送給自己」已嘗試過但彈窗仍在，改為點擊【${normalGiftBtn.first}】直接送禮！")
+                updateDetail("[禮物] 改點【${normalGiftBtn.first}】直接贈送好友金幣...", "[禮物] 直接贈送中...")
+                FloatingOverlayService.clickWithOverlayPassthrough(normalGiftBtn.second) {
+                    service.clickRect(normalGiftBtn.second)
+                }
+                delay(600)
+                return
             } else {
-                updateDetail("[禮物] 已贈送好友禮物，繼續檢查下一位...", "[禮物] 贈送完成")
-                delay(500)
+                // 多次嘗試送禮未果，點擊 [取消] 關閉彈窗，避免卡死在當前好友
+                val cancelBtn = friendGiftTask.findSendGiftCancelButton(screenBitmap, ocrItems)
+                friendGiftDialogRetryCount = 0
+                appendLog("[禮物]【好友送禮】送禮彈窗多次無回應，點擊【取消】關閉彈窗並繼續巡邏下一位！")
+                FloatingOverlayService.clickWithOverlayPassthrough(cancelBtn) {
+                    service.clickRect(cancelBtn)
+                }
+                delay(600)
+                return
             }
-            return
+        } else {
+            friendGiftDialogRetryCount = 0
         }
 
         // 2. 搜尋畫面上是否有未贈送的綠色「禮物」按鈕
         val nextGiftBtn = friendGiftTask.findNextGiftButton(screenBitmap, ocrItems)
         if (nextGiftBtn != null) {
             friendGiftEmptyTicks = 0
+            friendGiftDialogRetryCount = 0
             friendGiftTask.markGifted(android.graphics.Point(nextGiftBtn.centerX(), nextGiftBtn.centerY()))
             appendLog("[禮物]【好友送禮】點擊好友排行榜綠色禮物按鈕 (座標: ${nextGiftBtn.centerX()}, ${nextGiftBtn.centerY()})！")
             updateDetail("[禮物] 點擊好友禮物按鈕，等待送禮彈窗...", "[禮物] 贈送禮物中...")
@@ -1778,6 +1813,7 @@ class AutomationEngine private constructor(private val context: Context) {
         friendGiftEmptyTicks = 0
         friendGiftReturnHomeTicks = 0
         friendGiftOpenDrawerTicks = 0
+        friendGiftDialogRetryCount = 0
         friendGiftTask.resetSession()
 
         currentTab = tabPriorityOrder.firstOrNull { it.isEnabled(config) } ?: MainTab.MOVE
@@ -1840,6 +1876,7 @@ class AutomationEngine private constructor(private val context: Context) {
             friendGiftEmptyTicks = 0
             friendGiftReturnHomeTicks = 0
             friendGiftOpenDrawerTicks = 0
+            friendGiftDialogRetryCount = 0
             friendGiftTask.resetSession()
 
             currentTab = tabPriorityOrder.firstOrNull { it.isEnabled(config) } ?: MainTab.MOVE
@@ -1995,23 +2032,37 @@ class AutomationEngine private constructor(private val context: Context) {
         }
 
         // 檢查是否彈出好友送禮確認彈窗（『也送給自己』）
-        val selfGiftOption = friendGiftTask.findSelfGiftButton(screenBitmap, ocrItems)
-        if (selfGiftOption != null) {
-            appendLog("[禮物]【好友送禮】等待彈窗中偵測到【${selfGiftOption.first}】，立即點擊！")
-            FloatingOverlayService.clickWithOverlayPassthrough(selfGiftOption.second) {
-                service.clickRect(selfGiftOption.second)
-            }
-            val isAd = selfGiftOption.first.contains("也送給自己") ||
-                       selfGiftOption.first.contains("送給自己") ||
-                       selfGiftOption.first.contains("送自己") ||
-                       selfGiftOption.first.contains("看廣告")
-            if (isAd) {
-                adCloserHandler.onEnterAdMode()
-                transitionTo(EngineState.AD_WATCHING, "送禮物也送自己，觀看廣告中...", "[廣告] 廣告監控中...")
+        if (friendGiftTask.isSendGiftModalOpen(ocrItems)) {
+            if (friendGiftDialogRetryCount == 0) {
+                val selfGiftOption = friendGiftTask.findSelfGiftButton(screenBitmap, ocrItems)
+                if (selfGiftOption != null) {
+                    friendGiftDialogRetryCount = 1
+                    appendLog("[禮物]【好友送禮】等待彈窗中偵測到【${selfGiftOption.first}】，立即點擊！")
+                    FloatingOverlayService.clickWithOverlayPassthrough(selfGiftOption.second) {
+                        service.clickRect(selfGiftOption.second)
+                    }
+                    val isAd = selfGiftOption.first.contains("也送給自己") ||
+                               selfGiftOption.first.contains("送給自己") ||
+                               selfGiftOption.first.contains("送自己") ||
+                               selfGiftOption.first.contains("看廣告")
+                    if (isAd) {
+                        adCloserHandler.onEnterAdMode()
+                        transitionTo(EngineState.AD_WATCHING, "送禮物也送自己，觀看廣告中...", "[廣告] 廣告監控中...")
+                    } else {
+                        transitionTo(EngineState.IN_GAME_SCAN, "已贈送好友禮物，繼續巡邏...", "[禮物] 贈送完成")
+                    }
+                    return
+                }
             } else {
+                val normalGiftBtn = friendGiftTask.findNormalGiftButton(screenBitmap, ocrItems)
+                friendGiftDialogRetryCount = 0
+                appendLog("[禮物]【好友送禮】等待彈窗改為點擊【${normalGiftBtn.first}】直接送禮！")
+                FloatingOverlayService.clickWithOverlayPassthrough(normalGiftBtn.second) {
+                    service.clickRect(normalGiftBtn.second)
+                }
                 transitionTo(EngineState.IN_GAME_SCAN, "已贈送好友禮物，繼續巡邏...", "[禮物] 贈送完成")
+                return
             }
-            return
         }
 
         // 若彈出「玩遊戲賺點數」推廣宣傳頁，自動點擊底部 [跳過]
