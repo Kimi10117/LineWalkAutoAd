@@ -216,7 +216,9 @@ class AutomationEngine private constructor(private val context: Context) {
         val isTarget = AppConfig.isGamePackage(fgPkg) || isAd ||
             (fgPkg in config.targetGamePackages && fgPkg != "jp.naver.line.android")
         return if (!isTarget) {
-            val action = if (hasAdGeometricX) GuardAction.CLICK_AD_CLOSE_X else GuardAction.SAFE_BACK_NAVIGATION
+            val isSamsungOrPlay = fgPkg == "com.android.vending" ||
+                (fgPkg != null && (fgPkg.startsWith("com.samsung.android") || fgPkg.startsWith("com.sec.android")))
+            val action = if (hasAdGeometricX && !isSamsungOrPlay) GuardAction.CLICK_AD_CLOSE_X else GuardAction.SAFE_BACK_NAVIGATION
             GuardDecision(
                 isExternal = true,
                 recommendedAction = action,
@@ -415,6 +417,16 @@ class AutomationEngine private constructor(private val context: Context) {
             val targetPkg = config.targetGamePackages.firstOrNull { it != "jp.naver.line.android" } ?: "com.linecorp.LGWKTW"
             service.bringAppToFront(targetPkg)
             nonGameScreenTicks = 0
+            return
+        }
+
+        // 外部工具與商店嚴格保護：若前景為 Google Play 或 Samsung 邊緣工具/截圖，嚴禁幾何 X 盲點，直接發送安全返回鍵退出！
+        val isSamsungOrPlay = externalPkg == "com.android.vending" ||
+            externalPkg.startsWith("com.samsung.android") ||
+            externalPkg.startsWith("com.sec.android")
+        if (isSamsungOrPlay) {
+            appendLog("[防護] 前景為系統工具/應用商店 ($externalPkg)，直接發送安全返回鍵退出")
+            service.safeNavigateBack()
             return
         }
 
@@ -1315,6 +1327,19 @@ class AutomationEngine private constructor(private val context: Context) {
             }
             updateDetail("[禮物] 關閉贈送完畢視窗，準備送下一位...", "[禮物] 關閉彈窗")
             delay(500)
+            return
+        }
+
+        // 0A. 檢查是否誤入頂部【好友清單】子分頁（送禮僅在【排行榜】子分頁，好友清單無送禮按鈕）：
+        // 若在好友清單，立即點擊左側【排行榜】子分頁標籤切換回排行榜！
+        if (friendGiftTask.isOnFriendListSubTab(ocrItems, sh)) {
+            val leaderboardTab = friendGiftTask.getLeaderboardTabRect(sw, sh, ocrItems)
+            appendLog("[切換]【好友送禮】目前位於【好友清單】分頁，自動點擊左側【排行榜】以進行送禮！")
+            updateDetail("[禮物] 切換回【排行榜】分頁送禮...", "[禮物] 切換至排行榜")
+            FloatingOverlayService.clickWithOverlayPassthrough(leaderboardTab) {
+                service.clickRect(leaderboardTab)
+            }
+            delay(600)
             return
         }
 

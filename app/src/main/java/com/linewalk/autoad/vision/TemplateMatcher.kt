@@ -480,9 +480,9 @@ class TemplateMatcher {
         val step = max(2, sw / 240)
         val tol = max(1, sw / 360)
 
-        val topLimitY = max((sh * 0.045f).toInt(), 45)
+        val topLimitY = max((sh * 0.075f).toInt(), 75)
         val searchZones = mutableListOf(
-            // 右上角 (廣告標準關閉鈕位置，避開最頂部系統狀態列 y < 4.5%，涵蓋 y in 4.5%..16%)
+            // 右上角 (廣告標準關閉鈕位置，避開最頂部系統狀態列與通知列 y < 7.5%，涵蓋 y in 7.5%..16%)
             Rect((sw * 0.75f).toInt(), topLimitY, (sw * 0.98f).toInt(), (sh * 0.16f).toInt())
         )
         if (includeLeftZone) {
@@ -532,8 +532,8 @@ class TemplateMatcher {
                     val absX = zone.left + cx
                     val absY = zone.top + cy
 
-                    // 排除最頂部系統狀態列 (boxTop < sh * 0.040f)
-                    if (absY - r < (sh * 0.040f).toInt()) {
+                    // 排除最頂部系統狀態列與通知列 (boxTop < sh * 0.070f)
+                    if (absY - r < (sh * 0.070f).toInt()) {
                         cx += step
                         continue
                     }

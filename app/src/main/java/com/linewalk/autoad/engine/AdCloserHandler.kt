@@ -411,19 +411,20 @@ class AdCloserHandler(
             return AdStepResult.StillCountingDown(remainingSec, elapsedSec)
         }
 
-        val isMetaAd = fgPkg == "com.facebook.katana" || fgPkg == "com.facebook.orca"
+        val isMetaAd = fgPkg == "com.facebook.katana" || fgPkg == "com.facebook.orca" ||
+            ocrItems.any { item ->
+                val t = item.text
+                t.contains("Meta", ignoreCase = true) ||
+                t.contains("Facebook", ignoreCase = true) ||
+                t.contains("Ads served by Meta", ignoreCase = true)
+            }
         // 4C. 【全螢幕快轉/略過按鈕 (▶| 或 >>) 圖示偵測器】
-        // 嚴格安全限制：必須在右上角區域有 OCR 檢測到跳過標籤（如 ">>", "▶|", "Skip", "略過"）時才允許觸發，嚴防盲點廣告主圖示跳轉至 Google Play！
-        val hasCornerSkipHint = ocrItems.any { item ->
-            val cy = item.bounds.centerY().toFloat() / sh
-            val cx = item.bounds.centerX().toFloat() / sw
-            val t = item.text.replace(" ", "")
-            cy in 0.03f..0.15f && cx > 0.75f && (
-                t.contains(">>") || t.contains("▶") || t.contains(">|") ||
-                t.contains("Skip", ignoreCase = true) || t.contains("略過") || t.contains("跳過")
-            )
-        }
-        if (isMetaAd && (elapsedSec >= 8 || rewardGrantedOcr != null) && hasCornerSkipHint && (remainingSec == null || remainingSec <= 1 || rewardGrantedOcr != null)) {
+        // 專門應對 Meta Audience Network 等影音廣告右上角的深色圓底高亮快轉略過鈕 (▶|)。
+        // 只要播放滿 5 秒（影音廣告略過鈕浮現時間）或已獲取獎勵時立即秒速偵測點擊，絕不拖延等廣告播完！
+        if ((isMetaAd || fgPkg == "com.linecorp.LGWKTW" || fgPkg == "com.linecorp.LGWALK") &&
+            (elapsedSec >= 5 || rewardGrantedOcr != null) &&
+            (remainingSec == null || remainingSec <= 1 || rewardGrantedOcr != null)
+        ) {
             val skipMatch = templateMatcher.detectCornerFastForwardSkip(
                 screenBitmap = screenBitmap,
                 blacklistedCoord = ::isInvalidOrBlacklisted
@@ -612,15 +613,7 @@ class AdCloserHandler(
             (sh * 0.110f).toInt()
         ))
 
-        // 2. 螢幕左上角關閉熱區 (專門應對 Meta 輪播/插頁廣告，x in 6.5%..15.5%，避開邊緣 0~5% 防誤觸 Samsung 快捷列)
-        targets.add("螢幕左上角熱區" to Rect(
-            (sw * 0.065f).toInt(),
-            (sh * 0.050f).toInt(),
-            (sw * 0.155f).toInt(),
-            (sh * 0.095f).toInt()
-        ))
-
-        // 3. 內容右上角關閉熱區 (專門應對 16:9 / 4:3 劇院黑邊廣告)
+        // 2. 內容右上角關閉熱區 (專門應對 16:9 / 4:3 劇院黑邊廣告)
         targets.add("內容右上角熱區" to Rect(
             (sw * 0.88f).toInt(),
             (sh * 0.165f).toInt(),

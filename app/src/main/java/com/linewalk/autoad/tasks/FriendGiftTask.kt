@@ -460,6 +460,62 @@ class FriendGiftTask {
     }
 
     /**
+     * 檢查目前是否位於【好友清單】子分頁（而非【排行榜】子分頁）：
+     * 好友頁面共有【排行榜】、【邀請】、【好友清單】三大子分頁。
+     * 送禮功能僅存在於【排行榜】中，【好友清單】僅能查看/編輯代碼，無任何禮物按鈕！
+     */
+    fun isOnFriendListSubTab(ocrItems: List<OcrItem>, sh: Int = 0): Boolean {
+        // 1. 檢查是否存在【好友清單】特有內容特徵
+        val hasFriendListContent = ocrItems.any { item ->
+            val t = item.text.replace(" ", "")
+            t.contains("散步趣好友") ||
+            t.contains("編輯好友") ||
+            t.contains("LINE散步趣代碼") ||
+            t.contains("散步趣代碼") ||
+            t.contains("您的LINE散步趣") ||
+            (t.contains("搜尋") && t.contains("申請")) ||
+            (t.contains("申請") && t.contains("接受"))
+        }
+        if (hasFriendListContent) return true
+
+        // 2. 檢查頂部子分頁中【好友清單】是否呈現選取狀態 (若排行榜有下標或高亮則非清單)
+        val hasLeaderboardActive = ocrItems.any { item ->
+            val cy = item.bounds.centerY().toFloat() / (if (sh > 0) sh else 1000)
+            val t = item.text.replace(" ", "")
+            cy in 0.08f..0.16f && (t.contains("好友排行榜") || t.contains("參加排行榜") || t.contains("查看階層"))
+        }
+        if (hasLeaderboardActive) return false
+
+        return ocrItems.any { item ->
+            val cy = item.bounds.centerY().toFloat() / (if (sh > 0) sh else 1000)
+            val t = item.text.replace(" ", "")
+            cy in 0.08f..0.16f && t.contains("好友清單")
+        }
+    }
+
+    /**
+     * 取得頂部【排行榜】子分頁標籤座標 (x ≈ 0.08f..0.32f, y ≈ 0.10f..0.145f)：
+     * 當誤入【好友清單】時，點擊此處立即切換回【排行榜】進行送禮！
+     */
+    fun getLeaderboardTabRect(sw: Int, sh: Int, ocrItems: List<OcrItem> = emptyList()): Rect {
+        val ocrTab = ocrItems.firstOrNull { item ->
+            val cy = item.bounds.centerY().toFloat() / sh
+            val cx = item.bounds.centerX().toFloat() / sw
+            val t = item.text.trim()
+            cy in 0.08f..0.16f && cx in 0.05f..0.40f && t.contains("排行榜")
+        }
+        if (ocrTab != null) {
+            return ocrTab.bounds
+        }
+        return Rect(
+            (sw * 0.08f).toInt(),
+            (sh * 0.10f).toInt(),
+            (sw * 0.32f).toInt(),
+            (sh * 0.145f).toInt()
+        )
+    }
+
+    /**
      * 底部導覽列「好友」按鈕 (第 2 顆，位於底部 x ≈ 0.25f..0.50f, y ≈ 0.915f..0.975f，避開邊緣與首頁手勢)
      */
     fun getBottomFriendsTabRect(sw: Int, sh: Int, ocrItems: List<OcrItem> = emptyList()): Rect {

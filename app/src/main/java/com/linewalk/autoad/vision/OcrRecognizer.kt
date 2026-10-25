@@ -273,6 +273,19 @@ class OcrRecognizer {
      * 此類別為遊戲內跳出之推廣廣告，在觀看廣告前後或點擊廣告時皆可能出現，應立即點擊右上角 (X) 關閉。
      */
     fun isLineInHousePromoAd(items: List<OcrItem>): Boolean {
+        // 絕對一票否決好友頁面（排行榜、好友排行榜、散步趣好友、編輯好友、查看階層、金幣排名）！
+        val isFriendOrLeaderboard = items.any { item ->
+            val t = item.text.replace(" ", "")
+            t.contains("排行榜") ||
+            t.contains("好友排行榜") ||
+            t.contains("散步趣好友") ||
+            t.contains("編輯好友") ||
+            t.contains("查看階層") ||
+            t.contains("我的排名") ||
+            t.contains("階層一覽")
+        }
+        if (isFriendOrLeaderboard) return false
+
         var hasPromoKeyword = false
         var hasInviteText = false
         var hasCoinsOrRewardText = false
