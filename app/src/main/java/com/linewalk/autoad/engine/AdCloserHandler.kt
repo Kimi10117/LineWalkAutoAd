@@ -332,6 +332,19 @@ class AdCloserHandler(
                 "Skip video",
                 "Skip",
                 "SKIP",
+                "Next Ad",
+                "Next ad",
+                "NextAd",
+                "Next",
+                "Next ad ->",
+                "Next Ad ->",
+                "Next ->",
+                "Next →",
+                "Next ad →",
+                "下一則廣告",
+                "下一個廣告",
+                "下一則",
+                "下一個",
                 "點擊略過",
                 "點擊跳過",
                 "點此略過",
@@ -362,6 +375,25 @@ class AdCloserHandler(
             return AdStepResult.ClickedCloseOrSkip("OCR[${explicitSkipOcr.text}]", explicitSkipOcr.bounds)
         }
 
+        // 4B. 檢查左上角/頂部 Google AdMob 等多段廣告之「Next Ad -> / 下一則」膠囊按鈕 (例如 Ad 1 of 2 略過按鈕)
+        val nextAdMatch = ocrItems.firstOrNull { item ->
+            val cy = item.bounds.centerY().toFloat() / sh
+            val cx = item.bounds.centerX().toFloat() / sw
+            val t = item.text.trim().replace(" ", "")
+            cy in 0.04f..0.15f && cx in 0.02f..0.40f && (
+                t.contains("NextAd", ignoreCase = true) ||
+                t.contains("Next", ignoreCase = true) ||
+                t.contains("下一則") ||
+                t.contains("下一個")
+            )
+        }
+        if (nextAdMatch != null && !isInvalidOrBlacklisted(nextAdMatch.bounds.centerX(), nextAdMatch.bounds.centerY())) {
+            hasAdActuallyShown = true
+            lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
+            recordAndClick(service, nextAdMatch.bounds, allowBlacklist = true)
+            return AdStepResult.ClickedCloseOrSkip("OCR[${nextAdMatch.text}]", nextAdMatch.bounds)
+        }
+
         // 5. 【倒數計時防護：無明確略過按鈕且倒數中時嚴格保持靜候】
         // 若畫面上未出現明確略過按鈕，且正在倒數計時（如「還有 15 秒」），嚴格保持靜候播放，絕不碰觸螢幕！
         val remainingSec = ocrRecognizer.detectAdCountdownSeconds(ocrItems, sh)
@@ -381,9 +413,17 @@ class AdCloserHandler(
 
         val isMetaAd = fgPkg == "com.facebook.katana" || fgPkg == "com.facebook.orca"
         // 4C. 【全螢幕快轉/略過按鈕 (▶| 或 >>) 圖示偵測器】
-        // 專門應對 Meta Audience Network 等現代廣告在右上角的圖形略過按鈕！
-        // 嚴格限制：僅限 Meta 廣告容器且無倒數時觸發！Google/AdMob 等廣告右上角為 AdChoices(i) 或廣告主標籤，嚴禁觸發避免跳轉 Google Play！
-        if (isMetaAd && (elapsedSec >= 8 || rewardGrantedOcr != null) && (remainingSec == null || remainingSec <= 1 || rewardGrantedOcr != null)) {
+        // 嚴格安全限制：必須在右上角區域有 OCR 檢測到跳過標籤（如 ">>", "▶|", "Skip", "略過"）時才允許觸發，嚴防盲點廣告主圖示跳轉至 Google Play！
+        val hasCornerSkipHint = ocrItems.any { item ->
+            val cy = item.bounds.centerY().toFloat() / sh
+            val cx = item.bounds.centerX().toFloat() / sw
+            val t = item.text.replace(" ", "")
+            cy in 0.03f..0.15f && cx > 0.75f && (
+                t.contains(">>") || t.contains("▶") || t.contains(">|") ||
+                t.contains("Skip", ignoreCase = true) || t.contains("略過") || t.contains("跳過")
+            )
+        }
+        if (isMetaAd && (elapsedSec >= 8 || rewardGrantedOcr != null) && hasCornerSkipHint && (remainingSec == null || remainingSec <= 1 || rewardGrantedOcr != null)) {
             val skipMatch = templateMatcher.detectCornerFastForwardSkip(
                 screenBitmap = screenBitmap,
                 blacklistedCoord = ::isInvalidOrBlacklisted
@@ -450,7 +490,7 @@ class AdCloserHandler(
                 screenBitmap = screenBitmap,
                 blacklistedCoord = ::isInvalidOrBlacklisted,
                 isRelaxed = isRelaxed,
-                includeLeftZone = isMetaAd
+                includeLeftZone = false
             )
             if (geoMatch != null) {
                 lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
@@ -497,6 +537,12 @@ class AdCloserHandler(
         // 當廣告已播放超過 30 秒 (或已獲取獎勵)，且畫面仍未看見散步趣主畫面 (因為 line 264 已排除 isGameVisible)，
         // 代表廣告播放已完成但未自動關閉。此時透過安全返回鍵 (allowInGame = true) 關閉廣告 Activity 最為安全，
         // 絕不盲目點擊螢幕中央或廣告內容，杜絕誤跳轉至 Google Play 商店！
+        val isOutsideGame = !isGame && !isAd
+        val isPlayableAd = false
+        if (!isOutsideGame && isPlayableAd) {
+            // 互動廣告推進點擊（外部應用嚴格禁止）
+        }
+
         if (remainingSec == null && elapsedSec >= 5) {
             if (redirectCount > 0 && now - lastBackActionTimeMs >= 2500L) {
                 service.safeNavigateBack(allowInGame = true)
@@ -522,7 +568,7 @@ class AdCloserHandler(
                         return AdStepResult.WatchdogBackTriggered(elapsedSec, "末期安全返回鍵")
                     }
                 } else {
-                    if (now - lastFallbackCornerTimeMs >= 3500L) {
+                    if (!isOutsideGame && now - lastFallbackCornerTimeMs >= 3500L) {
                         val (label, targetRect) = getNextFallbackTarget(sw, sh, ocrItems)
                         lastFallbackCornerTimeMs = now
                         recordAndClick(service, targetRect, allowBlacklist = true)
@@ -539,7 +585,11 @@ class AdCloserHandler(
 
         // 9. 防卡死 Watchdog：若單支廣告超過最大等待秒數 (預設 48 秒)，以安全返回鍵強制關閉廣告
         if (elapsedSec >= config.maxAdWaitSeconds && now - lastBackActionTimeMs >= 2000L) {
-            service.safeNavigateBack(allowInGame = true)
+            if (!isOutsideGame) {
+                service.safeNavigateBack(allowInGame = true)
+            } else {
+                service.safeNavigateBack(allowInGame = true)
+            }
             lastBackActionTimeMs = now
             return AdStepResult.WatchdogBackTriggered(elapsedSec, "超時安全返回鍵")
         }

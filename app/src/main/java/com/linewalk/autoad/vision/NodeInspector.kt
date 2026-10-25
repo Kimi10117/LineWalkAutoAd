@@ -230,7 +230,8 @@ class NodeInspector {
         private val AD_CLOSE_TEXT_KEYWORDS = listOf(
             "略過廣告", "跳過廣告", "關閉廣告", "離開廣告", "退出廣告", "廣告略過",
             "略過", "跳過", "關閉", "離開", "退出", "Skip Ad", "Skip ad", "Skip Ads",
-            "Skip", "Close", "スキップ", "広告をスキップ", "閉じる"
+            "Skip", "Next Ad", "Next ad", "NextAd", "Next", "下一則廣告", "下一個廣告", "下一則", "下一個",
+            "Close", "スキップ", "広告をスキップ", "閉じる"
         )
 
         private val COUNTDOWN_HINTS = listOf(

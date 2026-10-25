@@ -1332,7 +1332,7 @@ class AutomationEngine private constructor(private val context: Context) {
                 currentPhase = PatrolPhase.RECEIVE_GIFT
                 friendGiftOpenDrawerTicks++
                 appendLog("[禮物]【好友送禮】已完成，點擊右上角【禮物盒】開啟收禮視窗 ($friendGiftOpenDrawerTicks/3)！")
-                val giftBoxRect = receiveGiftTask.getHeaderGiftBoxRect(sw, sh)
+                val giftBoxRect = receiveGiftTask.findHeaderGiftBox(screenBitmap, sw, sh)
                 FloatingOverlayService.clickWithOverlayPassthrough(giftBoxRect) {
                     service.clickRect(giftBoxRect, allowTopSafeZone = true)
                 }
@@ -1468,7 +1468,7 @@ class AutomationEngine private constructor(private val context: Context) {
         if (config.enableFriendGiftTask && !isReceiveGiftCompleted) {
             currentPhase = PatrolPhase.RECEIVE_GIFT
             appendLog("[完成]【好友送禮】好友禮物贈送階段結束，直接點擊右上角【禮物盒】開啟收禮視窗！")
-            val giftBoxRect = receiveGiftTask.getHeaderGiftBoxRect(sw, sh)
+            val giftBoxRect = receiveGiftTask.findHeaderGiftBox(screenBitmap, sw, sh)
             FloatingOverlayService.clickWithOverlayPassthrough(giftBoxRect) {
                 service.clickRect(giftBoxRect, allowTopSafeZone = true)
             }
@@ -1747,7 +1747,7 @@ class AutomationEngine private constructor(private val context: Context) {
                     return
                 }
                 appendLog("[禮物] 點擊主畫面右上角【禮物盒】圖示按鈕...")
-                val giftBoxRect = receiveGiftTask.getHeaderGiftBoxRect(sw, sh)
+                val giftBoxRect = receiveGiftTask.findHeaderGiftBox(screenBitmap, sw, sh)
                 FloatingOverlayService.clickWithOverlayPassthrough(giftBoxRect) {
                     service.clickRect(giftBoxRect, allowTopSafeZone = true)
                 }

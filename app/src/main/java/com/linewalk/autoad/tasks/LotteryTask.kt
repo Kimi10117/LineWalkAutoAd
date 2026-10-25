@@ -57,8 +57,8 @@ class LotteryTask {
 
     /**
      * 尋找符合規則的抽抽樂按鈕：
-     * - 優先回傳 50 抽按鈕 (含 "50張")
-     * - 次選回傳免費抽按鈕 (含 "免費抽" 或 "免費")
+     * - 【第一優先】：免費抽按鈕 (含 "免費抽" 或 "免費")，抽完即進入倒計時冷卻！
+     * - 【第二順位】：50 抽按鈕 (含 "50張")
      * - 絕對過濾排除 "5張" 按鈕！
      */
     fun findTargetDrawButton(
@@ -69,7 +69,19 @@ class LotteryTask {
         val sh = screenBitmap.height
         val sw = screenBitmap.width
 
-        // 0. 檢查 50 抽 (左側區域) 是否處於冷卻倒數中（包含『回復還需』、『還需』、『回復』、時間格式『\d{1,2}:\d{2}』或『剩0次』）
+        // 0A. 檢查「免費抽」(右側偏下區域 x > 0.48f, y in 0.45f..0.62f) 是否處於倒計時冷卻中
+        val isFreeInCooldown = ocrItems.any { item ->
+            val cy = item.bounds.centerY()
+            val cx = item.bounds.centerX()
+            cx > (sw * 0.48f).toInt() && cy in (sh * 0.45f).toInt()..(sh * 0.62f).toInt() && (
+                item.text.contains("回復還需") ||
+                item.text.contains("還需") ||
+                item.text.contains("倒計時") ||
+                Regex("""\d{1,2}:\d{2}""").containsMatchIn(item.text)
+            )
+        }
+
+        // 0B. 檢查 50 抽 (左側區域) 是否處於冷卻倒數中（包含『回復還需』、『還需』、『回復』、時間格式『\d{1,2}:\d{2}』或『剩0次』）
         val isFiftyInCooldown = ocrItems.any { item ->
             val cy = item.bounds.centerY()
             val cx = item.bounds.centerX()
@@ -83,7 +95,32 @@ class LotteryTask {
             )
         }
 
-        // 1. 【第一優先】：50 抽 (僅在未冷卻且票券/次數充足時搜尋「50張 抽1次」紅色按鈕)
+        // 1. 【第一優先】：搜尋「免費抽1次」黃色按鈕 (x in 0.50f..0.98f, y in 0.48f..0.60f)
+        if (!isFreeInCooldown) {
+            val freeDrawOcr = ocrItems.firstOrNull { item ->
+                val cy = item.bounds.centerY()
+                val cx = item.bounds.centerX()
+                val t = item.text.replace(" ", "")
+                cy in (sh * 0.48f).toInt()..(sh * 0.62f).toInt() &&
+                cx > (sw * 0.48f).toInt() &&
+                (t.contains("免費抽") || t.contains("免費")) &&
+                !t.contains("5張") && !t.contains("回復") && !t.contains("還需")
+            }
+            if (freeDrawOcr != null) {
+                val cy = freeDrawOcr.bounds.centerY()
+                if (!templateMatcher.isPopupButtonDisabledGray(screenBitmap, cy)) {
+                    return Pair("免費看廣告抽一次", freeDrawOcr.bounds)
+                }
+            }
+
+            // 備援：2D 黃色按鈕聚類偵測 (x: 0.52f..0.98f, y: 0.49f..0.58f，黃底白字『▶ 免費抽1次』)
+            val freeYellowBtn = findFreeDrawByColor(screenBitmap)
+            if (freeYellowBtn != null && !templateMatcher.isPopupButtonDisabledGray(screenBitmap, freeYellowBtn.centerY())) {
+                return Pair("免費看廣告抽一次(黃色按鈕)", freeYellowBtn)
+            }
+        }
+
+        // 2. 【第二順位】：50 抽 (僅在未冷卻且票券/次數充足時搜尋「50張 抽1次」紅色按鈕)
         if (!isFiftyInCooldown) {
             val fiftyDrawOcr = ocrItems.firstOrNull { item ->
                 val cy = item.bounds.centerY()
@@ -106,29 +143,6 @@ class LotteryTask {
             if (leftRedBtn != null && !templateMatcher.isPopupButtonDisabledGray(screenBitmap, leftRedBtn.centerY())) {
                 return Pair("50張抽一次(紅色按鈕)", leftRedBtn)
             }
-        }
-
-        // 2. 【第二順位】：搜尋「免費抽1次」黃色按鈕 (x in 0.52f..0.98f, y in 0.48f..0.60f)
-        val freeDrawOcr = ocrItems.firstOrNull { item ->
-            val cy = item.bounds.centerY()
-            val cx = item.bounds.centerX()
-            val t = item.text.replace(" ", "")
-            cy in (sh * 0.48f).toInt()..(sh * 0.60f).toInt() &&
-            cx > (sw * 0.50f).toInt() &&
-            (t.contains("免費抽") || t.contains("免費")) &&
-            !t.contains("5張") // 絕不點 5 張！
-        }
-        if (freeDrawOcr != null) {
-            val cy = freeDrawOcr.bounds.centerY()
-            if (!templateMatcher.isPopupButtonDisabledGray(screenBitmap, cy)) {
-                return Pair("免費看廣告抽一次", freeDrawOcr.bounds)
-            }
-        }
-
-        // 備援：2D 黃色按鈕聚類偵測 (x: 0.52f..0.98f, y: 0.49f..0.58f，黃底白字『▶ 免費抽1次』)
-        val freeYellowBtn = findFreeDrawByColor(screenBitmap)
-        if (freeYellowBtn != null && !templateMatcher.isPopupButtonDisabledGray(screenBitmap, freeYellowBtn.centerY())) {
-            return Pair("免費看廣告抽一次(黃色按鈕)", freeYellowBtn)
         }
 
         // 3. 【嚴格防呆】：若任何候選含有 "5張"，絕對回傳 null！

@@ -43,6 +43,44 @@ class ReceiveGiftTask {
     }
 
     /**
+     * 動態定位頂部「禮物盒」圖示（優先偵測右上角通知紅點，次選幾何標準座標）
+     */
+    fun findHeaderGiftBox(screenBitmap: Bitmap?, sw: Int, sh: Int): Rect {
+        if (screenBitmap != null) {
+            val redDotRect = findHeaderGiftBoxRedDot(screenBitmap)
+            if (redDotRect != null) return redDotRect
+        }
+        return getHeaderGiftBoxRect(sw, sh)
+    }
+
+    private fun findHeaderGiftBoxRedDot(screenBitmap: Bitmap): Rect? {
+        val sw = screenBitmap.width
+        val sh = screenBitmap.height
+        val xStart = (sw * 0.80f).toInt()
+        val xEnd = (sw * 0.92f).toInt()
+        val yStart = (sh * 0.04f).toInt()
+        val yEnd = (sh * 0.09f).toInt()
+
+        for (y in yStart..yEnd) {
+            for (x in xStart..xEnd) {
+                val c = screenBitmap.getPixel(x, y)
+                val r = (c shr 16) and 0xFF
+                val g = (c shr 8) and 0xFF
+                val b = c and 0xFF
+                // 亮紅點特徵 (r > 200, g < 70, b < 70)
+                if (r > 200 && g < 70 && b < 70) {
+                    val cx = (x - (sw * 0.012f).toInt()).coerceIn(0, sw - 1)
+                    val cy = (y + (sh * 0.010f).toInt()).coerceIn(0, sh - 1)
+                    val halfW = (sw * 0.035f).toInt()
+                    val halfH = (sh * 0.020f).toInt()
+                    return Rect(cx - halfW, cy - halfH, cx + halfW, cy + halfH)
+                }
+            }
+        }
+        return null
+    }
+
+    /**
      * 檢查「禮物」抽屜是否為空（尚未收到禮物、尚無禮物等）
      */
     fun hasEmptyDrawer(ocrItems: List<OcrItem>): Boolean {

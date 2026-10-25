@@ -199,7 +199,16 @@ class Tier1_F6_FriendGiftAndReceiveDrawerTest {
 
         val target = lotteryTask.findTargetDrawButton(mockBitmap, items, templateMatcher)
         org.junit.Assert.assertNotNull("Target draw button must not be null", target)
-        org.junit.Assert.assertEquals("50張抽一次", target!!.first)
+        // Free draw is prioritized first so the cooldown timer starts immediately!
+        org.junit.Assert.assertEquals("免費看廣告抽一次", target!!.first)
+
+        // Test 09b: When free draw is in cooldown, 50-draw is selected
+        val itemsWithFreeCooldown = items.filter { !it.text.contains("免費抽1次") } + listOf(
+            MockFixtures.createNormalizedOcrItem("回復還需 04:30", 0.65f, 0.53f, 0.95f, 0.58f, sw, sh)
+        )
+        val target50 = lotteryTask.findTargetDrawButton(mockBitmap, itemsWithFreeCooldown, templateMatcher)
+        org.junit.Assert.assertNotNull("Target 50 draw must be selected when free draw is in cooldown", target50)
+        org.junit.Assert.assertEquals("50張抽一次", target50!!.first)
     }
 
     @Test
@@ -238,6 +247,55 @@ class Tier1_F6_FriendGiftAndReceiveDrawerTest {
         // Cancel button
         val cancelBtn = friendGiftTask.findSendGiftCancelButton(mockBitmap, items)
         org.junit.Assert.assertNotNull("Cancel button must be detected", cancelBtn)
+    }
+
+    @Test
+    fun test11_friendsPageWithAdBannerMustNotBeRecognizedAsBingo() {
+        val bingoTask = com.linewalk.autoad.tasks.BingoTask()
+        val friendGiftTask = com.linewalk.autoad.tasks.FriendGiftTask()
+        val sh = MockFixtures.SCREEN_HEIGHT
+        val sw = MockFixtures.SCREEN_WIDTH
+        val items = listOf(
+            MockFixtures.createNormalizedOcrItem("排行榜", 0.10f, 0.12f, 0.25f, 0.15f, sw, sh),
+            MockFixtures.createNormalizedOcrItem("邀請", 0.45f, 0.12f, 0.55f, 0.15f, sw, sh),
+            MockFixtures.createNormalizedOcrItem("好友清單", 0.75f, 0.12f, 0.90f, 0.15f, sw, sh),
+            MockFixtures.createNormalizedOcrItem("散步趣好友 3/75", 0.05f, 0.36f, 0.35f, 0.40f, sw, sh),
+            MockFixtures.createNormalizedOcrItem("黃小鬼", 0.25f, 0.42f, 0.45f, 0.46f, sw, sh),
+            // Bottom ad banner with 'PRE-OPENING' (which previously falsely triggered Bingo 'OPEN'):
+            MockFixtures.createNormalizedOcrItem("PRE-OPENING 新竹縣立總圖", 0.05f, 0.88f, 0.60f, 0.91f, sw, sh),
+            MockFixtures.createNormalizedOcrItem("瞭解詳情", 0.75f, 0.88f, 0.95f, 0.91f, sw, sh),
+            MockFixtures.createNormalizedOcrItem("集點", 0.05f, 0.94f, 0.20f, 0.98f, sw, sh),
+            MockFixtures.createNormalizedOcrItem("好友", 0.30f, 0.94f, 0.45f, 0.98f, sw, sh)
+        )
+
+        // Verify Friends page is detected
+        assertTrue("Must be recognized as friends page", friendGiftTask.isFriendsPage(items, sh))
+
+        // Verify Bingo is strictly rejected
+        assertFalse("Friends page must NOT be recognized as Bingo dialog", bingoTask.isBingoDialogOpen(items, sh))
+    }
+
+    @Test
+    fun test12_nextAdRecognitionForSequentialVideoAds() {
+        val ocrRecognizer = com.linewalk.autoad.vision.OcrRecognizer()
+        val sh = MockFixtures.SCREEN_HEIGHT
+        val sw = MockFixtures.SCREEN_WIDTH
+        val items = listOf(
+            MockFixtures.createNormalizedOcrItem("Next Ad ->", 0.04f, 0.06f, 0.22f, 0.09f, sw, sh),
+            MockFixtures.createNormalizedOcrItem("NASDAQ 00662", 0.30f, 0.20f, 0.70f, 0.25f, sw, sh),
+            MockFixtures.createNormalizedOcrItem("富邦投信", 0.15f, 0.80f, 0.50f, 0.85f, sw, sh),
+            MockFixtures.createNormalizedOcrItem("Ad 1 of 2", 0.05f, 0.93f, 0.25f, 0.96f, sw, sh)
+        )
+
+        val match = ocrRecognizer.findMatch(
+            items = items,
+            keywords = listOf("Next Ad", "Next", "Skip Ad", "略過"),
+            screenWidth = sw,
+            screenHeight = sh,
+            roiNormalized = android.graphics.RectF(0.01f, 0.04f, 0.99f, 0.96f)
+        )
+        org.junit.Assert.assertNotNull("Next Ad -> button must be detected by OCR", match)
+        assertTrue("Match text must contain Next", match!!.text.contains("Next"))
     }
 }
 

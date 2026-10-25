@@ -18,6 +18,23 @@ class BingoTask {
     fun isEnabled(config: AppConfig): Boolean = config.enableBingoTask
 
     fun isBingoDialogOpen(ocrItems: List<OcrItem>, sh: Int = 10000): Boolean {
+        // 0. 嚴格一票否決：排除好友分頁、送禮彈窗、抽抽樂與任務視窗！
+        val hasExclusionFeature = ocrItems.any { item ->
+            val cy = item.bounds.centerY()
+            val notInBottomNav = if (sh < 10000) cy < sh * 0.88f else true
+            val t = item.text.replace(" ", "")
+            notInBottomNav && (
+                t.contains("排行榜") || t.contains("好友清單") || t.contains("散步趣好友") ||
+                t.contains("編輯好友") || t.contains("也送給自己") || t.contains("送給自己") ||
+                t.contains("剩餘贈送次數") || t.contains("贈送金幣") || t.contains("贈送完畢") ||
+                (t.contains("已贈送") && t.contains("金幣")) ||
+                (t.contains("要向") && t.contains("金幣")) ||
+                t.contains("50張") || t.contains("BIG抽抽樂") || t.contains("免費抽") ||
+                t.contains("中獎囉")
+            )
+        }
+        if (hasExclusionFeature) return false
+
         // 多維特徵比對：
         // 1. 標題特徵 (「每日賓果」、「今日賓果」、「BINGO」)
         // 2. 開格按鈕特徵 (「立即開啟賓果格」、「開啟賓果格」、「立即開啟」)
@@ -32,7 +49,7 @@ class BingoTask {
             val cy = item.bounds.centerY()
             val t = item.text.replace(" ", "")
 
-            // 標題特徵
+            // 標題特徵 (頂部 y < 0.28f)
             if (t.contains("每日賓果") || t.contains("今日賓果") ||
                 (cy < (if (sh < 10000) sh * 0.28f else 600f) && (
                     t.equals("BINGO", ignoreCase = true) ||
@@ -45,9 +62,10 @@ class BingoTask {
 
             // 開格 / 冷卻 / 上限特徵
             if (t.contains("立即開啟賓果格") || t.contains("開啟賓果格") ||
+                (t.contains("開啟") && t.contains("賓果")) ||
                 (t.contains("立即開啟") && cy > (if (sh < 10000) sh * 0.40f else 600f)) ||
                 t.contains("距離下次抽選還有") || t.contains("距離下次") || t.contains("抽選還有") ||
-                t.contains("下次抽選") || (t.contains("鐘") && t.contains("秒")) || t.contains("OPEN") ||
+                t.contains("下次抽選") ||
                 (cy in (if (sh < 10000) (sh * 0.40f).toInt()..(sh * 0.85f).toInt() else 600..1800) && (
                     t.contains("今日上限") || t.contains("已達到今日上限") || t.contains("9/9") || t.contains("已全數開啟")
                 ))
@@ -60,7 +78,7 @@ class BingoTask {
                 t.contains("3BINGO") || t.contains("3 BINGO") ||
                 t.contains("5BINGO") || t.contains("5 BINGO") ||
                 t.contains("8BINGO") || t.contains("8 BINGO") ||
-                (cy in (if (sh < 10000) (sh * 0.70f).toInt()..(sh * 0.95f).toInt() else 1200..2000) && (
+                (cy in (if (sh < 10000) (sh * 0.70f).toInt()..(sh * 0.95f).toInt() else 1200..2000) && hasTitleFeature && (
                     t.contains("Get", ignoreCase = true) || t.contains("Cet", ignoreCase = true) || t.contains("Qet", ignoreCase = true)
                 ))
             ) {
@@ -68,8 +86,7 @@ class BingoTask {
             }
         }
 
-        // 當具備強賓果特徵（標題、開格/冷卻/上限、連線標籤任二，或強確定性標題/開格按鈕）時，
-        // 背景透出的主畫面分頁文字絕不具有否決權！
+        // 當具備強賓果特徵（標題、開格/冷卻/上限、連線標籤任二，或強確定性標題/開格按鈕）時判定為開啟
         val hasStrongBingoSignature = (hasTitleFeature && (hasOpenCellOrCooldownFeature || hasConnectionFeature)) ||
             (hasOpenCellOrCooldownFeature && hasConnectionFeature) ||
             ocrItems.any { item ->
