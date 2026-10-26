@@ -164,5 +164,5 @@ def test_kotlin_source_invariants_v1_15_45():
     assert "!hasUnderlyingMiddleContent" in rg_code
     assert "hasLeaderboardContent" in fg_code
     assert "handleRoundCompletion(service)" in ae_code
-    assert any(v in gradle_code for v in ['versionName = "1.15.45"', 'versionName = "1.15.46"', 'versionName = "1.15.47"'])
-    assert any(c in gradle_code for c in ["versionCode = 78", "versionCode = 79", "versionCode = 80"])
+    assert any(v in gradle_code for v in ['versionName = "1.15.45"', 'versionName = "1.15.46"', 'versionName = "1.15.47"', 'versionName = "1.15.48"'])
+    assert any(c in gradle_code for c in ["versionCode = 78", "versionCode = 79", "versionCode = 80", "versionCode = 81"])

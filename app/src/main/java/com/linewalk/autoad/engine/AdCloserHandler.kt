@@ -52,6 +52,7 @@ class AdCloserHandler(
     private var lastClickedPoint: Point? = null
     private var lastBackActionTimeMs: Long = 0L
     private var lastFallbackCornerTimeMs: Long = 0L
+    private var lastRevealSwipeTimeMs: Long = 0L
     private var fallbackCornerCycle: Int = 0
     private val clickedHistory = mutableListOf<Point>()
     private val blacklistedPoints = mutableListOf<Point>()
@@ -69,6 +70,7 @@ class AdCloserHandler(
             lastClickedPoint = null
             lastBackActionTimeMs = 0L
             lastFallbackCornerTimeMs = 0L
+            lastRevealSwipeTimeMs = 0L
             fallbackCornerCycle = 0
             clickedHistory.clear()
             blacklistedPoints.clear()
@@ -392,13 +394,25 @@ class AdCloserHandler(
             excludeKeywords = OcrRecognizer.AD_CLOSE_EXCLUDE_KEYWORDS,
             maxTextLength = 16
         )
-        if (explicitSkipOcr != null &&
-            !isInvalidOrBlacklisted(explicitSkipOcr.bounds.centerX(), explicitSkipOcr.bounds.centerY())
+        // 嚴格安全防護：排除左上角 Google Play 標籤 (避免誤點 ▶| Google Play 膠囊跳轉商店)
+        val isExplicitSkipGooglePlayPill = explicitSkipOcr != null &&
+            explicitSkipOcr.bounds.centerX() < sw * 0.38f &&
+            explicitSkipOcr.bounds.centerY() in (sh * 0.05f).toInt()..(sh * 0.16f).toInt() &&
+            ocrItems.any { item ->
+                item.bounds.centerX() < sw * 0.40f &&
+                item.bounds.centerY() in (sh * 0.04f).toInt()..(sh * 0.16f).toInt() &&
+                (item.text.contains("Google", ignoreCase = true) || item.text.contains("Play", ignoreCase = true) || item.text.contains("商店"))
+            }
+
+        val validSkipOcr = if (isExplicitSkipGooglePlayPill) null else explicitSkipOcr
+
+        if (validSkipOcr != null &&
+            !isInvalidOrBlacklisted(validSkipOcr.bounds.centerX(), validSkipOcr.bounds.centerY())
         ) {
             hasAdActuallyShown = true
             lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
-            recordAndClick(service, explicitSkipOcr.bounds, allowBlacklist = true)
-            return AdStepResult.ClickedCloseOrSkip("OCR[${explicitSkipOcr.text}]", explicitSkipOcr.bounds)
+            recordAndClick(service, validSkipOcr.bounds, allowBlacklist = true)
+            return AdStepResult.ClickedCloseOrSkip("OCR[${validSkipOcr.text}]", validSkipOcr.bounds)
         }
 
         // 4B. 檢查左上角/頂部 Google AdMob 等多段廣告之「Next Ad -> / 下一則」膠囊按鈕 (例如 Ad 1 of 2 略過按鈕)
@@ -406,7 +420,8 @@ class AdCloserHandler(
             val cy = item.bounds.centerY().toFloat() / sh
             val cx = item.bounds.centerX().toFloat() / sw
             val t = item.text.trim().replace(" ", "")
-            cy in 0.04f..0.15f && cx in 0.02f..0.40f && (
+            cy in 0.04f..0.15f && cx in 0.02f..0.40f &&
+            !t.contains("Google", ignoreCase = true) && !t.contains("Play", ignoreCase = true) && (
                 t.contains("NextAd", ignoreCase = true) ||
                 t.contains("Next", ignoreCase = true) ||
                 t.contains("下一則") ||
@@ -437,7 +452,13 @@ class AdCloserHandler(
             return AdStepResult.StillCountingDown(remainingSec, elapsedSec)
         }
 
-        val isMetaAd = fgPkg == "com.facebook.katana" || fgPkg == "com.facebook.orca" ||
+        val hasGooglePlayOnScreen = ocrItems.any { item ->
+            val t = item.text
+            t.contains("Google Play", ignoreCase = true) ||
+            t.contains("Play 商店") ||
+            (item.bounds.centerY() < sh * 0.16f && (t.contains("Google", ignoreCase = true) || t.contains("Play", ignoreCase = true)))
+        }
+        val isMetaAd = (fgPkg == "com.facebook.katana" || fgPkg == "com.facebook.orca" ||
             fgPkg == "com.facebook.lite" || fgPkg == "com.facebook.mlite" ||
             fgPkg == "com.instagram.android" || fgPkg?.lowercase()?.startsWith("com.facebook.ads") == true ||
             ocrItems.any { item ->
@@ -451,7 +472,7 @@ class AdCloserHandler(
                 t.contains("•") || t.contains("●") || t.contains("○") ||
                 t.contains("···") || t.contains("•••") ||
                 t.contains("1/") || t.contains("/3") || t.contains("1 of")
-            }
+            }) && !hasGooglePlayOnScreen
         // 4C. 【全螢幕快轉/略過按鈕 (▶| 或 >>) 圖示偵測器】
         // 專門應對 Meta Audience Network 等影音廣告右上角的深色圓底高亮快轉略過鈕 (▶|)。
         // 只要播放滿 5 秒（影音廣告略過鈕浮現時間）或已獲取獎勵時立即秒速偵測點擊，絕不拖延等廣告播完！
@@ -565,11 +586,11 @@ class AdCloserHandler(
                 t.contains("下載") ||
                 t.contains("安裝")
             }
-        if (isEndCard && !isGame && now - lastBackActionTimeMs >= 2500L) {
+        if (isEndCard && elapsedSec >= 15 && now - lastBackActionTimeMs >= 2500L) {
             hasAdActuallyShown = true
             lastBackActionTimeMs = now
             lastFallbackCornerTimeMs = now + 4000L
-            service.safeNavigateBack(allowInGame = false)
+            service.safeNavigateBack(allowInGame = true)
             return AdStepResult.WatchdogBackTriggered(elapsedSec, "廣告結束卡片安全返回鍵")
         }
 
@@ -598,7 +619,7 @@ class AdCloserHandler(
             }
 
             // Meta 備援關閉熱區：在確認為 Meta 廣告且播放滿 28 秒或無倒數計時時，允許對左上角關閉按鈕區域發送精確點擊，避免廣告停滯超過 30 秒卡死
-            if (isMetaAd && (elapsedSec >= 28 || (remainingSec == null && elapsedSec >= 25)) && !isOutsideGame && redirectCount == 0 && closeClickCount == 0 && now - lastFallbackCornerTimeMs >= 3000L) {
+            if (isMetaAd && !hasGooglePlayOnScreen && (elapsedSec >= 28 || (remainingSec == null && elapsedSec >= 25)) && !isOutsideGame && redirectCount == 0 && closeClickCount == 0 && now - lastFallbackCornerTimeMs >= 3000L) {
                 val metaLeftTopHotZone = Rect(
                     (sw * 0.035f).toInt(),
                     (sh * 0.048f).toInt(),
@@ -650,6 +671,20 @@ class AdCloserHandler(
             return AdStepResult.WatchdogBackTriggered(elapsedSec, "超時安全返回鍵")
         }
 
+        // 8C. 控制項自動隱藏喚醒手勢 (Keep-Alive / Reveal Swipe):
+        // 針對 Google Play 互動式廣告、可玩式廣告或各類影音廣告，控制項（略過按鈕、關閉 X、倒數時間）
+        // 經常在無觸摸 2~3 秒後自動隱藏淡出，必須手滑動螢幕才會重新浮現！
+        // 當廣告已播放超過 5 秒且當前畫面上未看見任何關閉/略過按鈕時，每 3.5 秒派發一次短滑手勢以喚醒浮現控制項！
+        if (elapsedSec >= 5 && remainingSec == null && !isOutsideGame && now - lastRevealSwipeTimeMs >= 3500L) {
+            lastRevealSwipeTimeMs = now
+            val swipeStartX = sw * 0.5f
+            val swipeStartY = sh * 0.65f
+            val swipeEndX = sw * 0.5f
+            val swipeEndY = sh * 0.48f
+            service.performSwipe(swipeStartX, swipeStartY, swipeEndX, swipeEndY, durationMs = 200L)
+            Log.d(TAG, "廣告播放中派發滑動喚醒手勢，喚出自動隱藏的略過/關閉控制項")
+        }
+
         return AdStepResult.ScanningAd(elapsedSec)
     }
 
@@ -660,13 +695,25 @@ class AdCloserHandler(
     ): Pair<String, Rect> {
         val targets = mutableListOf<Pair<String, Rect>>()
 
-        // 0. 螢幕左上角熱區 (專門應對 Meta 影音/輪播廣告，y in 4.8%..9.5%)
-        targets.add("螢幕左上角熱區" to Rect(
-            (sw * 0.035f).toInt(),
-            (sh * 0.048f).toInt(),
-            (sw * 0.140f).toInt(),
-            (sh * 0.095f).toInt()
-        ))
+        val hasGooglePlayNear = ocrItems.any { item ->
+            val icx = item.bounds.centerX()
+            val icy = item.bounds.centerY()
+            icx < sw * 0.40f && icy in (sh * 0.04f).toInt()..(sh * 0.16f).toInt() && (
+                item.text.contains("Google", ignoreCase = true) ||
+                item.text.contains("Play", ignoreCase = true) ||
+                item.text.contains("商店")
+            )
+        }
+
+        // 0. 螢幕左上角熱區 (專門應對 Meta 影音/輪播廣告，y in 4.8%..9.5%，若左上角為 Google Play 標籤則嚴格排除！)
+        if (!hasGooglePlayNear) {
+            targets.add("螢幕左上角熱區" to Rect(
+                (sw * 0.035f).toInt(),
+                (sh * 0.048f).toInt(),
+                (sw * 0.140f).toInt(),
+                (sh * 0.095f).toInt()
+            ))
+        }
 
         // 1. 螢幕右上角關閉熱區 (標準全螢幕廣告，y in 5.5%..11%)
         targets.add("螢幕右上角熱區" to Rect(

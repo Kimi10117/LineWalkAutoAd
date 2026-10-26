@@ -173,6 +173,7 @@ class AutomationEngine private constructor(private val context: Context) {
         internal set
     private var hasClickedLotteryAdReward = false
     private var lotteryResultRewardWaitTicks = 0
+    private var lotteryFiftyDrawAttempts = 0
     private var lotteryFreeDrawAttempts = 0
     var isMissionCompleted = false
         internal set
@@ -257,6 +258,7 @@ class AutomationEngine private constructor(private val context: Context) {
         isLotteryCompleted = false
         hasClickedLotteryAdReward = false
         lotteryResultRewardWaitTicks = 0
+        lotteryFiftyDrawAttempts = 0
         lotteryFreeDrawAttempts = 0
         isMissionCompleted = false
         isReceiveGiftCompleted = false
@@ -1167,8 +1169,23 @@ class AutomationEngine private constructor(private val context: Context) {
         // 1. 依使用者規則尋找：【優先50抽】➔【次選免費抽】➔【嚴禁點5張】
         val drawTarget = lotteryTask.findTargetDrawButton(screenBitmap, ocrItems, templateMatcher)
         if (drawTarget != null) {
-            // 若為免費抽且已達每輪上限 (>= 2 次)，則跳過免費抽，防止未獲獎勵時死循環反覆點廣告
-            if (drawTarget.first.contains("免費") && lotteryFreeDrawAttempts >= 2) {
+            // 若為 50 抽且已達每輪上限 (>= 2 次)，代表票券不足或已抽完，轉向檢查免費看廣告抽一次！
+            if (drawTarget.first.contains("50張") && lotteryFiftyDrawAttempts >= 2) {
+                appendLog("[抽獎]【抽抽樂】50抽已嘗試 $lotteryFiftyDrawAttempts 次 (票券不足或已達上限)，轉向檢查免費看廣告抽一次！")
+                val freeTarget = lotteryTask.findFreeDrawOnly(screenBitmap, ocrItems, templateMatcher)
+                if (freeTarget != null && lotteryFreeDrawAttempts < 2) {
+                    hasClickedLotteryAdReward = false
+                    currentPhaseEmptyTicks = 0
+                    appendLog("[抽獎]【抽抽樂】依規則點擊第二順位：${freeTarget.first}")
+                    FloatingOverlayService.clickWithOverlayPassthrough(freeTarget.second) {
+                        service.clickRect(freeTarget.second)
+                    }
+                    lotteryFreeDrawAttempts++
+                    adCloserHandler.onEnterAdMode()
+                    transitionTo(EngineState.AD_WATCHING, "已點擊 ${freeTarget.first}，觀看廣告抽獎...", "[抽獎] 廣告抽獎中...")
+                    return
+                }
+            } else if (drawTarget.first.contains("免費") && lotteryFreeDrawAttempts >= 2) {
                 appendLog("[抽獎]【抽抽樂】本輪免費抽廣告已嘗試 $lotteryFreeDrawAttempts 次，跳過以防死循環")
             } else {
                 hasClickedLotteryAdReward = false
@@ -1182,6 +1199,7 @@ class AutomationEngine private constructor(private val context: Context) {
                     adCloserHandler.onEnterAdMode()
                     transitionTo(EngineState.AD_WATCHING, "已點擊 ${drawTarget.first}，觀看廣告抽獎...", "[抽獎] 廣告抽獎中...")
                 } else {
+                    lotteryFiftyDrawAttempts++
                     delay(400)
                     popupRetryTicks = 0
                     transitionTo(EngineState.TRIGGER_AD_POPUP, "已點擊 ${drawTarget.first}，等待抽獎結果彈窗...", "[抽獎] 抽獎中...")
@@ -1866,6 +1884,7 @@ class AutomationEngine private constructor(private val context: Context) {
         isLotteryCompleted = false
         hasClickedLotteryAdReward = false
         lotteryResultRewardWaitTicks = 0
+        lotteryFiftyDrawAttempts = 0
         lotteryFreeDrawAttempts = 0
         isMissionCompleted = false
         checkedMissionTabs.clear()
@@ -1930,6 +1949,7 @@ class AutomationEngine private constructor(private val context: Context) {
             isLotteryCompleted = false
             hasClickedLotteryAdReward = false
             lotteryResultRewardWaitTicks = 0
+            lotteryFiftyDrawAttempts = 0
             lotteryFreeDrawAttempts = 0
             isMissionCompleted = false
             checkedMissionTabs.clear()

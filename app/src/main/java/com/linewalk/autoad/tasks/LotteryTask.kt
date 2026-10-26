@@ -121,31 +121,60 @@ class LotteryTask {
         }
 
         // 2. 【第二順位】：免費看廣告抽一次 (免費抽1次，x in 0.50f..0.98f, y in 0.48f..0.60f)
-        if (!isFreeInCooldown) {
-            val freeDrawOcr = ocrItems.firstOrNull { item ->
-                val cy = item.bounds.centerY()
-                val cx = item.bounds.centerX()
-                val t = item.text.replace(" ", "")
-                cy in (sh * 0.48f).toInt()..(sh * 0.62f).toInt() &&
-                cx > (sw * 0.48f).toInt() &&
-                (t.contains("免費抽") || t.contains("免費")) &&
-                !t.contains("5張") && !t.contains("回復") && !t.contains("還需")
-            }
-            if (freeDrawOcr != null) {
-                val cy = freeDrawOcr.bounds.centerY()
-                if (!templateMatcher.isPopupButtonDisabledGray(screenBitmap, cy)) {
-                    return Pair("免費看廣告抽一次", freeDrawOcr.bounds)
-                }
-            }
-
-            // 備援：2D 黃色按鈕聚類偵測 (x: 0.52f..0.98f, y: 0.49f..0.58f，黃底白字『▶ 免費抽1次』)
-            val freeYellowBtn = findFreeDrawByColor(screenBitmap)
-            if (freeYellowBtn != null && !templateMatcher.isPopupButtonDisabledGray(screenBitmap, freeYellowBtn.centerY())) {
-                return Pair("免費看廣告抽一次(黃色按鈕)", freeYellowBtn)
-            }
+        val freeTarget = findFreeDrawOnly(screenBitmap, ocrItems, templateMatcher)
+        if (freeTarget != null) {
+            return freeTarget
         }
 
         // 3. 【嚴格防呆】：若任何候選含有 "5張"，絕對回傳 null！
+        return null
+    }
+
+    /**
+     * 尋找第二順位「免費看廣告抽一次」按鈕 (x in 0.50f..0.98f, y in 0.48f..0.60f)
+     * 當 50 抽已達每輪上限或票券不足時，可直接調用此方法切換至免費抽，杜絕死循環！
+     */
+    fun findFreeDrawOnly(
+        screenBitmap: Bitmap,
+        ocrItems: List<OcrItem>,
+        templateMatcher: TemplateMatcher
+    ): Pair<String, Rect>? {
+        val sh = screenBitmap.height
+        val sw = screenBitmap.width
+
+        val isFreeInCooldown = ocrItems.any { item ->
+            val cy = item.bounds.centerY()
+            val cx = item.bounds.centerX()
+            cx > (sw * 0.48f).toInt() && cy in (sh * 0.45f).toInt()..(sh * 0.62f).toInt() && (
+                item.text.contains("回復還需") ||
+                item.text.contains("還需") ||
+                item.text.contains("倒計時") ||
+                Regex("""\d{1,2}:\d{2}""").containsMatchIn(item.text)
+            )
+        }
+        if (isFreeInCooldown) return null
+
+        val freeDrawOcr = ocrItems.firstOrNull { item ->
+            val cy = item.bounds.centerY()
+            val cx = item.bounds.centerX()
+            val t = item.text.replace(" ", "")
+            cy in (sh * 0.48f).toInt()..(sh * 0.62f).toInt() &&
+            cx > (sw * 0.48f).toInt() &&
+            (t.contains("免費抽") || t.contains("免費")) &&
+            !t.contains("5張") && !t.contains("回復") && !t.contains("還需")
+        }
+        if (freeDrawOcr != null) {
+            val cy = freeDrawOcr.bounds.centerY()
+            if (!templateMatcher.isPopupButtonDisabledGray(screenBitmap, cy)) {
+                return Pair("免費看廣告抽一次", freeDrawOcr.bounds)
+            }
+        }
+
+        // 備援：2D 黃色按鈕聚類偵測 (x: 0.52f..0.98f, y: 0.49f..0.58f，黃底白字『▶ 免費抽1次』)
+        val freeYellowBtn = findFreeDrawByColor(screenBitmap)
+        if (freeYellowBtn != null && !templateMatcher.isPopupButtonDisabledGray(screenBitmap, freeYellowBtn.centerY())) {
+            return Pair("免費看廣告抽一次(黃色按鈕)", freeYellowBtn)
+        }
         return null
     }
 
