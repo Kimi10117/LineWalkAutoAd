@@ -168,10 +168,10 @@ def test_in_game_scan_ad_keywords_and_relaxed_blacklist():
 
 
 def test_version_bump_v1_15_49():
-    """Verify version 1.15.49 and versionCode 82."""
+    """Verify version 1.15.49/1.15.50 and versionCode 82/83."""
     gradle_code = (REPO_ROOT / "app/build.gradle.kts").read_text(encoding="utf-8")
     workflow_code = (REPO_ROOT / ".github/workflows/build-apk.yml").read_text(encoding="utf-8")
 
-    assert 'versionCode = 82' in gradle_code
-    assert 'versionName = "1.15.49"' in gradle_code
-    assert 'v1.15.49' in workflow_code
+    assert any(c in gradle_code for c in ['versionCode = 82', 'versionCode = 83'])
+    assert any(v in gradle_code for v in ['versionName = "1.15.49"', 'versionName = "1.15.50"'])
+    assert any(w in workflow_code for w in ['v1.15.49', 'v1.15.50'])

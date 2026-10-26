@@ -975,6 +975,9 @@ class AutomationEngine private constructor(private val context: Context) {
                 t.contains("Play Now", ignoreCase = true) ||
                 t.contains("立即遊玩") ||
                 t.contains("免費下載") ||
+                t.contains("立即下載") ||
+                t.contains("下載") ||
+                t.contains("連勝中") ||
                 t.contains("安裝") ||
                 t.contains("Google Play") ||
                 t.contains("インストール") ||
@@ -2242,6 +2245,9 @@ class AutomationEngine private constructor(private val context: Context) {
                 t.contains("開啟商店") ||
                 t.contains("DOWNLOAD", ignoreCase = true) ||
                 t.contains("INSTALL", ignoreCase = true) ||
+                t.contains("立即下載") ||
+                t.contains("下載") ||
+                t.contains("連勝中") ||
                 t.contains("立即观看") ||
                 t.contains("立即觀看") ||
                 t.contains("youtu.be", ignoreCase = true) ||
@@ -2362,12 +2368,15 @@ class AutomationEngine private constructor(private val context: Context) {
         val adElapsed = adCloserHandler.getElapsedSeconds()
         if (adElapsed >= config.maxAdWaitSeconds + 4) {
             appendLog("[警報] 廣告播放達 ${adElapsed}s 超過上限 (${config.maxAdWaitSeconds}s)，強制關閉廣告拉回散步趣！")
-            service.safeNavigateBack(minIntervalMs = 500L, allowInGame = true)
+            service.safeNavigateBack(minIntervalMs = 300L, allowInGame = true)
             delay(500)
-            service.safeNavigateBack(minIntervalMs = 500L, allowInGame = true)
-            delay(500)
-            service.bringAppToFront("com.linecorp.LGWKTW")
-            delay(800)
+            service.safeNavigateBack(minIntervalMs = 300L, allowInGame = true)
+            delay(600)
+            val isGameBack = adCloserHandler.isGameScreenVisible(service, screenBitmap, ocrItems)
+            if (!isGameBack) {
+                service.bringAppToFront("com.linecorp.LGWKTW")
+                delay(800)
+            }
             adWatchdogCooldownTicks = 4
             transitionTo(EngineState.IN_GAME_SCAN, "廣告逾時強制拉回散步趣主畫面，繼續巡邏...", "[巡邏] 重新巡邏中...")
             return

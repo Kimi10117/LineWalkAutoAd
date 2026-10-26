@@ -93,16 +93,17 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
             tag_name: latest-apk
-            name: "散步趣助手 v1.15.49 (秒速關閉 Reward granted 廣告膠囊、修復免廣告收禮插頁卡死與非遊戲狀態計數 - Run #${{ github.run_number }})"
+            name: "散步趣助手 v1.15.50 (修復可玩式廣告與結束卡片返回鍵阻斷、強化 End Card 識別與巡邏廣告偵測 - Run #${{ github.run_number }})"
             body: |
-              **散步趣助手 v1.15.49 (Run #${{ github.run_number }})**
-              1. **【秒速識別並精準點擊 [Reward granted ✕] 膠囊關閉鈕】**：
-                 - 針對 YouTube MV / Google AdMob 等全螢幕廣告頂部之「Reward granted ✕」膠囊藥丸按鈕，當 OCR 捕獲「Reward granted」標籤時，精準鎖定並秒速點擊右側 `[✕]` 區域（x in 88%..96% sw, y in 4%..12% sh），無縫秒關廣告，告別無效等待。
-              2. **【徹底修復好友收禮免廣告領取觸發全螢幕插頁廣告卡死】**：
-                 - 點擊「直接領取(免廣告)」後同步轉入彈窗與廣告監控流程 (`TRIGGER_AD_POPUP`)，若遊戲彈出全螢幕插頁影音廣告，立即可由廣告監控流程捕獲並安全關閉，杜絕停滯在遊戲巡邏狀態 6 分鐘卡死之問題。
-              3. **【獨立隔離外部應用防護計數與畫面偵測計數】**：
-                 - 徹底分離 `externalAppTicks` 與 `nonGameScreenTicks`，防止遊戲內無主畫面特徵計數在每一 Tick 被外部應用防護強制歸零，使全螢幕非遊戲畫面逾時機制 (`nonGameScreenTicks >= 2`) 正常發揮作用。
-              4. **【全螢幕幾何 X 關閉鈕偵測排除區最佳化】**：
-                 - 校正巡邏狀態下的角落幾何 X 排除遮罩，頂部通知禁區僅作用於中央區域 (x in 18%..82% sw, y < 8% sh)，右上角高位區 (x >= 75% sw, y >= 4.0% sh) 全面放行幾何 X 偵測，精準點擊關閉頂部各類全螢幕廣告。
+              **散步趣助手 v1.15.50 (Run #${{ github.run_number }})**
+              1. **【全面修復廣告結束卡片 (End Card) 返回鍵阻斷】**：
+                 - 修正 AdCloserHandler 中各項超時與結束卡片返回鍵邏輯，放行 `allowInGame = true`，徹底解決內部廣告（`com.linecorp.LGWKTW`）發送返回鍵被服務安全機制誤攔截導致卡死在結束頁面 50 秒以上的重大缺陷。
+                 - 擴充廣告結束卡片 (`isEndCard`) 識別詞彙，涵蓋「下載」、「立即下載」、「連勝中」、「金幣」、「現金回饋」等互動遊戲與應用推廣 End Card，於播放 15 秒後自動秒速派發安全返回鍵退出廣告。
+              2. **【放行廣告容器超時返回鍵防護】**：
+                 - 調整 Accessibility 服務中的第三方廣告容器保護規則，在常規期間禁止返回鍵，但在超時或結束卡片觸發（`allowInGame = true`）時放行返回鍵，確保卡死時能確實退出廣告。
+              3. **【巡邏模式全面支援可玩式遊戲廣告識別】**：
+                 - 巡邏模式廣告關鍵字擴充支援「立即下載」、「下載」、「連勝中」等互動小遊戲特徵，若廣告在任何情況下出現在遊戲巡邏階段，立即轉入廣告監控模式，杜絕以主畫面巡邏模式盲點背景。
+              4. **【超時拉回散步趣機制健全化】**：
+                 - 逾時強制關閉時先派發雙次系統返回鍵並驗證主畫面，確認畫面回到遊戲後平滑恢復巡邏，防止 `bringAppToFront` 重新置頂殘留之廣告 Activity。
             files: LineWalkAutoAd.apk
             prerelease: false

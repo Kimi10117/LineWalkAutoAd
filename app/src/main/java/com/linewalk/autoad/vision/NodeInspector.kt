@@ -53,8 +53,10 @@ class NodeInspector {
                         nodePkg == "jp.naver.line.android"
                     if (!isAllowedPackage) continue
 
-                    // 嚴格排除頂部狀態列與通知橫幅 (y < 8% sh)
-                    if (cy < screenHeight * 0.08f) continue
+                    // 嚴格排除頂部狀態列與中央通知橫幅 (中央通知禁區 y < 8% sh，邊角狀態列 y < 4% sh)
+                    val inTopNoticeZone = cx in (screenWidth * 0.18f).toInt()..(screenWidth * 0.82f).toInt() &&
+                        cy < screenHeight * 0.08f
+                    if (inTopNoticeZone || cy < max(screenHeight * 0.040f, 40f)) continue
 
                     // 排除懸浮窗本身、頂部中間 dynamicSpot 動態島
                     // 僅在非全螢幕廣告狀態 (如主畫面彈窗) 排除首頁橫幅廣告區間 (y: 12% ~ 36%)，全螢幕廣告時放行中間內容區的略過按鈕！

@@ -599,7 +599,10 @@ class AdCloserHandler(
                 t.contains("Play商店") ||
                 t.contains("from Meta", ignoreCase = true) ||
                 t.contains("免費下載") ||
+                t.contains("立即下載") ||
+                t.contains("下載") ||
                 t.contains("立即遊玩") ||
+                t.contains("開啟商店") ||
                 t.contains("安裝")
             } && ocrItems.any { item ->
                 val t = item.text
@@ -609,7 +612,11 @@ class AdCloserHandler(
                 t.contains("Play 商店") ||
                 t.contains("Download", ignoreCase = true) ||
                 t.contains("下載") ||
-                t.contains("安裝")
+                t.contains("安裝") ||
+                t.contains("ShopBack", ignoreCase = true) ||
+                t.contains("金幣") ||
+                t.contains("連勝") ||
+                t.contains("現金回饋")
             }
         if (isEndCard && elapsedSec >= 15 && now - lastBackActionTimeMs >= 2500L) {
             hasAdActuallyShown = true
@@ -631,7 +638,7 @@ class AdCloserHandler(
 
         if (remainingSec == null && elapsedSec >= 5) {
             if (redirectCount > 0 && !isGame && now - lastBackActionTimeMs >= 2500L) {
-                service.safeNavigateBack(allowInGame = false)
+                service.safeNavigateBack(allowInGame = true)
                 lastBackActionTimeMs = now
                 return AdStepResult.WatchdogBackTriggered(elapsedSec, "重定向安全返回鍵")
             }
@@ -664,7 +671,7 @@ class AdCloserHandler(
                 // 直接使用安全系統返回鍵關閉廣告最為可靠！
                 if (redirectCount > 0 && !isGame) {
                     if (now - lastBackActionTimeMs >= 2000L) {
-                        service.safeNavigateBack(allowInGame = false)
+                        service.safeNavigateBack(allowInGame = true)
                         lastBackActionTimeMs = now
                         return AdStepResult.WatchdogBackTriggered(elapsedSec, "末期安全返回鍵")
                     }
@@ -677,7 +684,7 @@ class AdCloserHandler(
                         return AdStepResult.WatchdogBackTriggered(elapsedSec, "備援盲點[$label]")
                     }
                     if (!isGame && now - lastBackActionTimeMs >= 3000L) {
-                        service.safeNavigateBack(allowInGame = false)
+                        service.safeNavigateBack(allowInGame = true)
                         lastBackActionTimeMs = now
                         return AdStepResult.WatchdogBackTriggered(elapsedSec, "超時安全返回鍵")
                     }
