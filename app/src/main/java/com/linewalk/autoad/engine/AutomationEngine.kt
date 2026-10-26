@@ -384,7 +384,10 @@ class AutomationEngine private constructor(private val context: Context) {
         }
 
         try {
-            val ocrItems = ocrRecognizer.recognize(screenBitmap)
+            val rawOcrItems = ocrRecognizer.recognize(screenBitmap)
+            val ocrItems = rawOcrItems.filterNot { item ->
+                FloatingOverlayService.isInsideOverlay(item.bounds.centerX(), item.bounds.centerY())
+            }
 
             when (currentState) {
                 EngineState.IDLE -> Unit
@@ -413,22 +416,24 @@ class AutomationEngine private constructor(private val context: Context) {
             overlaySafeDetail = "[外部保護] 非散步趣App ($safePkgLabel)"
         )
 
-        // 逾時復原：連續外部應用超過 5 個 tick (約 6~8 秒)，強制將散步趣喚醒拉回前景
-        if (nonGameScreenTicks >= 5) {
-            appendLog("[防護] 停留外部應用達 5 次 tick 逾時，嘗試強制喚醒散步趣拉回前景！")
+        // 逾時復原：連續外部應用超過 3 個 tick (約 4 秒)，強制將散步趣喚醒拉回前景！
+        if (nonGameScreenTicks >= 3) {
+            appendLog("[防護] 停留外部應用達 3 次 tick 逾時，嘗試強制喚醒散步趣拉回前景！")
             val targetPkg = config.targetGamePackages.firstOrNull { it != "jp.naver.line.android" } ?: "com.linecorp.LGWKTW"
             service.bringAppToFront(targetPkg)
             nonGameScreenTicks = 0
+            transitionTo(EngineState.IN_GAME_SCAN, "已拉回散步趣，恢復遊戲巡邏...", "[巡邏] 巡邏畫面目標中...")
             return
         }
 
-        // 外部工具與商店嚴格保護：若前景為 Google Play 或 Samsung 邊緣工具/截圖，嚴禁幾何 X 盲點，直接發送安全返回鍵退出！
+        // 外部工具與商店嚴格保護：若前景為 Google Play 或 Samsung 邊緣工具/截圖/瀏覽器，嚴禁幾何 X 盲點，直接發送安全返回鍵退出！
         val isSamsungOrPlay = externalPkg == "com.android.vending" ||
             externalPkg.startsWith("com.samsung.android") ||
-            externalPkg.startsWith("com.sec.android")
+            externalPkg.startsWith("com.sec.android") ||
+            externalPkg == "com.android.chrome"
         if (isSamsungOrPlay) {
-            appendLog("[防護] 前景為系統工具/應用商店 ($externalPkg)，直接發送安全返回鍵退出")
-            service.safeNavigateBack()
+            appendLog("[防護] 前景為系統工具/應用商店/瀏覽器 ($externalPkg)，直接發送安全返回鍵退出")
+            service.safeNavigateBack(minIntervalMs = 800L)
             return
         }
 
@@ -715,30 +720,8 @@ class AutomationEngine private constructor(private val context: Context) {
             return
         }
 
-        // B. 檢查四大分頁下半部是否彈出領獎彈窗（優先點可用的『跳過廣告(糖果)』，其次點『紅利 15/60/x1 獲得』）！
-        val popupAction = findPopupActionTarget(screenBitmap, ocrItems)
-        if (popupAction != null) {
-            executePopupAction(service, popupAction)
-            return
-        }
-        val cancelBtn = ocrRecognizer.findPopupCancelButton(screenBitmap, ocrItems, templateMatcher)
-        if (cancelBtn != null) {
-            handlePopupCooldownCancel(service, cancelBtn, sw, sh)
-            return
-        }
-
-        // C. 檢查是否彈出「玩遊戲賺點數 / 免費參加」推廣宣傳頁，自動點擊底部「跳過」
-        val promoSkip = findPlayGamePromoSkipButton(screenBitmap, ocrItems, sw, sh)
-        if (promoSkip != null) {
-            appendLog("[遊戲] 偵測到【玩遊戲賺點數】推廣頁，自動點擊底部 [跳過]！")
-            FloatingOverlayService.clickWithOverlayPassthrough(promoSkip) {
-                service.clickRect(promoSkip)
-            }
-            return
-        }
-
-        // D. 【子視窗與日常任務優先】優先檢查是否處於日常任務子彈窗或好友分頁（絕不可被底層導覽列誤判為主畫面而忽略已開啟的視窗！）：
-        // D0. 檢查是否跳出 LINE 內部宣傳促銷全螢幕廣告（如『還沒有邀請好友 實在太可惜了！』『獲得金幣的流程』）
+        // B. 【子視窗與日常任務優先】優先檢查是否處於日常任務子彈窗或好友分頁（絕不可被底層導覽列誤判為主畫面而忽略已開啟的視窗！）：
+        // B0. 檢查是否跳出 LINE 內部宣傳促銷全螢幕廣告（如『還沒有邀請好友 實在太可惜了！』『獲得金幣的流程』）
         if (ocrRecognizer.isLineInHousePromoAd(ocrItems)) {
             nonGameScreenTicks = 0
             val closeBtn = ocrRecognizer.getLineInHousePromoCloseButton(sw, sh)
@@ -751,7 +734,7 @@ class AutomationEngine private constructor(private val context: Context) {
             return
         }
 
-        // D0B. 【最高優先】：優先檢查是否跳出好友送禮「贈送完畢」彈窗（已贈送金幣給你自己和XXX。[關閉]）！
+        // B0B. 【最高優先】：優先檢查是否跳出好友送禮「贈送完畢」彈窗（已贈送金幣給你自己和XXX。[關閉]）！
         val sentCompletedCloseBtn = friendGiftTask.findSentCompletedCloseButton(screenBitmap, ocrItems)
         if (sentCompletedCloseBtn != null) {
             nonGameScreenTicks = 0
@@ -767,7 +750,7 @@ class AutomationEngine private constructor(private val context: Context) {
             return
         }
 
-        // D1. 優先檢查是否正在「每日賓果」彈窗
+        // B1. 優先檢查是否正在「每日賓果」彈窗
         if (bingoTask.isBingoDialogOpen(ocrItems, sh)) {
             nonGameScreenTicks = 0
             if (isBingoCompleted) {
@@ -783,14 +766,14 @@ class AutomationEngine private constructor(private val context: Context) {
             return
         }
 
-        // D2. 檢查是否正在「抽抽樂」彈窗
+        // B2. 檢查是否正在「抽抽樂」彈窗
         if (lotteryTask.isLotteryDialogOpen(ocrItems, sh)) {
             nonGameScreenTicks = 0
             handleLotteryDialog(service, screenBitmap, ocrItems, sw, sh)
             return
         }
 
-        // D3. 檢查是否正在「任務」彈窗
+        // B3. 檢查是否正在「任務」彈窗
         if (missionTask.isMissionDialogOpen(ocrItems, sh, screenBitmap)) {
             nonGameScreenTicks = 0
             if (isMissionCompleted) {
@@ -805,7 +788,7 @@ class AutomationEngine private constructor(private val context: Context) {
             return
         }
 
-        // D4. 檢查是否正在「接收禮物」彈窗
+        // B4. 檢查是否正在「接收禮物」彈窗
         if (receiveGiftTask.isReceiveGiftDialogOpen(ocrItems, sh)) {
             nonGameScreenTicks = 0
             if (isReceiveGiftCompleted) {
@@ -822,7 +805,7 @@ class AutomationEngine private constructor(private val context: Context) {
             return
         }
 
-        // D5. 檢查是否正在底部導覽列「好友」頁面
+        // B5. 檢查是否正在底部導覽列「好友」頁面
         if (friendGiftTask.isFriendsPage(ocrItems, sh)) {
             nonGameScreenTicks = 0
             if (isFriendGiftCompleted && isReceiveGiftCompleted) {
@@ -845,6 +828,28 @@ class AutomationEngine private constructor(private val context: Context) {
                 return
             }
             handleFriendsPage(service, screenBitmap, ocrItems, sw, sh)
+            return
+        }
+
+        // C. 檢查是否彈出「玩遊戲賺點數 / 免費參加」推廣宣傳頁，自動點擊底部「跳過」
+        val promoSkip = findPlayGamePromoSkipButton(screenBitmap, ocrItems, sw, sh)
+        if (promoSkip != null) {
+            appendLog("[遊戲] 偵測到【玩遊戲賺點數】推廣頁，自動點擊底部 [跳過]！")
+            FloatingOverlayService.clickWithOverlayPassthrough(promoSkip) {
+                service.clickRect(promoSkip)
+            }
+            return
+        }
+
+        // D. 檢查四大分頁下半部是否彈出領獎彈窗（優先點可用的『跳過廣告(糖果)』，其次點『紅利 15/60/x1 獲得』）！
+        val popupAction = findPopupActionTarget(screenBitmap, ocrItems)
+        if (popupAction != null) {
+            executePopupAction(service, popupAction)
+            return
+        }
+        val cancelBtn = ocrRecognizer.findPopupCancelButton(screenBitmap, ocrItems, templateMatcher)
+        if (cancelBtn != null) {
+            handlePopupCooldownCancel(service, cancelBtn, sw, sh)
             return
         }
 
@@ -2520,18 +2525,17 @@ class AutomationEngine private constructor(private val context: Context) {
         val sw = screenBitmap.width
         val sh = screenBitmap.height
 
-        // 嚴格安全防護：若畫面為主畫面特徵（能看見頂部四大分頁或底部導覽列）且無下半部領獎彈窗標題與取消鈕，嚴禁尋找任何目標！
-        val hasMainScreenMarkers = ocrItems.any { item ->
-            val cy = item.bounds.centerY().toFloat() / sh
-            val t = item.text.replace(" ", "")
-            (cy in 0.08f..0.18f && (t.contains("首頁") || t.contains("步數") || t.contains("時間") || t.contains("遊戲"))) ||
-            (cy > 0.85f && (
-                t == "集點" ||
-                (t.contains("好友") && !t.contains("邀請") && !t.contains("被") && !t.contains("名單") && t.length <= 4) ||
-                (t.contains("使用") && !t.contains("條款") && t.length <= 4) ||
-                (t.contains("精選") && t.length <= 4)
-            ))
+        // 嚴格子視窗排除：若當前正在抽抽樂、每日賓果、日常任務、好友送/收禮等子畫面，絕對禁止執行主畫面領獎彈窗偵測！
+        if (lotteryTask.isLotteryDialogOpen(ocrItems, sh) ||
+            bingoTask.isBingoDialogOpen(ocrItems, sh) ||
+            missionTask.isMissionDialogOpen(ocrItems, sh, screenBitmap) ||
+            receiveGiftTask.isReceiveGiftDialogOpen(ocrItems, sh) ||
+            friendGiftTask.isFriendsPage(ocrItems, sh)
+        ) {
+            return null
         }
+
+        // 嚴格安全防護：四大分頁的領獎彈窗必備彈窗標題（獲得票券！/獲得金幣！）或底部純白「取消」膠囊鈕！若兩者皆不存在，絕對禁止在下半部點擊任何按鈕！
         val hasBottomModalTitle = ocrItems.any { item ->
             val cy = item.bounds.centerY().toFloat() / sh
             val t = item.text.replace(" ", "")
@@ -2544,8 +2548,7 @@ class AutomationEngine private constructor(private val context: Context) {
             val t = item.text.trim()
             cy in 0.85f..0.97f && t == "取消"
         }
-        // 若在主畫面且無彈窗標題與取消鈕，直接回傳 null，絕對禁止在主畫面下半部點擊任何按鈕！
-        if (hasMainScreenMarkers && !hasBottomModalTitle && !hasBottomModalCancel) {
+        if (!hasBottomModalTitle && !hasBottomModalCancel) {
             return null
         }
 
@@ -2604,18 +2607,21 @@ class AutomationEngine private constructor(private val context: Context) {
             val cy = item.bounds.centerY()
             if (cy in roiTop..roiBottom && item.text.length <= 16) {
                 val t = item.text.trim()
-                // 排除彈窗標題（如『獲得票券！』『獲得金幣！』）與取消按鈕
-                if (t.endsWith("！") || t.endsWith("!") || t == "獲得票券" || t == "獲得金幣" || t == "取消") {
+                // 排除彈窗標題、取消按鈕、與抽抽樂/規則一覽表頭
+                if (t.endsWith("！") || t.endsWith("!") || t == "獲得票券" || t == "獲得金幣" || t == "取消" ||
+                    t.contains("順位") || t.contains("抽獎") || t.contains("一覽") || t.contains("獎勵") || t.contains("規則")
+                ) {
                     continue
                 }
                 val matchesKeyword = OcrRecognizer.GAME_AD_TRIGGER_KEYWORDS.any { kw -> t.contains(kw, ignoreCase = true) }
                 val hasRewardWord = Regex("""\d+\s*獲得""").containsMatchIn(t) || t.contains("看廣告") || t.contains("紅利")
+                val coins = parseRewardCoins(t)
                 if ((matchesKeyword || hasRewardWord) &&
+                    (coins > 0 || t.contains("跳過廣告") || t.contains("免費")) &&
                     OcrRecognizer.GAME_AD_EXCLUDE_KEYWORDS.none { ex -> t.contains(ex, ignoreCase = true) } &&
                     !ocrRecognizer.isAreaInCooldown(ocrItems, cy - btnMarginY, cy + btnMarginY) &&
                     !templateMatcher.isPopupButtonDisabledGray(screenBitmap, cy)
                 ) {
-                    val coins = parseRewardCoins(t)
                     candidates.add(PopupActionTarget.WatchAd("OCR[${t}](${coins}幣)", item.bounds) to coins)
                 }
             }

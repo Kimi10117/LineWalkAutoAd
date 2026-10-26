@@ -280,6 +280,20 @@ class OcrRecognizer {
      * 透過像素級特徵（底部中央獨立純白 [取消] 膠囊鈕 RGB > 230，而兩側 x=6%/94% 與彈窗上緣 x=8%,y=68% 皆被半透明黑幕壓暗 < 190）精準識別！
      */
     fun isAdLoadingScreen(items: List<OcrItem>, screenBitmap: Bitmap? = null): Boolean {
+        // 絕對一票否決：若畫面含有抽獎/領獎/中獎/日常任務等遊戲彈窗文字，絕非廣告載入畫面！
+        val isGameModalOrResult = items.any { item ->
+            val t = item.text.replace(" ", "")
+            t.contains("中獎") ||
+            t.contains("獲得票券") ||
+            t.contains("獲得金幣") ||
+            t.contains("每日賓果") ||
+            t.contains("今日賓果") ||
+            t.contains("抽抽樂") ||
+            t.contains("分享給好友") ||
+            t.contains("領取獎勵")
+        }
+        if (isGameModalOrResult) return false
+
         val hasLoadingText = items.any { item ->
             val t = item.text.replace(" ", "")
             t.contains("載入中") ||

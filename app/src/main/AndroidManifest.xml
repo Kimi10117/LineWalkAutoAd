@@ -11,6 +11,8 @@
     <!-- 允許查詢 LINE 散步趣與 Google Play 套件資訊 (Android 11+ Package Visibility) -->
     <queries>
         <package android:name="com.linecorp.LGWALK" />
+        <package android:name="com.linecorp.LGWKTW" />
+        <package android:name="jp.naver.line.android" />
         <package android:name="com.android.vending" />
         <intent>
             <action android:name="android.intent.action.MAIN" />

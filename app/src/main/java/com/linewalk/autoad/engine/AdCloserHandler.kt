@@ -48,6 +48,7 @@ class AdCloserHandler(
     private var hasRecentRedirect: Boolean = false
     private var wasAdLoading: Boolean = false
     private var hasAdActuallyShown: Boolean = false
+    private var adLoadingTicks: Int = 0
     private var lastClickedPoint: Point? = null
     private var lastBackActionTimeMs: Long = 0L
     private var lastFallbackCornerTimeMs: Long = 0L
@@ -64,6 +65,7 @@ class AdCloserHandler(
             hasRecentRedirect = false
             wasAdLoading = false
             hasAdActuallyShown = false
+            adLoadingTicks = 0
             lastClickedPoint = null
             lastBackActionTimeMs = 0L
             lastFallbackCornerTimeMs = 0L
@@ -206,16 +208,17 @@ class AdCloserHandler(
         }
 
         // 1C. 檢查是否處於向伺服器緩衝/載入廣告之等待畫面 (畫面顯示『載入中...』與白色 [取消] 鈕)
-        val isAdLoading = ocrRecognizer.isAdLoadingScreen(ocrItems, screenBitmap)
+        val isAdLoading = !hasAdActuallyShown && ocrRecognizer.isAdLoadingScreen(ocrItems, screenBitmap)
         if (isAdLoading) {
             wasAdLoading = true
-            hasAdActuallyShown = true
-            // 在容許載入時間 (18 秒) 內，靜候廣告緩衝，嚴禁誤按 [取消] 或誤判回到遊戲！
-            if (elapsedSec < 18) {
-                return AdStepResult.AdLoading(elapsedSec)
+            adLoadingTicks++
+            // 在容許載入時間 (約 12 個 tick，約 15 秒) 內，靜候廣告緩衝，嚴禁誤按 [取消] 或誤判回到遊戲！
+            if (adLoadingTicks < 12) {
+                return AdStepResult.AdLoading(adLoadingTicks)
             } else {
-                // 超過 18 秒伺服器無回應/無廣告庫存，點擊畫面上的 [取消] 鈕優雅返回遊戲
+                // 連續超過 12 個 tick 伺服器無回應/無廣告庫存，點擊畫面上的 [取消] 鈕優雅返回遊戲
                 wasAdLoading = false
+                adLoadingTicks = 0
                 val cancelBtn = ocrItems.find { item ->
                     val cy = item.bounds.centerY().toFloat() / sh
                     val t = item.text.trim()
@@ -229,12 +232,15 @@ class AdCloserHandler(
                 recordAndClick(service, cancelBtn)
                 return AdStepResult.ReturnedToGame(null, "廣告載入逾時已取消")
             }
-        } else if (wasAdLoading) {
-            // 廣告剛從『載入中...』緩衝完成切換至實際廣告畫面！
-            // 重置計時起點，確保實際廣告享有完整的播放保護期 (Grace Period) 與倒數計時！
-            wasAdLoading = false
-            hasAdActuallyShown = true
-            adStartTimeMs = System.currentTimeMillis()
+        } else {
+            adLoadingTicks = 0
+            if (wasAdLoading) {
+                // 廣告剛從『載入中...』緩衝完成切換至實際廣告畫面！
+                // 重置計時起點，確保實際廣告享有完整的播放保護期 (Grace Period) 與倒數計時！
+                wasAdLoading = false
+                hasAdActuallyShown = true
+                adStartTimeMs = System.currentTimeMillis()
+            }
         }
 
         val isGameVisible = isGameScreenVisible(service, screenBitmap, ocrItems)
@@ -559,17 +565,17 @@ class AdCloserHandler(
                 t.contains("下載") ||
                 t.contains("安裝")
             }
-        if (isEndCard && now - lastBackActionTimeMs >= 2500L) {
+        if (isEndCard && !isGame && now - lastBackActionTimeMs >= 2500L) {
             hasAdActuallyShown = true
             lastBackActionTimeMs = now
             lastFallbackCornerTimeMs = now + 4000L
-            service.safeNavigateBack(allowInGame = true)
+            service.safeNavigateBack(allowInGame = false)
             return AdStepResult.WatchdogBackTriggered(elapsedSec, "廣告結束卡片安全返回鍵")
         }
 
         // 8B. 主動安全返回策略與熱區防護：
         // 當廣告已播放超過 30 秒 (或已獲取獎勵)，且畫面仍未看見散步趣主畫面 (因為 line 264 已排除 isGameVisible)，
-        // 代表廣告播放已完成但未自動關閉。此時透過安全返回鍵 (allowInGame = true) 關閉廣告 Activity 最為安全，
+        // 代表廣告播放已完成但未自動關閉。此時透過安全返回鍵關閉廣告 Activity 最為安全，
         // 絕不盲目點擊螢幕中央或廣告內容，杜絕誤跳轉至 Google Play 商店！
         val isOutsideGame = !isGame && !isAd
         val isPlayableAd = false
@@ -578,21 +584,21 @@ class AdCloserHandler(
         }
 
         if (remainingSec == null && elapsedSec >= 5) {
-            if (redirectCount > 0 && now - lastBackActionTimeMs >= 2500L) {
-                service.safeNavigateBack(allowInGame = true)
+            if (redirectCount > 0 && !isGame && now - lastBackActionTimeMs >= 2500L) {
+                service.safeNavigateBack(allowInGame = false)
                 lastBackActionTimeMs = now
                 return AdStepResult.WatchdogBackTriggered(elapsedSec, "重定向安全返回鍵")
             }
 
             // 廣告已明確獲得獎勵：優先派發安全系統返回鍵關閉廣告回到遊戲！
-            if (rewardGrantedOcr != null && now - lastBackActionTimeMs >= 2500L) {
-                service.safeNavigateBack(allowInGame = true)
+            if (rewardGrantedOcr != null && !isGame && now - lastBackActionTimeMs >= 2500L) {
+                service.safeNavigateBack(allowInGame = false)
                 lastBackActionTimeMs = now
                 return AdStepResult.WatchdogBackTriggered(elapsedSec, "已獲獎勵安全返回鍵")
             }
 
-            // Meta 備援關閉熱區：在確認為 Meta 廣告且播放滿 5 秒或無倒數計時時，允許對左上角關閉按鈕區域發送精確點擊，避免廣告停滯超過 30 秒卡死
-            if (isMetaAd && (elapsedSec >= 5 || remainingSec == null) && !isOutsideGame && redirectCount == 0 && now - lastFallbackCornerTimeMs >= 3000L) {
+            // Meta 備援關閉熱區：在確認為 Meta 廣告且播放滿 28 秒或無倒數計時時，允許對左上角關閉按鈕區域發送精確點擊，避免廣告停滯超過 30 秒卡死
+            if (isMetaAd && (elapsedSec >= 28 || (remainingSec == null && elapsedSec >= 25)) && !isOutsideGame && redirectCount == 0 && closeClickCount == 0 && now - lastFallbackCornerTimeMs >= 3000L) {
                 val metaLeftTopHotZone = Rect(
                     (sw * 0.035f).toInt(),
                     (sh * 0.048f).toInt(),
@@ -610,9 +616,9 @@ class AdCloserHandler(
             if (elapsedSec >= 40) {
                 // 若已經發生過外部重定向，或者非 Meta 廣告（如 Google 廣告），嚴禁盲點角落熱區以免再度跳轉 Google Play！
                 // 直接使用安全系統返回鍵關閉廣告最為可靠！
-                if (redirectCount > 0 || !isMetaAd) {
+                if ((redirectCount > 0 || !isMetaAd) && !isGame) {
                     if (now - lastBackActionTimeMs >= 2000L) {
-                        service.safeNavigateBack(allowInGame = true)
+                        service.safeNavigateBack(allowInGame = false)
                         lastBackActionTimeMs = now
                         return AdStepResult.WatchdogBackTriggered(elapsedSec, "末期安全返回鍵")
                     }
@@ -775,8 +781,10 @@ class AdCloserHandler(
                 ((t == "禮物" || t == "禮物盒") && !t.contains("卡") && !t.contains("券") && !t.contains("超商")) ||
                 t.contains("抽抽樂") ||
                 t.contains("任務")
-            )) || (cy in (sh * 0.40f).toInt()..(sh * 0.88f).toInt() && (
-                t.contains("BINGO") || t.contains("今日上限") || t.contains("COMPLETE")
+            )) || (cy in (sh * 0.35f).toInt()..(sh * 0.88f).toInt() && (
+                t.contains("BINGO") || t.contains("今日上限") || t.contains("COMPLETE") ||
+                t.contains("50張") || t.contains("抽1次") || t.contains("免費抽") ||
+                t.contains("抽抽樂") || t.contains("中獎") || t.contains("獲得票券") || t.contains("獲得金幣")
             )) || (cy > sh * 0.88f && (
                 t == "集點" || t == "好友" || t == "使用" || t == "精選"
             ))
