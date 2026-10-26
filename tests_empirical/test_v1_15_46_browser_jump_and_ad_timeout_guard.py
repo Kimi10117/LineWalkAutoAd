@@ -80,7 +80,7 @@ def test_kotlin_source_invariants_v1_15_46():
     gradle_code = (REPO_ROOT / "app/build.gradle.kts").read_text(encoding="utf-8")
     manifest_code = (REPO_ROOT / "app/src/main/AndroidManifest.xml").read_text(encoding="utf-8")
 
-    assert 'versionName = "1.15.46"' in gradle_code
-    assert "versionCode = 79" in gradle_code
+    assert 'versionName = "1.15.46"' in gradle_code or 'versionName = "1.15.47"' in gradle_code
+    assert "versionCode = 79" in gradle_code or "versionCode = 80" in gradle_code
     assert '<package android:name="com.linecorp.LGWKTW" />' in manifest_code
     assert '<package android:name="jp.naver.line.android" />' in manifest_code

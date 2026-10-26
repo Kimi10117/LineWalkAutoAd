@@ -614,23 +614,24 @@ class AdCloserHandler(
 
             // 備援盲點與安全返回：僅在廣告播放超過 40 秒且無關閉鈕時觸發
             if (elapsedSec >= 40) {
-                // 若已經發生過外部重定向，或者非 Meta 廣告（如 Google 廣告），嚴禁盲點角落熱區以免再度跳轉 Google Play！
+                // 若已經發生過外部重定向，或者在散步趣內部，嚴禁盲點角落熱區以免再度跳轉 Google Play！
                 // 直接使用安全系統返回鍵關閉廣告最為可靠！
-                if ((redirectCount > 0 || !isMetaAd) && !isGame) {
+                if (redirectCount > 0 && !isGame) {
                     if (now - lastBackActionTimeMs >= 2000L) {
                         service.safeNavigateBack(allowInGame = false)
                         lastBackActionTimeMs = now
                         return AdStepResult.WatchdogBackTriggered(elapsedSec, "末期安全返回鍵")
                     }
                 } else {
-                    if (!isOutsideGame && now - lastFallbackCornerTimeMs >= 3500L) {
+                    // 若未發生重定向，輪流嘗試角落備援熱區（右上角/左上角/內容右上角）與安全返回鍵
+                    if (!isOutsideGame && now - lastFallbackCornerTimeMs >= 3000L) {
                         val (label, targetRect) = getNextFallbackTarget(sw, sh, ocrItems)
                         lastFallbackCornerTimeMs = now
                         recordAndClick(service, targetRect, allowBlacklist = true)
                         return AdStepResult.WatchdogBackTriggered(elapsedSec, "備援盲點[$label]")
                     }
-                    if (now - lastBackActionTimeMs >= 3500L) {
-                        service.safeNavigateBack(allowInGame = true)
+                    if (!isGame && now - lastBackActionTimeMs >= 3000L) {
+                        service.safeNavigateBack(allowInGame = false)
                         lastBackActionTimeMs = now
                         return AdStepResult.WatchdogBackTriggered(elapsedSec, "超時安全返回鍵")
                     }

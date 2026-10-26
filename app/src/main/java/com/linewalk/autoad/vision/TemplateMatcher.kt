@@ -501,6 +501,11 @@ class TemplateMatcher {
             // 右上角 (廣告標準關閉鈕位置，避開最頂部系統狀態列與通知列 y < 8.2%，涵蓋 y in 8.2%..16%)
             Rect((sw * 0.75f).toInt(), topLimitY, (sw * 0.98f).toInt(), (sh * 0.16f).toInt())
         )
+        // 右上角高位區 (專門應對 InMobi / AdMob / AppLovin 等全螢幕廣告位於 y in 4.8%..8.2% 的關閉 X 鈕)
+        val rightUpperTopLimitY = max((sh * 0.048f).toInt(), 48)
+        val rightUpperBottomLimitY = topLimitY
+        searchZones.add(Rect((sw * 0.75f).toInt(), rightUpperTopLimitY, (sw * 0.98f).toInt(), rightUpperBottomLimitY))
+
         if (includeLeftZone) {
             // 左上角 (Meta 輪播/插頁廣告關閉鈕唯一位置，涵蓋 x in 2.5%..18% 與 y in 4.8%..14%)
             val leftTopLimitY = max((sh * 0.048f).toInt(), 48)
@@ -562,8 +567,14 @@ class TemplateMatcher {
                             cx += step
                             continue
                         }
-                    } else {
+                    } else if (zone.left < sw / 2) {
                         // 左上角 (Meta 廣告)：頂部限制為 4.0% sh 或 40px，覆蓋 y ≈ 6.5% 的 Meta 關閉按鈕
+                        if (absY - r < max((sh * 0.040f).toInt(), 40)) {
+                            cx += step
+                            continue
+                        }
+                    } else {
+                        // 右上角高位區 (InMobi / AdMob / AppLovin 等廣告)：頂部限制為 4.0% sh 或 40px，覆蓋 y ≈ 6.25% 的關閉按鈕
                         if (absY - r < max((sh * 0.040f).toInt(), 40)) {
                             cx += step
                             continue
@@ -628,7 +639,7 @@ class TemplateMatcher {
                                     bestCandidate = TemplateMatchResult(
                                         score = (rawScore / 150f).coerceIn(0.80f, 0.99f),
                                         bounds = Rect(absX - r, absY - r, absX + r, absY + r),
-                                        label = if (zoneIdx == 0) "右上角幾何X" else "左上角幾何X"
+                                        label = if (zone.left < sw / 2) "左上角幾何X" else "右上角幾何X"
                                     )
                                 }
                             }
