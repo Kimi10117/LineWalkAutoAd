@@ -193,6 +193,7 @@ class AutomationEngine private constructor(private val context: Context) {
     internal var bingoOpenCellRetryCount = 0
     private var currentPhaseEmptyTicks = 0
     internal var nonGameScreenTicks = 0
+    internal var geoXConsecutiveClicks = 0
     private var externalAppTicks = 0
 
     private val _uiStatus = MutableStateFlow(EngineUiStatus())
@@ -902,58 +903,15 @@ class AutomationEngine private constructor(private val context: Context) {
         }
 
         // D3. 幾何角落 X 偵測器（如『邀請好友』右上角 X，或全螢幕廣告左上/右上角 X！）
+        // D3. 幾何角落 X 偵測器與全螢幕廣告/可玩式廣告優先檢查
         // 嚴格安全防護：處於任何功能子視窗（賓果、抽抽樂、任務、收禮、好友頁）時，嚴格禁止幾何 X 誤關閉彈窗！
         val isAnySubDialog = bingoTask.isBingoDialogOpen(ocrItems, sh) ||
                              lotteryTask.isLotteryDialogOpen(ocrItems, sh) ||
                              missionTask.isMissionDialogOpen(ocrItems, sh, screenBitmap) ||
                              receiveGiftTask.isReceiveGiftDialogOpen(ocrItems, sh) ||
                              friendGiftTask.isFriendsPage(ocrItems, sh)
-        if (!bingoTask.isBingoDialogOpen(ocrItems, sh)) {
-            if (!isAnySubDialog) {
-                val geoX = templateMatcher.detectCornerGeometricX(
-                    screenBitmap = screenBitmap,
-                    blacklistedCoord = { x, y ->
-                        FloatingOverlayService.isInsideOverlay(x, y) ||
-                        (x in (sw * 0.18f).toInt()..(sw * 0.82f).toInt() && y < sh * 0.08f) ||
-                        y < max((sh * 0.040f).toInt(), 40)
-                    }
-                )
-                if (geoX != null) {
-                    nonGameScreenTicks = 0
-                    appendLog("[關閉] 偵測到全螢幕宣傳頁/彈窗角落關閉鈕 (${geoX.label})，自動點擊關閉！")
-                    FloatingOverlayService.clickWithOverlayPassthrough(geoX.bounds) {
-                        service.clickRect(geoX.bounds)
-                    }
-                    updateDetail("[關閉] 已點擊關閉按鈕 (${geoX.label})，返回遊戲...", "[關閉] 關閉彈窗中...")
-                    return
-                }
-            }
-        }
 
-        // D4. 檢查是否處於下半部真正領獎彈窗（必須同時具備彈窗標題與取消鈕，嚴禁因底層廣告粉紅像素誤判）
-        val hasBottomModalTitle = ocrItems.any { item ->
-            val cy = item.bounds.centerY().toFloat() / sh
-            val t = item.text.replace(" ", "")
-            cy in 0.52f..0.75f &&
-                !t.contains("輕鬆") && !t.contains("簡單") && !t.contains("遊玩") && !t.contains("Sponsored") && !t.contains("AD") &&
-                (t.contains("獲得票券") || t.contains("獲得金幣"))
-        }
-        val hasBottomModalCancel = ocrItems.any { item ->
-            val cy = item.bounds.centerY().toFloat() / sh
-            val t = item.text.trim()
-            cy in 0.85f..0.97f && t == "取消"
-        }
-        val isBottomRewardPopup = hasBottomModalTitle && hasBottomModalCancel
-
-        if (isBottomRewardPopup) {
-            nonGameScreenTicks = 0
-            popupRetryTicks = 0
-            transitionTo(EngineState.TRIGGER_AD_POPUP, "偵測到下半部領獎彈窗，準備點擊看廣告/領取...", "⏳ 處理彈窗中...")
-            return
-        }
-
-        // D5. 檢查是否處於可玩式互動廣告 / 應用商店推廣頁 / 全螢幕廣告 (如『開啟商店』、『DOWNLOAD』、『安裝』、『下載』、『Google Play』)
-        // 重要安全防護：若能看見主畫面頂部分頁 (首頁/步數/時間/遊戲) 或底部導覽列 (集點/好友/使用/精選)，代表處於主畫面，嚴禁將底層橫幅廣告誤判為全螢幕廣告！
+        // D3A. 檢查是否處於可玩式互動廣告 / 應用商店推廣頁 / 全螢幕廣告 (優先於一般彈窗 X 處理，確保廣告由廣告監控專責處理)
         val hasMainScreenMarkers = ocrItems.any { item ->
             val cy = item.bounds.centerY().toFloat() / sh
             val t = item.text.replace(" ", "")
@@ -994,8 +952,9 @@ class AutomationEngine private constructor(private val context: Context) {
             adWatchdogCooldownTicks--
         }
         val isGameScreen = hasMainScreenMarkers || adCloserHandler.isGameScreenVisible(service, screenBitmap, ocrItems)
-        if (adWatchdogCooldownTicks == 0 && (hasPlayableOrStoreAdOcr || (!isGameScreen && nonGameScreenTicks >= 2))) {
+        if (adWatchdogCooldownTicks == 0 && (hasPlayableOrStoreAdOcr || (!isGameScreen && !isAnySubDialog && nonGameScreenTicks >= 2))) {
             nonGameScreenTicks = 0
+            geoXConsecutiveClicks = 0
             appendLog("[廣告] 偵測到全螢幕廣告/可玩式廣告/商店宣傳頁，切換至廣告監控流程安全關閉！")
             adCloserHandler.onEnterAdMode()
             transitionTo(
@@ -1004,6 +963,66 @@ class AutomationEngine private constructor(private val context: Context) {
                 "[廣告] 廣告監控中..."
             )
             return
+        }
+
+        // D3B. 檢查是否處於下半部真正領獎彈窗（必須同時具備彈窗標題與取消鈕，嚴禁因底層廣告粉紅像素誤判）
+        val hasBottomModalTitle = ocrItems.any { item ->
+            val cy = item.bounds.centerY().toFloat() / sh
+            val t = item.text.replace(" ", "")
+            cy in 0.52f..0.75f &&
+                !t.contains("輕鬆") && !t.contains("簡單") && !t.contains("遊玩") && !t.contains("Sponsored") && !t.contains("AD") &&
+                (t.contains("獲得票券") || t.contains("獲得金幣"))
+        }
+        val hasBottomModalCancel = ocrItems.any { item ->
+            val cy = item.bounds.centerY().toFloat() / sh
+            val t = item.text.trim()
+            cy in 0.85f..0.97f && t == "取消"
+        }
+        val isBottomRewardPopup = hasBottomModalTitle && hasBottomModalCancel
+
+        if (isBottomRewardPopup) {
+            nonGameScreenTicks = 0
+            popupRetryTicks = 0
+            geoXConsecutiveClicks = 0
+            transitionTo(EngineState.TRIGGER_AD_POPUP, "偵測到下半部領獎彈窗，準備點擊看廣告/領取...", "⏳ 處理彈窗中...")
+            return
+        }
+
+        // D3C. 幾何角落 X 偵測器（如『邀請好友』右上角 X，或全螢幕宣傳頁左上/右上角 X！）
+        if (!bingoTask.isBingoDialogOpen(ocrItems, sh)) {
+            if (!isAnySubDialog) {
+                val geoX = templateMatcher.detectCornerGeometricX(
+                    screenBitmap = screenBitmap,
+                    blacklistedCoord = { x, y ->
+                        FloatingOverlayService.isInsideOverlay(x, y) ||
+                        (x in (sw * 0.18f).toInt()..(sw * 0.82f).toInt() && y < sh * 0.08f) ||
+                        y < max((sh * 0.040f).toInt(), 40)
+                    }
+                )
+                if (geoX != null) {
+                    geoXConsecutiveClicks++
+                    if (geoXConsecutiveClicks >= 3) {
+                        appendLog("[關閉] 連續點擊角落關閉鈕 (${geoX.label}) 達 3 次無效，發送安全返回鍵關閉...")
+                        service.safeNavigateBack(allowInGame = true)
+                        geoXConsecutiveClicks = 0
+                        if (!isGameScreen) {
+                            nonGameScreenTicks = 2
+                        }
+                        return
+                    }
+                    if (isGameScreen) {
+                        nonGameScreenTicks = 0
+                    }
+                    appendLog("[關閉] 偵測到全螢幕宣傳頁/彈窗角落關閉鈕 (${geoX.label})，自動點擊關閉！(嘗試: $geoXConsecutiveClicks/3)")
+                    FloatingOverlayService.clickWithOverlayPassthrough(geoX.bounds) {
+                        service.clickRect(geoX.bounds, allowTopSafeZone = true)
+                    }
+                    updateDetail("[關閉] 已點擊關閉按鈕 (${geoX.label})，返回遊戲...", "[關閉] 關閉彈窗中...")
+                    return
+                } else {
+                    geoXConsecutiveClicks = 0
+                }
+            }
         }
 
         if (!isGameScreen) {
@@ -2239,7 +2258,7 @@ class AutomationEngine private constructor(private val context: Context) {
             val cy = item.bounds.centerY()
             cy < sh * 0.16f && (item.text.contains("正在載入") || item.text.contains(".com") || item.text.contains("http"))
         }
-        val hasAdOcrDirect = !onMainScreenDirect && !isStillInSubDialog && (
+        val hasAdOcrDirect = !onMainScreenDirect && (
             ocrItems.any { item ->
                 val t = item.text
                 t.contains("開啟商店") ||
@@ -2257,14 +2276,14 @@ class AutomationEngine private constructor(private val context: Context) {
         )
         val isGameScreen = adCloserHandler.isGameScreenVisible(service, screenBitmap, ocrItems)
         // 嚴格安全防護：若畫面仍在主畫面或領獎下半部彈窗，絕不誤判為全螢幕廣告！
-        if (!onMainScreenDirect && !isStillInSubDialog && !isBottomRewardPopup && (hasAdOcrDirect || directGeoX != null || isExternalDirect || hasBrowserTitleDirect || (!isGameScreen && popupRetryTicks >= 2))) {
+        if (!onMainScreenDirect && !isBottomRewardPopup && (hasAdOcrDirect || (!isStillInSubDialog && (directGeoX != null || isExternalDirect || hasBrowserTitleDirect || (!isGameScreen && popupRetryTicks >= 2))))) {
             appendLog("[廣告] 點擊目標後已直接進入全螢幕廣告/宣傳頁，啟動廣告監控流程！")
             adCloserHandler.onEnterAdMode()
             transitionTo(EngineState.AD_WATCHING, "已進入廣告畫面，安全監控中...", "[廣告] 監控中...")
             return
         }
 
-        if (isStillInSubDialog && popupRetryTicks >= 1) {
+        if (isStillInSubDialog && popupRetryTicks >= 2) {
             transitionTo(EngineState.IN_GAME_SCAN, "已領取獎勵，繼續彈窗內部巡邏...", "[巡邏] 檢查彈窗中...")
             return
         }

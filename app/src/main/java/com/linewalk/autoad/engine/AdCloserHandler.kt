@@ -650,6 +650,13 @@ class AdCloserHandler(
                 return AdStepResult.WatchdogBackTriggered(elapsedSec, "已獲獎勵安全返回鍵")
             }
 
+            // 廣告已明確獲得獎勵且已在內部嘗試過點擊（或播放超過 8 秒但畫面仍未回到散步趣主畫面）：派發返回鍵安全關閉廣告！
+            if (rewardGrantedOcr != null && !isGameVisible && (closeClickCount > 0 || elapsedSec >= 8) && now - lastBackActionTimeMs >= 2500L) {
+                service.safeNavigateBack(allowInGame = true)
+                lastBackActionTimeMs = now
+                return AdStepResult.WatchdogBackTriggered(elapsedSec, "已獲獎勵內部返回鍵")
+            }
+
             // Meta 備援關閉熱區：在確認為 Meta 廣告且播放滿 28 秒或無倒數計時時，允許對左上角關閉按鈕區域發送精確點擊，避免廣告停滯超過 30 秒卡死
             if (isMetaAd && !hasGooglePlayOnScreen && (elapsedSec >= 28 || (remainingSec == null && elapsedSec >= 25)) && !isOutsideGame && redirectCount == 0 && closeClickCount == 0 && now - lastFallbackCornerTimeMs >= 3000L) {
                 val metaLeftTopHotZone = Rect(
@@ -683,7 +690,7 @@ class AdCloserHandler(
                         recordAndClick(service, targetRect, allowBlacklist = true)
                         return AdStepResult.WatchdogBackTriggered(elapsedSec, "備援盲點[$label]")
                     }
-                    if (!isGame && now - lastBackActionTimeMs >= 3000L) {
+                    if ((!isGame || !isGameVisible) && now - lastBackActionTimeMs >= 3000L) {
                         service.safeNavigateBack(allowInGame = true)
                         lastBackActionTimeMs = now
                         return AdStepResult.WatchdogBackTriggered(elapsedSec, "超時安全返回鍵")

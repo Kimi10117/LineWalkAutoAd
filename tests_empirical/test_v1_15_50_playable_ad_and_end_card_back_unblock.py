@@ -43,10 +43,10 @@ def test_node_inspector_relaxes_corner_exclusion():
 
 
 def test_version_bump_v1_15_50():
-    """Verify version 1.15.50 and versionCode 83."""
+    """Verify version 1.15.50/1.15.51 and versionCode 83/84."""
     gradle_code = (REPO_ROOT / "app/build.gradle.kts").read_text(encoding="utf-8")
     workflow_code = (REPO_ROOT / ".github/workflows/build-apk.yml").read_text(encoding="utf-8")
 
-    assert 'versionCode = 83' in gradle_code
-    assert 'versionName = "1.15.50"' in gradle_code
-    assert 'v1.15.50' in workflow_code
+    assert any(c in gradle_code for c in ['versionCode = 83', 'versionCode = 84'])
+    assert any(v in gradle_code for v in ['versionName = "1.15.50"', 'versionName = "1.15.51"'])
+    assert any(w in workflow_code for w in ['v1.15.50', 'v1.15.51'])

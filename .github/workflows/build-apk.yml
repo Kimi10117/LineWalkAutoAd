@@ -93,17 +93,17 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
             tag_name: latest-apk
-            name: "散步趣助手 v1.15.50 (修復可玩式廣告與結束卡片返回鍵阻斷、強化 End Card 識別與巡邏廣告偵測 - Run #${{ github.run_number }})"
+            name: "散步趣助手 v1.15.51 (重構巡邏廣告辨識優先權根除幾何X死循環、強化Reward granted內部返回鍵與彈窗防卡死 - Run #${{ github.run_number }})"
             body: |
-              **散步趣助手 v1.15.50 (Run #${{ github.run_number }})**
-              1. **【全面修復廣告結束卡片 (End Card) 返回鍵阻斷】**：
-                 - 修正 AdCloserHandler 中各項超時與結束卡片返回鍵邏輯，放行 `allowInGame = true`，徹底解決內部廣告（`com.linecorp.LGWKTW`）發送返回鍵被服務安全機制誤攔截導致卡死在結束頁面 50 秒以上的重大缺陷。
-                 - 擴充廣告結束卡片 (`isEndCard`) 識別詞彙，涵蓋「下載」、「立即下載」、「連勝中」、「金幣」、「現金回饋」等互動遊戲與應用推廣 End Card，於播放 15 秒後自動秒速派發安全返回鍵退出廣告。
-              2. **【放行廣告容器超時返回鍵防護】**：
-                 - 調整 Accessibility 服務中的第三方廣告容器保護規則，在常規期間禁止返回鍵，但在超時或結束卡片觸發（`allowInGame = true`）時放行返回鍵，確保卡死時能確實退出廣告。
-              3. **【巡邏模式全面支援可玩式遊戲廣告識別】**：
-                 - 巡邏模式廣告關鍵字擴充支援「立即下載」、「下載」、「連勝中」等互動小遊戲特徵，若廣告在任何情況下出現在遊戲巡邏階段，立即轉入廣告監控模式，杜絕以主畫面巡邏模式盲點背景。
-              4. **【超時拉回散步趣機制健全化】**：
-                 - 逾時強制關閉時先派發雙次系統返回鍵並驗證主畫面，確認畫面回到遊戲後平滑恢復巡邏，防止 `bringAppToFront` 重新置頂殘留之廣告 Activity。
+              **散步趣助手 v1.15.51 (Run #${{ github.run_number }})**
+              1. **【重構巡邏流程廣告偵測優先權，根除幾何 X 空點死循環】**：
+                 - 調整 `handleInGameScan` 執行順序，將全螢幕廣告與可玩式互動廣告識別（`hasPlayableOrStoreAdOcr`）置於幾何 X（`detectCornerGeometricX`）之前。
+                 - 徹底解決 Coupang 等互動廣告彈出時被巡邏階段誤當成一般遊戲彈窗反覆點擊右上角 X（每 2 秒點一次長達 6 分鐘）卻無法進入廣告監控模式的致命缺陷。
+              2. **【巡邏角落關閉鈕點擊上限保護 (Retry Limit)】**：
+                 - 引入 `geoXConsecutiveClicks` 計數機制，若連續 3 次點擊角落關閉鈕未關閉畫面，立即發送安全返回鍵（`allowInGame = true`）強行關閉彈窗，杜絕無限空點。
+              3. **【解除內部廣告獎勵返回鍵阻斷】**：
+                 - 針對 `Reward granted` 廣告，若已點擊關閉鈕或已顯示達 8 秒且畫面非主畫面（`!isGameVisible`），立即派發 `service.safeNavigateBack(allowInGame = true)` 退出廣告，解決因檢查 `!isGame` 導致內部廣告返回鍵全面失效的問題。
+              4. **【彈窗過渡防卡死機制修復】**：
+                 - 修正 `handleTriggerAdPopup` 中的 `hasAdOcrDirect` 判定，避免因抽獎殘留狀態將真實廣告誤判為功能子視窗而提前退出至巡邏狀態。
             files: LineWalkAutoAd.apk
             prerelease: false
