@@ -193,6 +193,7 @@ class AutomationEngine private constructor(private val context: Context) {
     internal var bingoOpenCellRetryCount = 0
     private var currentPhaseEmptyTicks = 0
     internal var nonGameScreenTicks = 0
+    private var externalAppTicks = 0
 
     private val _uiStatus = MutableStateFlow(EngineUiStatus())
     val uiStatus: StateFlow<EngineUiStatus> = _uiStatus.asStateFlow()
@@ -377,7 +378,7 @@ class AutomationEngine private constructor(private val context: Context) {
             updateDetail("[等待] 等待《LINE 散步趣》回到前景...", "[等待] 等待散步趣前景")
             return
         } else {
-            nonGameScreenTicks = 0
+            externalAppTicks = 0
         }
         val screenBitmap = service.captureScreenBitmap()
         if (screenBitmap == null) {
@@ -407,11 +408,11 @@ class AutomationEngine private constructor(private val context: Context) {
         service: AutoAdAccessibilityService,
         fgPkg: String?
     ) {
-        nonGameScreenTicks++
+        externalAppTicks++
         val externalPkg = fgPkg ?: "未知外部應用"
         val safePkgLabel = if (externalPkg.length > 20) externalPkg.takeLast(20) else externalPkg
 
-        appendLog("[防護] 偵測到非散步趣應用 ($externalPkg)，啟動嚴格防誤點保護 (連續 ${nonGameScreenTicks} 次)")
+        appendLog("[防護] 偵測到非散步趣應用 ($externalPkg)，啟動嚴格防誤點保護 (連續 ${externalAppTicks} 次)")
         adCloserHandler.markRecentRedirect()
         _uiStatus.value = _uiStatus.value.copy(
             statusDetail = "[防護] 前景非散步趣 ($externalPkg)",
@@ -419,11 +420,11 @@ class AutomationEngine private constructor(private val context: Context) {
         )
 
         // 逾時復原：連續外部應用超過 3 個 tick (約 4 秒)，強制將散步趣喚醒拉回前景！
-        if (nonGameScreenTicks >= 3) {
+        if (externalAppTicks >= 3) {
             appendLog("[防護] 停留外部應用達 3 次 tick 逾時，嘗試強制喚醒散步趣拉回前景！")
             val targetPkg = config.targetGamePackages.firstOrNull { it != "jp.naver.line.android" } ?: "com.linecorp.LGWKTW"
             service.bringAppToFront(targetPkg)
-            nonGameScreenTicks = 0
+            externalAppTicks = 0
             transitionTo(EngineState.IN_GAME_SCAN, "已拉回散步趣，恢復遊戲巡邏...", "[巡邏] 巡邏畫面目標中...")
             return
         }
@@ -913,7 +914,8 @@ class AutomationEngine private constructor(private val context: Context) {
                     screenBitmap = screenBitmap,
                     blacklistedCoord = { x, y ->
                         FloatingOverlayService.isInsideOverlay(x, y) ||
-                        y < sh * 0.08f
+                        (x in (sw * 0.18f).toInt()..(sw * 0.82f).toInt() && y < sh * 0.08f) ||
+                        y < max((sh * 0.040f).toInt(), 40)
                     }
                 )
                 if (geoX != null) {
@@ -964,19 +966,26 @@ class AutomationEngine private constructor(private val context: Context) {
             ))
         }
 
-        val hasPlayableOrStoreAdOcr = !hasMainScreenMarkers && ocrItems.any { item ->
-            val t = item.text
-            t.contains("開啟商店") ||
-            t.contains("DOWNLOAD", ignoreCase = true) ||
-            t.contains("INSTALL", ignoreCase = true) ||
-            t.contains("Play Now", ignoreCase = true) ||
-            t.contains("立即遊玩") ||
-            t.contains("免費下載") ||
-            t.contains("安裝") ||
-            t.contains("Google Play") ||
-            t.contains("インストール") ||
-            (t.contains("廣告") && (t.contains("秒") || t.contains("後") || item.bounds.centerY() < sh * 0.15f))
-        }
+        val hasPlayableOrStoreAdOcr = !hasMainScreenMarkers && (
+            ocrItems.any { item ->
+                val t = item.text
+                t.contains("開啟商店") ||
+                t.contains("DOWNLOAD", ignoreCase = true) ||
+                t.contains("INSTALL", ignoreCase = true) ||
+                t.contains("Play Now", ignoreCase = true) ||
+                t.contains("立即遊玩") ||
+                t.contains("免費下載") ||
+                t.contains("安裝") ||
+                t.contains("Google Play") ||
+                t.contains("インストール") ||
+                t.contains("立即观看") ||
+                t.contains("立即觀看") ||
+                t.contains("youtu.be", ignoreCase = true) ||
+                t.contains("youtube.com", ignoreCase = true) ||
+                OcrRecognizer.AD_REWARD_GRANTED_KEYWORDS.any { kw -> t.contains(kw, ignoreCase = true) } ||
+                (t.contains("廣告") && (t.contains("秒") || t.contains("後") || item.bounds.centerY() < sh * 0.15f))
+            } || ocrRecognizer.detectAdCountdownSeconds(ocrItems, sh) != null
+        )
 
         if (adWatchdogCooldownTicks > 0) {
             adWatchdogCooldownTicks--
@@ -1329,8 +1338,10 @@ class AutomationEngine private constructor(private val context: Context) {
                 popupRetryTicks = 0
                 transitionTo(EngineState.TRIGGER_AD_POPUP, "已點擊看廣告領取禮物，等待廣告...", "[禮物] 領取禮物中...")
             } else {
-                updateDetail("[收禮] 已點擊【$label】，直接領取獎勵！", "[收禮] 直接領取完成")
-                delay(600)
+                updateDetail("[收禮] 已點擊【$label】，等待獎勵確認或廣告...", "[收禮] 領取禮物中...")
+                delay(500)
+                popupRetryTicks = 0
+                transitionTo(EngineState.TRIGGER_AD_POPUP, "已點擊【$label】，等待獎勵確認或廣告...", "[禮物] 領取禮物中...")
             }
             return
         }
@@ -2186,7 +2197,8 @@ class AutomationEngine private constructor(private val context: Context) {
             screenBitmap = screenBitmap,
             blacklistedCoord = { x, y ->
                 FloatingOverlayService.isInsideOverlay(x, y) ||
-                y < sh * 0.08f
+                (x in (sw * 0.18f).toInt()..(sw * 0.82f).toInt() && y < sh * 0.08f) ||
+                y < max((sh * 0.040f).toInt(), 40)
             }
         )
         val onMainScreenDirect = ocrRecognizer.isLineWalkMainScreenVisible(screenBitmap, ocrItems, templateMatcher)
@@ -2224,9 +2236,22 @@ class AutomationEngine private constructor(private val context: Context) {
             val cy = item.bounds.centerY()
             cy < sh * 0.16f && (item.text.contains("正在載入") || item.text.contains(".com") || item.text.contains("http"))
         }
+        val hasAdOcrDirect = !onMainScreenDirect && !isStillInSubDialog && (
+            ocrItems.any { item ->
+                val t = item.text
+                t.contains("開啟商店") ||
+                t.contains("DOWNLOAD", ignoreCase = true) ||
+                t.contains("INSTALL", ignoreCase = true) ||
+                t.contains("立即观看") ||
+                t.contains("立即觀看") ||
+                t.contains("youtu.be", ignoreCase = true) ||
+                t.contains("youtube.com", ignoreCase = true) ||
+                OcrRecognizer.AD_REWARD_GRANTED_KEYWORDS.any { kw -> t.contains(kw, ignoreCase = true) }
+            } || ocrRecognizer.detectAdCountdownSeconds(ocrItems, sh) != null
+        )
         val isGameScreen = adCloserHandler.isGameScreenVisible(service, screenBitmap, ocrItems)
         // 嚴格安全防護：若畫面仍在主畫面或領獎下半部彈窗，絕不誤判為全螢幕廣告！
-        if (!onMainScreenDirect && !isStillInSubDialog && !isBottomRewardPopup && (directGeoX != null || isExternalDirect || hasBrowserTitleDirect || (!isGameScreen && popupRetryTicks >= 2))) {
+        if (!onMainScreenDirect && !isStillInSubDialog && !isBottomRewardPopup && (hasAdOcrDirect || directGeoX != null || isExternalDirect || hasBrowserTitleDirect || (!isGameScreen && popupRetryTicks >= 2))) {
             appendLog("[廣告] 點擊目標後已直接進入全螢幕廣告/宣傳頁，啟動廣告監控流程！")
             adCloserHandler.onEnterAdMode()
             transitionTo(EngineState.AD_WATCHING, "已進入廣告畫面，安全監控中...", "[廣告] 監控中...")

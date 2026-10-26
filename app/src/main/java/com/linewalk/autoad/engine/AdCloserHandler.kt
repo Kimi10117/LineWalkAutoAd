@@ -452,6 +452,31 @@ class AdCloserHandler(
             return AdStepResult.StillCountingDown(remainingSec, elapsedSec)
         }
 
+        // 4AA. 【已獲取獎勵膠囊藥丸 [Reward granted ✕] 秒速點擊】
+        // 當畫面頂部浮現 [Reward granted ✕] 膠囊按鈕時，✕ 位於膠囊藥丸最右側 (x in 88%..98% sw, y in 4%..16% sh)。
+        // 立即點擊右側 ✕ 區域秒關廣告，絕不拖延等候！
+        if (rewardGrantedOcr != null) {
+            val isTopRightPill = rewardGrantedOcr.bounds.centerY() < sh * 0.16f &&
+                                 rewardGrantedOcr.bounds.right >= sw * 0.55f
+            val hasRewardText = rewardGrantedOcr.text.contains("Reward", ignoreCase = true) ||
+                                rewardGrantedOcr.text.contains("granted", ignoreCase = true) ||
+                                rewardGrantedOcr.text.contains("earned", ignoreCase = true) ||
+                                rewardGrantedOcr.text.contains("獲得", ignoreCase = true) ||
+                                rewardGrantedOcr.text.contains("✕") ||
+                                rewardGrantedOcr.text.contains("X")
+            if (isTopRightPill || hasRewardText) {
+                val closeX = max((sw * 0.88f).toInt(), min((sw * 0.94f).toInt(), rewardGrantedOcr.bounds.right + (sw * 0.05f).toInt()))
+                val closeY = rewardGrantedOcr.bounds.centerY()
+                val pillCloseRect = Rect(closeX - 25, closeY - 25, closeX + 25, closeY + 25)
+                if (!isInvalidOrBlacklisted(closeX, closeY)) {
+                    hasAdActuallyShown = true
+                    lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
+                    recordAndClick(service, pillCloseRect, allowBlacklist = true)
+                    return AdStepResult.ClickedCloseOrSkip("Reward granted [✕]", pillCloseRect)
+                }
+            }
+        }
+
         val hasGooglePlayOnScreen = ocrItems.any { item ->
             val t = item.text
             t.contains("Google Play", ignoreCase = true) ||
