@@ -206,7 +206,8 @@ class FriendGiftTask {
                 val r = (c shr 16) and 0xFF
                 val g = (c shr 8) and 0xFF
                 val b = c and 0xFF
-                if (g > 130 && (g - r) > 25 && (g - b) > 25) {
+                // 嚴格區分「未贈送之亮綠按鈕 (#06C755, G≈199)」與「已贈送之深綠金幣印章按鈕 (RGB≈10,97,46)」
+                if (g > 150 && (g - r) > 40 && (g - b) > 35) {
                     greenPts.add(android.graphics.Point(x, y))
                 }
             }
@@ -257,6 +258,8 @@ class FriendGiftTask {
         }
 
         // 2. OCR 備援：辨識「禮物」文字 (x > 0.75f, y in 0.38f..0.85f)
+        // 重要防呆：已贈送過的好友按鈕下方依然印有灰色「禮物」二字，但上方方塊已變為深綠金幣印章 (G < 140)！
+        // 故必須驗證按鈕區域內確實含有亮綠色像素 (g > 150)，絕不可對已贈送之深綠印章按鈕重複空點！
         val giftOcrItems = ocrItems.filter { item ->
             val cy = item.bounds.centerY()
             val cx = item.bounds.centerX()
@@ -270,13 +273,26 @@ class FriendGiftTask {
             val cx = item.bounds.centerX()
             val cy = item.bounds.centerY()
             val btnCenterY = cy - (sh * 0.035f).toInt()
-            if (!isAlreadyGiftedOrSkipped(cx, btnCenterY, sh)) {
-                return Rect(
-                    (sw * 0.78f).toInt(),
-                    btnCenterY - (sh * 0.030f).toInt(),
-                    (sw * 0.94f).toInt(),
-                    btnCenterY + (sh * 0.030f).toInt()
-                )
+            val candidateRect = Rect(
+                (sw * 0.78f).toInt(),
+                (btnCenterY - (sh * 0.030f).toInt()).coerceIn(0, sh - 1),
+                (sw * 0.94f).toInt(),
+                (btnCenterY + (sh * 0.030f).toInt()).coerceIn(0, sh - 1)
+            )
+            var brightGreenCount = 0
+            for (by in candidateRect.top..candidateRect.bottom step 3) {
+                for (bx in candidateRect.left..candidateRect.right step 3) {
+                    val c = screenBitmap.getPixel(bx, by)
+                    val r = (c shr 16) and 0xFF
+                    val g = (c shr 8) and 0xFF
+                    val b = c and 0xFF
+                    if (g > 150 && (g - r) > 40 && (g - b) > 35) {
+                        brightGreenCount++
+                    }
+                }
+            }
+            if (brightGreenCount >= 12 && !isAlreadyGiftedOrSkipped(cx, btnCenterY, sh)) {
+                return candidateRect
             }
         }
 
@@ -495,8 +511,23 @@ class FriendGiftTask {
      * 送禮功能僅存在於【排行榜】中，【好友清單】僅能查看/編輯代碼，無任何禮物按鈕！
      */
     fun isOnFriendListSubTab(ocrItems: List<OcrItem>, sh: Int = 0): Boolean {
-        // 1. 檢查是否存在【好友清單】特有內容特徵
-        val hasFriendListContent = ocrItems.any { item ->
+        // 0. 若畫面中存在任何【排行榜】專屬內容特徵，代表當前必定在【排行榜】子分頁，絕不可誤判為好友清單！
+        val hasLeaderboardContent = ocrItems.any { item ->
+            val t = item.text.replace(" ", "")
+            t.contains("好友排行榜") ||
+            t.contains("參加排行榜") ||
+            t.contains("查看階層") ||
+            t.contains("禮物次數") ||
+            t.contains("未參加") ||
+            t.contains("青銅") ||
+            t.contains("白銀") ||
+            t.contains("黃金")
+        }
+        if (hasLeaderboardContent) return false
+
+        // 1. 僅當明確出現【好友清單】頁面內部專屬內容特徵時，才判定為位於【好友清單】子分頁！
+        // （絕對不可單憑 y in 0.08..0.16 的頂部未選取子分頁標籤「好友清單」文字即誤判，因為頂部三標籤在任何子分頁與禮物抽屜皆常駐顯示！）
+        return ocrItems.any { item ->
             val t = item.text.replace(" ", "")
             t.contains("散步趣好友") ||
             t.contains("編輯好友") ||
@@ -505,21 +536,6 @@ class FriendGiftTask {
             t.contains("您的LINE散步趣") ||
             (t.contains("搜尋") && t.contains("申請")) ||
             (t.contains("申請") && t.contains("接受"))
-        }
-        if (hasFriendListContent) return true
-
-        // 2. 檢查頂部子分頁中【好友清單】是否呈現選取狀態 (若排行榜有下標或高亮則非清單)
-        val hasLeaderboardActive = ocrItems.any { item ->
-            val cy = item.bounds.centerY().toFloat() / (if (sh > 0) sh else 1000)
-            val t = item.text.replace(" ", "")
-            cy in 0.08f..0.16f && (t.contains("好友排行榜") || t.contains("參加排行榜") || t.contains("查看階層"))
-        }
-        if (hasLeaderboardActive) return false
-
-        return ocrItems.any { item ->
-            val cy = item.bounds.centerY().toFloat() / (if (sh > 0) sh else 1000)
-            val t = item.text.replace(" ", "")
-            cy in 0.08f..0.16f && t.contains("好友清單")
         }
     }
 

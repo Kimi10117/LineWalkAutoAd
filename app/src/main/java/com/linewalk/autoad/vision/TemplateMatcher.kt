@@ -89,6 +89,22 @@ class TemplateMatcher {
     fun isPopupButtonDisabledGray(screenBitmap: Bitmap, centerY: Int): Boolean {
         val w = screenBitmap.width
         val h = screenBitmap.height
+        val safeCy = centerY.coerceIn(0, h - 1)
+
+        // 嚴格防呆：真正的下半部領獎彈窗兩側邊緣 (x = 5%, 95%) 必為未壓暗之純白底框 (RGB > 220)。
+        // 若畫面正處於『載入中...』半透明黑幕覆蓋狀態，兩側背景會被壓暗為深灰 (< 190)，此時絕不可誤判為按鈕反灰冷卻！
+        val leftMarginColor = screenBitmap.getPixel((w * 0.05f).toInt().coerceIn(0, w - 1), safeCy)
+        val rightMarginColor = screenBitmap.getPixel((w * 0.95f).toInt().coerceIn(0, w - 1), safeCy)
+        val lr = (leftMarginColor shr 16) and 0xFF
+        val lg = (leftMarginColor shr 8) and 0xFF
+        val lb = leftMarginColor and 0xFF
+        val rr = (rightMarginColor shr 16) and 0xFF
+        val rg = (rightMarginColor shr 8) and 0xFF
+        val rb = rightMarginColor and 0xFF
+        if (lr < 220 || lg < 220 || lb < 220 || rr < 220 || rg < 220 || rb < 220) {
+            return false
+        }
+
         val yStart = (centerY - (h * 0.018f).toInt()).coerceIn(0, h - 1)
         val yEnd = (centerY + (h * 0.018f).toInt()).coerceIn(yStart + 1, h - 1)
         val xStart = (w * 0.15f).toInt()

@@ -43,7 +43,7 @@ class ReceiveGiftTask {
     }
 
     /**
-     * 動態定位頂部「禮物盒」圖示（優先偵測右上角通知紅點，次選幾何標準座標）
+     * 動態定位頂部「禮物盒」圖示（嚴格限定在禮物盒圖示正中央 x ≈ 0.835..0.885，絕不左偏誤點大聲公通知圖示！）
      */
     fun findHeaderGiftBox(screenBitmap: Bitmap?, sw: Int, sh: Int): Rect {
         if (screenBitmap != null) {
@@ -53,27 +53,36 @@ class ReceiveGiftTask {
         return getHeaderGiftBoxRect(sw, sh)
     }
 
+    /**
+     * 檢查右上角「禮物盒」圖示右上緣 (x in 0.868..0.902, y in 0.048..0.062) 是否有未讀紅點通知
+     * 嚴格排除左側「大聲公(公告)」圖示的紅點 (x ≈ 0.785..0.805) 以及禮物盒本身的紅緞帶 (x <= 0.865, y >= 0.062)
+     */
+    fun hasHeaderGiftBoxRedDot(screenBitmap: Bitmap?): Boolean {
+        if (screenBitmap == null) return false
+        return findHeaderGiftBoxRedDot(screenBitmap) != null
+    }
+
     private fun findHeaderGiftBoxRedDot(screenBitmap: Bitmap): Rect? {
         val sw = screenBitmap.width
         val sh = screenBitmap.height
-        val xStart = (sw * 0.80f).toInt()
-        val xEnd = (sw * 0.92f).toInt()
-        val yStart = (sh * 0.04f).toInt()
-        val yEnd = (sh * 0.09f).toInt()
+        val xStart = (sw * 0.868f).toInt().coerceIn(0, sw - 1)
+        val xEnd = (sw * 0.902f).toInt().coerceIn(xStart, sw - 1)
+        val yStart = (sh * 0.048f).toInt().coerceIn(0, sh - 1)
+        val yEnd = (sh * 0.062f).toInt().coerceIn(yStart, sh - 1)
 
+        var redCount = 0
         for (y in yStart..yEnd) {
             for (x in xStart..xEnd) {
                 val c = screenBitmap.getPixel(x, y)
                 val r = (c shr 16) and 0xFF
                 val g = (c shr 8) and 0xFF
                 val b = c and 0xFF
-                // 亮紅點特徵 (r > 200, g < 70, b < 70)
-                if (r > 200 && g < 70 && b < 70) {
-                    val cx = (x - (sw * 0.012f).toInt()).coerceIn(0, sw - 1)
-                    val cy = (y + (sh * 0.010f).toInt()).coerceIn(0, sh - 1)
-                    val halfW = (sw * 0.035f).toInt()
-                    val halfH = (sh * 0.020f).toInt()
-                    return Rect(cx - halfW, cy - halfH, cx + halfW, cy + halfH)
+                // 亮紅點特徵 (r > 210, g < 75, b < 80)
+                if (r > 210 && g < 75 && b < 80) {
+                    redCount++
+                    if (redCount >= 5) {
+                        return getHeaderGiftBoxRect(sw, sh)
+                    }
                 }
             }
         }
@@ -90,22 +99,29 @@ class ReceiveGiftTask {
             t.contains("尚未收到") ||
             t.contains("尚無禮物") ||
             t.contains("目前沒有禮物") ||
-            t.contains("沒有禮物")
+            t.contains("沒有禮物") ||
+            t.contains("沒有收到") ||
+            t.contains("無禮物") ||
+            t.contains("沒有可領取")
         }
     }
 
     /**
-     * 判斷「禮物」抽屜彈窗是否開啟中
-     * 注意：因「禮物」抽屜覆蓋於下半部，背景（好友排行榜或主畫面）頂部仍可能在OCR中被偵測到，
-     * 故只要確認畫面具備「禮物」抽屜的標題或清單內容，且非送禮確認彈窗，即判定為禮物抽屜開啟！
+     * 判斷「禮物」抽屜彈窗是否開啟中：
+     * 1. 嚴格排除好友送禮相關彈窗（『要向...贈送金幣嗎？』『也送給自己』『剩餘贈送次數』『贈送完畢』）
+     * 2. 若具備空抽屜文字或專屬清單內容（『送來的禮物』『一起送達』），立即判定開啟
+     * 3. 若具備置中標題『禮物』(y in 0.18..0.32, 排除右側好友列按鈕下方小字 cx >= sh * 0.34f)，
+     *    且畫面中段 (y in 0.16..0.55) 無好友排行榜或主畫面看板文字（因已被禮物白底抽屜覆蓋），
+     *    即使禮物剛全部領完導致抽屜內無剩餘項目，亦能 100% 判定禮物抽屜開啟中並執行關閉！
      */
     fun isReceiveGiftDialogOpen(ocrItems: List<OcrItem>, sh: Int): Boolean {
         // 嚴格排除好友送禮相關彈窗（如『要向...贈送金幣嗎？』『也送給自己』『剩餘贈送次數』『贈送完畢』）
         val hasSendGiftModal = ocrItems.any { item ->
             val t = item.text.replace(" ", "")
-            t.contains("也送給自己") || t.contains("剩餘贈送次數") ||
+            t.contains("也送給自己") || t.contains("送給自己") || t.contains("剩餘贈送次數") ||
             (t.contains("要向") && t.contains("金幣")) ||
-            t.contains("贈送完畢") || (t.contains("已贈送") && t.contains("金幣"))
+            t.contains("贈送完畢") || (t.contains("已贈送") && t.contains("金幣")) ||
+            (t.contains("或者") && t.contains("贈送"))
         }
         if (hasSendGiftModal) return false
 
@@ -124,19 +140,37 @@ class ReceiveGiftTask {
         }
         if (hasDrawerContent) return true
 
-        // 檢查「禮物」抽屜標題 (y in 0.18f..0.32f) 與內部截止/領取文字
+        // 檢查「禮物」抽屜置中標題 (y in 0.18f..0.32f，排除右側好友列按鈕下方的「禮物」標籤 cx >= sh * 0.34f)
         val hasDrawerTitle = ocrItems.any { item ->
             val cy = item.bounds.centerY().toFloat() / sh
             val t = item.text.trim()
-            cy in 0.18f..0.32f && (t == "禮物" || t == "禮物盒")
+            val isCenteredX = sh <= 0 || item.bounds.centerX() < (sh * 0.34f).toInt()
+            cy in 0.18f..0.32f && isCenteredX && (t == "禮物" || t == "禮物盒")
         }
+        if (!hasDrawerTitle) return false
+
         val hasDrawerSubText = ocrItems.any { item ->
             val cy = item.bounds.centerY().toFloat() / sh
             val t = item.text.replace(" ", "")
             cy in 0.28f..0.92f && (t.contains("止") || t.contains("剩下") || t == "領取")
         }
 
-        return hasDrawerTitle && hasDrawerSubText
+        // 檢查中段背景是否可見好友排行榜或主畫面看板（當禮物抽屜開啟時，y = 0.20..0.95 被白底抽屜完全遮蔽）
+        val hasUnderlyingMiddleContent = ocrItems.any { item ->
+            val cy = item.bounds.centerY().toFloat() / (if (sh > 0) sh else 1000)
+            val t = item.text.replace(" ", "")
+            cy in 0.16f..0.55f && (
+                t.contains("好友排行榜") ||
+                t.contains("參加排行榜") ||
+                t.contains("查看階層") ||
+                t.contains("禮物次數") ||
+                t.contains("距離下次") ||
+                t.contains("累積數量") ||
+                t.contains("今天的步數")
+            )
+        }
+
+        return hasDrawerSubText || !hasUnderlyingMiddleContent
     }
 
     /**

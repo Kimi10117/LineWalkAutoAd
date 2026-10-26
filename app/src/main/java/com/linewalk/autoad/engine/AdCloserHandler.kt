@@ -206,7 +206,7 @@ class AdCloserHandler(
         }
 
         // 1C. 檢查是否處於向伺服器緩衝/載入廣告之等待畫面 (畫面顯示『載入中...』與白色 [取消] 鈕)
-        val isAdLoading = ocrRecognizer.isAdLoadingScreen(ocrItems)
+        val isAdLoading = ocrRecognizer.isAdLoadingScreen(ocrItems, screenBitmap)
         if (isAdLoading) {
             wasAdLoading = true
             hasAdActuallyShown = true
@@ -250,10 +250,26 @@ class AdCloserHandler(
             }
         }
 
-        // 2B. 若廣告結束後畫面停留在『獲得票券！/ 獲得金幣！』下半部彈窗且按鈕皆在冷卻中 (下方有 [取消] 按鈕)，直接點擊 [取消] 關閉彈窗回到遊戲！
+        // 2B. 若畫面停留在『獲得票券！/ 獲得金幣！』下半部彈窗：
+        // - 若彈窗內仍有可領取按鈕（例如前次點擊時彈窗尚在滑出動畫中導致未點中），滿 3 秒立即返回 IN_GAME_SCAN 重新點擊領取鈕，絕不誤點 [取消]！
+        // - 僅當確認無可領取按鈕且按鈕皆在冷卻中 (下方有 [取消] 按鈕) 時，才點擊 [取消] 關閉彈窗回到遊戲！
         if (!isAd && elapsedSec >= 2 && (hasAdActuallyShown || elapsedSec >= 3)) {
-            val hasActiveClaim = templateMatcher.findCoralPinkButton(screenBitmap, 0.66f, 0.88f, "彈窗看廣告鈕") != null
-            if (!hasActiveClaim) {
+            val btnCheckMargin = (sh * 0.045f).toInt()
+            val pinkBtn = templateMatcher.findCoralPinkButton(screenBitmap, 0.66f, 0.88f, "彈窗看廣告鈕")
+            val hasActivePinkClaim = pinkBtn != null &&
+                !ocrRecognizer.isAreaInCooldown(ocrItems, pinkBtn.bounds.top - btnCheckMargin, pinkBtn.bounds.bottom + btnCheckMargin) &&
+                !templateMatcher.isPopupButtonDisabledGray(screenBitmap, pinkBtn.bounds.centerY())
+
+            val badgeBtn = templateMatcher.findPopupBonusBadgeAdButton(screenBitmap)
+            val hasActiveBadgeClaim = badgeBtn != null &&
+                !ocrRecognizer.isAreaInCooldown(ocrItems, badgeBtn.bounds.top - btnCheckMargin, badgeBtn.bounds.bottom + (sh * 0.06f).toInt()) &&
+                !templateMatcher.isPopupButtonDisabledGray(screenBitmap, badgeBtn.bounds.centerY())
+
+            if (hasActivePinkClaim || hasActiveBadgeClaim) {
+                if (elapsedSec >= 3) {
+                    return AdStepResult.ReturnedToGame(null, "廣告未成功啟動")
+                }
+            } else {
                 val cancelBtn = ocrRecognizer.findPopupCancelButton(screenBitmap, ocrItems, templateMatcher)
                 if (cancelBtn != null) {
                     return AdStepResult.ReturnedToGame(cancelBtn, "已點擊彈窗 [取消]")

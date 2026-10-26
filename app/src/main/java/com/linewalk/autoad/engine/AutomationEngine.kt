@@ -655,7 +655,7 @@ class AutomationEngine private constructor(private val context: Context) {
         }
 
         // 0-1. 檢查是否正在向廣告伺服器載入廣告（畫面中央『載入中...』與白色 [取消] 鈕），直接進入廣告監控流程！
-        if (ocrRecognizer.isAdLoadingScreen(ocrItems)) {
+        if (ocrRecognizer.isAdLoadingScreen(ocrItems, screenBitmap)) {
             appendLog("⏳ 畫面處於廣告載入中狀態，自動轉入廣告監控流程！")
             adCloserHandler.onEnterAdMode()
             transitionTo(EngineState.AD_WATCHING, "廣告正在載入中，請稍候...", "⏳ 廣告載入中...")
@@ -809,6 +809,7 @@ class AutomationEngine private constructor(private val context: Context) {
         if (receiveGiftTask.isReceiveGiftDialogOpen(ocrItems, sh)) {
             nonGameScreenTicks = 0
             if (isReceiveGiftCompleted) {
+                currentPhase = getNextPhase(PatrolPhase.RECEIVE_GIFT)
                 val closeBtn = receiveGiftTask.getCloseButtonBounds(sw, sh)
                 appendLog("[禮物] 禮物已領取完畢，點擊右上角 (X) 關閉視窗")
                 FloatingOverlayService.clickWithOverlayPassthrough(closeBtn) {
@@ -824,6 +825,15 @@ class AutomationEngine private constructor(private val context: Context) {
         // D5. 檢查是否正在底部導覽列「好友」頁面
         if (friendGiftTask.isFriendsPage(ocrItems, sh)) {
             nonGameScreenTicks = 0
+            if (isFriendGiftCompleted && isReceiveGiftCompleted) {
+                val mainTabBtn = friendGiftTask.getBottomMainTabRect(sw, sh, ocrItems)
+                appendLog("[完成] 好友送禮與收禮皆已完成，點擊底部【集點】返回首頁並啟動下一輪巡邏！")
+                FloatingOverlayService.clickWithOverlayPassthrough(mainTabBtn) {
+                    service.clickRect(mainTabBtn)
+                }
+                handleRoundCompletion(service)
+                return
+            }
             if (currentPhase != PatrolPhase.FRIEND_GIFT && currentPhase != PatrolPhase.RECEIVE_GIFT) {
                 appendLog("[切換] 巡邏起始於【好友】分頁，先切換回底部【集點】以執行【首頁(移動)】巡邏！")
                 updateDetail("[切換] 切換回集點首頁...", "[切換] 回首頁...")
@@ -1351,22 +1361,8 @@ class AutomationEngine private constructor(private val context: Context) {
             return
         }
 
-        // 0A. 檢查是否誤入頂部【好友清單】子分頁（送禮僅在【排行榜】子分頁，好友清單無送禮按鈕）：
-        // 若在好友清單，立即點擊左側【排行榜】子分頁標籤切換回排行榜！
-        if (friendGiftTask.isOnFriendListSubTab(ocrItems, sh)) {
-            val leaderboardTab = friendGiftTask.getLeaderboardTabRect(sw, sh, ocrItems)
-            appendLog("[切換]【好友送禮】目前位於【好友清單】分頁，自動點擊左側【排行榜】以進行送禮！")
-            updateDetail("[禮物] 切換回【排行榜】分頁送禮...", "[禮物] 切換至排行榜")
-            FloatingOverlayService.clickWithOverlayPassthrough(leaderboardTab) {
-                service.clickRect(leaderboardTab)
-            }
-            delay(600)
-            return
-        }
-
-        // 0B. 檢查贈送次數是否已達上限 (例如 0/5 或 今日上限)，立即判定送禮完成推進至收禮抽屜
+        // 0A. 檢查贈送次數是否已達上限 (例如 0/5 或 今日上限)，立即判定送禮完成推進至收禮抽屜
         val hasGiftQuotaFull = friendGiftTask.isGiftQuotaFull(ocrItems)
-        val hasRemainingQuota = friendGiftTask.hasRemainingGiftQuota(ocrItems)
         if (hasGiftQuotaFull) {
             appendLog("[禮物]【好友送禮】今日贈送次數已達上限 (0/5)，送禮完成！")
             isFriendGiftCompleted = true
@@ -1383,22 +1379,37 @@ class AutomationEngine private constructor(private val context: Context) {
                 }
                 updateDetail("[禮物] 送禮已完成，開啟【禮物】視窗接收禮物...", "[禮物] 開啟禮物盒...")
                 if (friendGiftOpenDrawerTicks >= 3) {
+                    isReceiveGiftCompleted = true
                     val mainTabBtn = friendGiftTask.getBottomMainTabRect(sw, sh, ocrItems)
-                    service.clickRect(mainTabBtn)
+                    FloatingOverlayService.clickWithOverlayPassthrough(mainTabBtn) {
+                        service.clickRect(mainTabBtn)
+                    }
+                    handleRoundCompletion(service)
+                    return
                 }
                 delay(600)
                 return
             }
 
-            // 若不需要接收禮物或收禮已完成，點擊底部「集點」返回首頁
+            // 若不需要接收禮物或收禮已完成，點擊底部「集點」返回首頁並立即完成本輪巡邏，重頭開始檢查！
             friendGiftReturnHomeTicks++
             val mainTabBtn = friendGiftTask.getBottomMainTabRect(sw, sh, ocrItems)
-            appendLog("[完成] 好友送禮已完成，點擊底部「集點」返回首頁 ($friendGiftReturnHomeTicks)")
+            appendLog("[完成] 好友送禮與收禮已完成，點擊底部「集點」返回首頁並啟動下一輪巡邏 ($friendGiftReturnHomeTicks)")
             FloatingOverlayService.clickWithOverlayPassthrough(mainTabBtn) {
                 service.clickRect(mainTabBtn)
             }
-            if (friendGiftReturnHomeTicks >= 3) {
-                currentPhase = getNextPhase(PatrolPhase.RECEIVE_GIFT)
+            handleRoundCompletion(service)
+            return
+        }
+
+        // 0B. 檢查是否誤入頂部【好友清單】子分頁（送禮僅在【排行榜】子分頁，好友清單無送禮按鈕）：
+        // 若在好友清單，立即點擊左側【排行榜】子分頁標籤切換回排行榜！
+        if (friendGiftTask.isOnFriendListSubTab(ocrItems, sh)) {
+            val leaderboardTab = friendGiftTask.getLeaderboardTabRect(sw, sh, ocrItems)
+            appendLog("[切換]【好友送禮】目前位於【好友清單】分頁，自動點擊左側【排行榜】以進行送禮！")
+            updateDetail("[禮物] 切換回【排行榜】分頁送禮...", "[禮物] 切換至排行榜")
+            FloatingOverlayService.clickWithOverlayPassthrough(leaderboardTab) {
+                service.clickRect(leaderboardTab)
             }
             delay(600)
             return
@@ -1512,6 +1523,7 @@ class AutomationEngine private constructor(private val context: Context) {
         isFriendGiftCompleted = true
         if (config.enableFriendGiftTask && !isReceiveGiftCompleted) {
             currentPhase = PatrolPhase.RECEIVE_GIFT
+            friendGiftOpenDrawerTicks++
             appendLog("[完成]【好友送禮】好友禮物贈送階段結束，直接點擊右上角【禮物盒】開啟收禮視窗！")
             val giftBoxRect = receiveGiftTask.findHeaderGiftBox(screenBitmap, sw, sh)
             FloatingOverlayService.clickWithOverlayPassthrough(giftBoxRect) {
@@ -1521,14 +1533,12 @@ class AutomationEngine private constructor(private val context: Context) {
             delay(600)
             return
         } else {
-            appendLog("[完成]【好友送禮】好友禮物贈送階段結束，自動點擊底部「集點」返回首頁")
+            appendLog("[完成]【好友送禮】好友禮物贈送階段結束，自動點擊底部「集點」返回首頁並啟動下一輪巡邏")
             val mainTabBtn = friendGiftTask.getBottomMainTabRect(sw, sh, ocrItems)
             FloatingOverlayService.clickWithOverlayPassthrough(mainTabBtn) {
                 service.clickRect(mainTabBtn)
             }
-            currentPhase = getNextPhase(PatrolPhase.FRIEND_GIFT)
-            updateDetail("[完成] 好友送禮全部完成，返回首頁中...", "[完成] 好友送禮完成")
-            delay(600)
+            handleRoundCompletion(service)
         }
     }
 
@@ -1692,6 +1702,7 @@ class AutomationEngine private constructor(private val context: Context) {
                         "已點擊 ${target.targetLabel}，等待『跳過廣告 / 紅利獲得』彈窗...",
                         "⏳ 等待彈窗出現..."
                     )
+                    delay(550)
                     return
                 }
 
@@ -2008,7 +2019,7 @@ class AutomationEngine private constructor(private val context: Context) {
         val sh = screenBitmap.height
 
         // 若點擊目標後已直接進入廣告載入中畫面，立即轉入廣告監控流程！
-        if (ocrRecognizer.isAdLoadingScreen(ocrItems)) {
+        if (ocrRecognizer.isAdLoadingScreen(ocrItems, screenBitmap)) {
             appendLog("⏳ 點擊後進入廣告載入中狀態，自動轉入廣告監控流程！")
             adCloserHandler.onEnterAdMode()
             transitionTo(EngineState.AD_WATCHING, "廣告正在載入中，請稍候...", "⏳ 廣告載入中...")

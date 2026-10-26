@@ -276,9 +276,11 @@ class OcrRecognizer {
 
     /**
      * 檢查是否處於向伺服器緩衝/載入廣告的等待畫面（中央顯示『載入中...』，下方顯示『若廣告載入時間過長...』與白色 [取消] 鈕）。
+     * 當『載入中...』疊加在色彩複雜的蘋果樹/熊大背景上導致 ML Kit 漏抓『載入中』文字時，
+     * 透過像素級特徵（底部中央獨立純白 [取消] 膠囊鈕 RGB > 230，而兩側 x=6%/94% 與彈窗上緣 x=8%,y=68% 皆被半透明黑幕壓暗 < 190）精準識別！
      */
-    fun isAdLoadingScreen(items: List<OcrItem>): Boolean {
-        return items.any { item ->
+    fun isAdLoadingScreen(items: List<OcrItem>, screenBitmap: Bitmap? = null): Boolean {
+        val hasLoadingText = items.any { item ->
             val t = item.text.replace(" ", "")
             t.contains("載入中") ||
             t.contains("廣告載入") ||
@@ -287,6 +289,42 @@ class OcrRecognizer {
             t.contains("読み込み中") ||
             (t.contains("Loading", ignoreCase = true) && items.any { it.text.contains("取消") || it.text.contains("Cancel") })
         }
+        if (hasLoadingText) return true
+
+        if (screenBitmap != null) {
+            val w = screenBitmap.width
+            val h = screenBitmap.height
+            if (w >= 100 && h >= 100) {
+                val cancelItem = items.firstOrNull { item ->
+                    val cy = item.bounds.centerY().toFloat() / h
+                    val t = item.text.trim()
+                    cy in 0.85f..0.96f && t == "取消"
+                }
+                if (cancelItem != null) {
+                    val cy = cancelItem.bounds.centerY().coerceIn(0, h - 1)
+                    // 檢查『取消』膠囊按鈕內部是否為高亮純白 (x = 35% 或 65% 避開中央『取消』黑字)
+                    val pillLeft = screenBitmap.getPixel((w * 0.35f).toInt().coerceIn(0, w - 1), cy)
+                    val pillRight = screenBitmap.getPixel((w * 0.65f).toInt().coerceIn(0, w - 1), cy)
+                    val pillBright = (((pillLeft shr 16) and 0xFF) > 225 && ((pillLeft shr 8) and 0xFF) > 225 && (pillLeft and 0xFF) > 225) ||
+                        (((pillRight shr 16) and 0xFF) > 225 && ((pillRight shr 8) and 0xFF) > 225 && (pillRight and 0xFF) > 225)
+
+                    // 檢查『取消』膠囊兩側外側背景 (x = 6%, 94%) 與下半部 68% 處是否皆被半透明黑幕壓暗 (< 190)
+                    val marginL = screenBitmap.getPixel((w * 0.06f).toInt().coerceIn(0, w - 1), cy)
+                    val marginR = screenBitmap.getPixel((w * 0.94f).toInt().coerceIn(0, w - 1), cy)
+                    val upperSheet = screenBitmap.getPixel((w * 0.08f).toInt().coerceIn(0, w - 1), (h * 0.68f).toInt().coerceIn(0, h - 1))
+
+                    val isMarginLDimmed = ((marginL shr 16) and 0xFF) < 190 && ((marginL shr 8) and 0xFF) < 190 && (marginL and 0xFF) < 190
+                    val isMarginRDimmed = ((marginR shr 16) and 0xFF) < 190 && ((marginR shr 8) and 0xFF) < 190 && (marginR and 0xFF) < 190
+                    val isUpperDimmed = ((upperSheet shr 16) and 0xFF) < 190 && ((upperSheet shr 8) and 0xFF) < 190 && (upperSheet and 0xFF) < 190
+
+                    if (pillBright && isMarginLDimmed && isMarginRDimmed && isUpperDimmed) {
+                        return true
+                    }
+                }
+            }
+        }
+
+        return false
     }
 
     /**
@@ -372,7 +410,7 @@ class OcrRecognizer {
         templateMatcher: TemplateMatcher? = null
     ): Rect? {
         // 0. 若畫面正在向廣告伺服器載入廣告（中央顯示『載入中...』與白色 [取消] 鈕），代表正在緩衝等候廣告播放，絕不可點擊取消！
-        if (isAdLoadingScreen(items)) {
+        if (isAdLoadingScreen(items, screenBitmap)) {
             return null
         }
 
@@ -380,7 +418,22 @@ class OcrRecognizer {
         val sh = screenBitmap.height
         val btnCheckMargin = (sh * 0.045f).toInt()
 
-        // 檢查是否有明確的冷卻倒數文字（回復還需 / 還需 / 00:00）或按鈕全反灰
+        // 0A. 嚴格防呆：確認下半部為真正的未壓暗純白底框彈窗（x = 6%, 94% 於 y = 90.5% 及 x = 8%, y = 68% 皆為亮白 RGB > 220）
+        // 若畫面被半透明遮罩壓暗（如廣告緩衝載入中），絕不可點擊 [取消]！
+        if (sw >= 100 && sh >= 100) {
+            val pLeft = screenBitmap.getPixel((sw * 0.06f).toInt().coerceIn(0, sw - 1), (sh * 0.905f).toInt().coerceIn(0, sh - 1))
+            val pRight = screenBitmap.getPixel((sw * 0.94f).toInt().coerceIn(0, sw - 1), (sh * 0.905f).toInt().coerceIn(0, sh - 1))
+            val pSheet = screenBitmap.getPixel((sw * 0.08f).toInt().coerceIn(0, sw - 1), (sh * 0.68f).toInt().coerceIn(0, sh - 1))
+            val isUndimmedWhiteSheet =
+                ((pLeft shr 16) and 0xFF) > 220 && ((pLeft shr 8) and 0xFF) > 220 && (pLeft and 0xFF) > 220 &&
+                ((pRight shr 16) and 0xFF) > 220 && ((pRight shr 8) and 0xFF) > 220 && (pRight and 0xFF) > 220 &&
+                ((pSheet shr 16) and 0xFF) > 220 && ((pSheet shr 8) and 0xFF) > 220 && (pSheet and 0xFF) > 220
+            if (!isUndimmedWhiteSheet) {
+                return null
+            }
+        }
+
+        // 檢查是否有明確的冷卻倒數文字（回復還需 / 還需 / 00:00）或上下按鈕皆反灰
         val hasCooldownText = items.any { item ->
             val cy = item.bounds.centerY()
             val t = item.text.replace(" ", "")
@@ -396,7 +449,8 @@ class OcrRecognizer {
         val hasDisabledGrayButtons = templateMatcher?.let { tm ->
             val upperGray = tm.isPopupButtonDisabledGray(screenBitmap, (sh * 0.75f).toInt())
             val lowerGray = tm.isPopupButtonDisabledGray(screenBitmap, (sh * 0.85f).toInt())
-            upperGray || lowerGray
+            // 必須上下按鈕皆反灰（避免無糖果時僅上方『跳過廣告』為灰色即誤判為全冷卻）
+            upperGray && lowerGray
         } ?: false
 
         // 0. 重要安全防護：若彈窗內仍有高亮可領取的珊瑚粉紅按鈕 (如 ▶ 8 獲得、▶ 15 獲得) 或紅利標籤按鈕，代表獎勵未進入冷卻，絕對不可點擊 [取消]！
@@ -509,7 +563,7 @@ class OcrRecognizer {
         templateMatcher: TemplateMatcher
     ): Boolean {
         // 0. 若畫面正在向廣告伺服器載入廣告（中央顯示『載入中...』與白色 [取消] 鈕），代表正在等候廣告播放，絕非主畫面！
-        if (isAdLoadingScreen(items)) {
+        if (isAdLoadingScreen(items, screenBitmap)) {
             return false
         }
 
