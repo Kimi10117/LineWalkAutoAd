@@ -1,16 +1,46 @@
+# ==========================================
+# Android & Gradle Build Artifacts
+# ==========================================
 *.iml
-.gradle
-/local.properties
-/.idea
-.DS_Store
-/build
-/captures
-.externalNativeBuild
-.cxx
+.gradle/
+/build/
+app/build/
+captures/
+.externalNativeBuild/
+.cxx/
 local.properties
-app/build
+/local.properties
+
+# Package Outputs
 *.apk
-.agents/
-tests_empirical/
-*.pyc
+*.aab
+*.ap_
+*.dex
+*.class
+
+# ==========================================
+# IDE & System Temporary Files
+# ==========================================
+.idea/
+/.idea
+.vscode/
+.DS_Store
+Thumbs.db
+*.swp
+*.bak
+*.tmp
+*.log
+
+# ==========================================
+# Python, Pytest & Test Execution Caches
+# ==========================================
 __pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+tests_empirical/
+
+# ==========================================
+# Multi-Agent Temporary Workspaces
+# ==========================================
+.agents/
