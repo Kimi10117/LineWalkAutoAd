@@ -199,16 +199,16 @@ class Tier1_F6_FriendGiftAndReceiveDrawerTest {
 
         val target = lotteryTask.findTargetDrawButton(mockBitmap, items, templateMatcher)
         org.junit.Assert.assertNotNull("Target draw button must not be null", target)
-        // Free draw is prioritized first so the cooldown timer starts immediately!
-        org.junit.Assert.assertEquals("免費看廣告抽一次", target!!.first)
+        // 50-draw is prioritized first when tickets >= 50 and not in cooldown!
+        org.junit.Assert.assertEquals("50張抽一次", target!!.first)
 
-        // Test 09b: When free draw is in cooldown, 50-draw is selected
-        val itemsWithFreeCooldown = items.filter { !it.text.contains("免費抽1次") } + listOf(
-            MockFixtures.createNormalizedOcrItem("回復還需 04:30", 0.65f, 0.53f, 0.95f, 0.58f, sw, sh)
+        // Test 09b: When 50-draw is in cooldown, free draw is selected
+        val itemsWithFiftyCooldown = items.filter { !it.text.contains("50張") } + listOf(
+            MockFixtures.createNormalizedOcrItem("回復還需 04:30", 0.15f, 0.46f, 0.45f, 0.52f, sw, sh)
         )
-        val target50 = lotteryTask.findTargetDrawButton(mockBitmap, itemsWithFreeCooldown, templateMatcher)
-        org.junit.Assert.assertNotNull("Target 50 draw must be selected when free draw is in cooldown", target50)
-        org.junit.Assert.assertEquals("50張抽一次", target50!!.first)
+        val targetFree = lotteryTask.findTargetDrawButton(mockBitmap, itemsWithFiftyCooldown, templateMatcher)
+        org.junit.Assert.assertNotNull("Target free draw must be selected when 50-draw is in cooldown", targetFree)
+        org.junit.Assert.assertEquals("免費看廣告抽一次", targetFree!!.first)
     }
 
     @Test

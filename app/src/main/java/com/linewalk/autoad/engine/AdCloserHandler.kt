@@ -94,8 +94,12 @@ class AdCloserHandler(
         if (FloatingOverlayService.isInsideOverlay(x, y)) return true
         if (currentScreenHeight > 0) {
             val sh = currentScreenHeight
-            // 排除最頂部系統狀態列 (y < 4.2% sh)，放行頂部角落關閉按鈕 (如 Meta 輪播左上角灰 X, y ~ 6.6% sh)
-            if (y < (sh * 0.042f).toInt()) return true
+            // 排除最頂部通知安全禁區 (中央動態島 y < currentScreenHeight * 0.08f，兩側邊角 y < 4.2% sh)
+            if (x in (currentScreenWidth * 0.18f).toInt()..(currentScreenWidth * 0.82f).toInt()) {
+                if (y < (currentScreenHeight * 0.08f).toInt()) return true
+            } else {
+                if (y < (sh * 0.042f).toInt()) return true
+            }
         }
         return blacklistedPoints.any { pt ->
             hypot((pt.x - x).toDouble(), (pt.y - y).toDouble()) < BLACKLIST_RADIUS_PX
@@ -412,11 +416,19 @@ class AdCloserHandler(
         }
 
         val isMetaAd = fgPkg == "com.facebook.katana" || fgPkg == "com.facebook.orca" ||
+            fgPkg == "com.facebook.lite" || fgPkg == "com.facebook.mlite" ||
+            fgPkg == "com.instagram.android" || fgPkg?.lowercase()?.startsWith("com.facebook.ads") == true ||
             ocrItems.any { item ->
                 val t = item.text
                 t.contains("Meta", ignoreCase = true) ||
                 t.contains("Facebook", ignoreCase = true) ||
-                t.contains("Ads served by Meta", ignoreCase = true)
+                t.contains("Trip.com", ignoreCase = true) ||
+                t.contains("Ads served by Meta", ignoreCase = true) ||
+                t.contains("from Meta", ignoreCase = true) ||
+                t.contains("Audience Network", ignoreCase = true) ||
+                t.contains("•") || t.contains("●") || t.contains("○") ||
+                t.contains("···") || t.contains("•••") ||
+                t.contains("1/") || t.contains("/3") || t.contains("1 of")
             }
         // 4C. 【全螢幕快轉/略過按鈕 (▶| 或 >>) 圖示偵測器】
         // 專門應對 Meta Audience Network 等影音廣告右上角的深色圓底高亮快轉略過鈕 (▶|)。
@@ -482,16 +494,21 @@ class AdCloserHandler(
         }
 
         // 8. 第三層辨識 B：啟動「高精度免樣本幾何角落 X 偵測器」
-        // 嚴格限制：左上角僅限 Meta 廣告容器套件 (com.facebook.katana / com.facebook.orca) 掃描！
-        // Google AdMob / Unity 等影音廣告左上角固定為廣告主圖示或 AdChoices (i) 標籤，誤點必跳轉 Google Play！
-        // 延遲至 10 秒以上（或已獲獎勵）才允許幾何 X 偵測，讓略過按鈕能正常於 5~10 秒浮現被 Step 6 OCR 秒點！
-        if (elapsedSec >= 10 || rewardGrantedOcr != null) {
+        // 當具有 Meta 特徵時啟用 includeLeftZone = true，且於 elapsedSec >= 5 或無倒數時即可啟動！
+        // 非 Meta 廣告維持在 10 秒以上（或已獲獎勵）且 includeLeftZone = false
+        val shouldCheckGeoX = if (isMetaAd) {
+            elapsedSec >= 5 || remainingSec == null || rewardGrantedOcr != null
+        } else {
+            elapsedSec >= 10 || rewardGrantedOcr != null
+        }
+
+        if (shouldCheckGeoX) {
             val isRelaxed = elapsedSec >= 18 || rewardGrantedOcr != null
             val geoMatch = templateMatcher.detectCornerGeometricX(
                 screenBitmap = screenBitmap,
                 blacklistedCoord = ::isInvalidOrBlacklisted,
                 isRelaxed = isRelaxed,
-                includeLeftZone = false
+                includeLeftZone = isMetaAd
             )
             if (geoMatch != null) {
                 lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
@@ -558,6 +575,21 @@ class AdCloserHandler(
                 return AdStepResult.WatchdogBackTriggered(elapsedSec, "已獲獎勵安全返回鍵")
             }
 
+            // Meta 備援關閉熱區：在確認為 Meta 廣告且播放滿 5 秒或無倒數計時時，允許對左上角關閉按鈕區域發送精確點擊，避免廣告停滯超過 30 秒卡死
+            if (isMetaAd && (elapsedSec >= 5 || remainingSec == null) && !isOutsideGame && redirectCount == 0 && now - lastFallbackCornerTimeMs >= 3000L) {
+                val metaLeftTopHotZone = Rect(
+                    (sw * 0.035f).toInt(),
+                    (sh * 0.048f).toInt(),
+                    (sw * 0.140f).toInt(),
+                    (sh * 0.095f).toInt()
+                )
+                if (!isInvalidOrBlacklisted(metaLeftTopHotZone.centerX(), metaLeftTopHotZone.centerY())) {
+                    lastFallbackCornerTimeMs = now
+                    recordAndClick(service, metaLeftTopHotZone, allowBlacklist = true)
+                    return AdStepResult.WatchdogBackTriggered(elapsedSec, "Meta備援左上角熱區")
+                }
+            }
+
             // 備援盲點與安全返回：僅在廣告播放超過 40 秒且無關閉鈕時觸發
             if (elapsedSec >= 40) {
                 // 若已經發生過外部重定向，或者非 Meta 廣告（如 Google 廣告），嚴禁盲點角落熱區以免再度跳轉 Google Play！
@@ -604,6 +636,14 @@ class AdCloserHandler(
         ocrItems: List<OcrItem> = emptyList()
     ): Pair<String, Rect> {
         val targets = mutableListOf<Pair<String, Rect>>()
+
+        // 0. 螢幕左上角熱區 (專門應對 Meta 影音/輪播廣告，y in 4.8%..9.5%)
+        targets.add("螢幕左上角熱區" to Rect(
+            (sw * 0.035f).toInt(),
+            (sh * 0.048f).toInt(),
+            (sw * 0.140f).toInt(),
+            (sh * 0.095f).toInt()
+        ))
 
         // 1. 螢幕右上角關閉熱區 (標準全螢幕廣告，y in 5.5%..11%)
         targets.add("螢幕右上角熱區" to Rect(

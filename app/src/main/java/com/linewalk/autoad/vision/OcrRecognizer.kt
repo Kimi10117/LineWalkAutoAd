@@ -198,16 +198,37 @@ class OcrRecognizer {
             return null
         }
 
-        // 1. OCR 搜尋彈窗下半部 (y = 0.52..0.82) 的『關閉 / 確認 / 確定 / 收下 / OK』
-        val closeOcr = findMatch(
-            items = items,
-            keywords = listOf("關閉", "確認", "確定", "收下", "OK"),
-            screenWidth = sw,
-            screenHeight = sh,
-            roiNormalized = RectF(0.18f, 0.52f, 0.82f, 0.82f),
-            excludeKeywords = AD_CLOSE_EXCLUDE_KEYWORDS + listOf("關閉廣告"),
-            maxTextLength = 6
-        )
+        // 1. OCR 搜尋彈窗下半部真正的白底領獎彈窗範圍 (y = 0.60..0.78, x = 0.20..0.80)
+        // 嚴格排除 Google Play / AdMob 應用推薦廣告橫幅關鍵字，且「OK」必須採用全詞精確比對
+        val closeOcr = items.firstOrNull { item ->
+            val cx = item.bounds.centerX()
+            val cy = item.bounds.centerY()
+            val normY = cy.toFloat() / sh
+            val normX = cx.toFloat() / sw
+            if (FloatingOverlayService.isInsideOverlay(cx, cy)) return@firstOrNull false
+            if (normY !in 0.60f..0.78f || normX !in 0.20f..0.80f) return@firstOrNull false
+
+            val t = item.text.trim()
+            // 嚴格排除 Google Play 推薦廣告橫幅關鍵字
+            val isAdBanner = t.contains("Google Play", ignoreCase = true) ||
+                t.contains("Play Store", ignoreCase = true) ||
+                t.contains("Play 商店") ||
+                t.contains("Play商店") ||
+                t.contains("安裝") || t.contains("下載") ||
+                t.contains("Sponsored", ignoreCase = true) ||
+                t.contains("AD", ignoreCase = false) ||
+                t.contains("廣告") || t.contains("推薦") ||
+                t.contains("Grok", ignoreCase = true) ||
+                t.contains("TikTok", ignoreCase = true) ||
+                t.contains("Book", ignoreCase = true)
+            if (isAdBanner) return@firstOrNull false
+
+            // OK 必須全詞精確比對，嚴禁 substring contains
+            val isExactOk = Regex("""^\s*\[?\s*OK\s*\]?\s*$""", RegexOption.IGNORE_CASE).matches(t) || t.equals("OK", ignoreCase = true)
+            val isChineseClose = listOf("關閉", "確認", "確定", "收下").any { t.contains(it) }
+
+            (isExactOk || isChineseClose) && t.length <= 6
+        }
         // 2. 檢查是否有『獲得15張票券！』『獲得60枚金幣！』標題文字，或像素級中央彈窗特徵
         val hasRewardTitleOcr = items.any { item ->
             val cy = item.bounds.centerY().toFloat() / sh

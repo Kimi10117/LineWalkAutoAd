@@ -480,14 +480,16 @@ class TemplateMatcher {
         val step = max(2, sw / 240)
         val tol = max(1, sw / 360)
 
-        val topLimitY = max((sh * 0.075f).toInt(), 75)
+        val topLimitY = max((sh * 0.082f).toInt(), 60)
         val searchZones = mutableListOf(
-            // 右上角 (廣告標準關閉鈕位置，避開最頂部系統狀態列與通知列 y < 7.5%，涵蓋 y in 7.5%..16%)
+            // 右上角 (廣告標準關閉鈕位置，避開最頂部系統狀態列與通知列 y < 8.2%，涵蓋 y in 8.2%..16%)
             Rect((sw * 0.75f).toInt(), topLimitY, (sw * 0.98f).toInt(), (sh * 0.16f).toInt())
         )
         if (includeLeftZone) {
-            // 左上角 (Meta 輪播/插頁廣告關閉鈕唯一位置，涵蓋 x in 2%..20%)
-            searchZones.add(Rect((sw * 0.02f).toInt(), topLimitY, (sw * 0.20f).toInt(), (sh * 0.24f).toInt()))
+            // 左上角 (Meta 輪播/插頁廣告關閉鈕唯一位置，涵蓋 x in 2.5%..18% 與 y in 4.8%..14%)
+            val leftTopLimitY = max((sh * 0.048f).toInt(), 48)
+            val leftBottomLimitY = (sh * 0.14f).toInt()
+            searchZones.add(Rect((sw * 0.025f).toInt(), leftTopLimitY, (sw * 0.18f).toInt(), leftBottomLimitY))
         }
 
         var bestCandidate: TemplateMatchResult? = null
@@ -532,10 +534,24 @@ class TemplateMatcher {
                     val absX = zone.left + cx
                     val absY = zone.top + cy
 
-                    // 排除最頂部系統狀態列與通知列 (boxTop < sh * 0.070f)
-                    if (absY - r < (sh * 0.070f).toInt()) {
-                        cx += step
-                        continue
+                    // 排除最頂部系統狀態列與通知列
+                    if (zoneIdx == 0) {
+                        if (absY - r < (sh * 0.08f).toInt()) {
+                            cx += step
+                            continue
+                        }
+                        val isBingoCloseZone = absX in (sw * 0.84f).toInt()..(sw * 0.98f).toInt() &&
+                            absY in (sh * 0.08f).toInt()..(sh * 0.16f).toInt()
+                        if (isBingoCloseZone) {
+                            cx += step
+                            continue
+                        }
+                    } else {
+                        // 左上角 (Meta 廣告)：頂部限制為 4.0% sh 或 40px，覆蓋 y ≈ 6.5% 的 Meta 關閉按鈕
+                        if (absY - r < max((sh * 0.040f).toInt(), 40)) {
+                            cx += step
+                            continue
+                        }
                     }
 
                     if (blacklistedCoord?.invoke(absX, absY) != true) {

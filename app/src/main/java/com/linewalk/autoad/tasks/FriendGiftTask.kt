@@ -17,16 +17,72 @@ import kotlin.math.hypot
 class FriendGiftTask {
 
     private val giftedPoints = mutableListOf<android.graphics.Point>()
+    private val skippedPoints = mutableListOf<android.graphics.Point>()
+    private val buttonClickCounts = mutableMapOf<android.graphics.Point, Int>()
 
     fun isEnabled(config: AppConfig): Boolean = config.enableFriendGiftTask
 
     fun resetSession() {
         giftedPoints.clear()
+        skippedPoints.clear()
+        buttonClickCounts.clear()
     }
 
     fun clearGiftedPoints() {
+        // 保留相容性，但僅在顯式調用時清空已贈送清單，不破壞略過名單
         giftedPoints.clear()
     }
+
+    fun recordButtonClick(point: android.graphics.Point, sh: Int): Int {
+        val radius = (sh * 0.020f).toDouble()
+        val existingEntry = buttonClickCounts.keys.firstOrNull { pt ->
+            hypot((pt.x - point.x).toDouble(), (pt.y - point.y).toDouble()) < radius
+        }
+        val targetPoint = existingEntry ?: point
+        val newCount = (buttonClickCounts[targetPoint] ?: 0) + 1
+        buttonClickCounts[targetPoint] = newCount
+        return newCount
+    }
+
+    fun getButtonClickCount(point: android.graphics.Point, sh: Int): Int {
+        val radius = (sh * 0.020f).toDouble()
+        val existingEntry = buttonClickCounts.keys.firstOrNull { pt ->
+            hypot((pt.x - point.x).toDouble(), (pt.y - point.y).toDouble()) < radius
+        } ?: return 0
+        return buttonClickCounts[existingEntry] ?: 0
+    }
+
+    fun markSkipped(point: android.graphics.Point) {
+        if (skippedPoints.none { hypot((it.x - point.x).toDouble(), (it.y - point.y).toDouble()) < 15.0 }) {
+            skippedPoints.add(point)
+        }
+    }
+
+    fun markGifted(point: android.graphics.Point) {
+        if (giftedPoints.none { hypot((it.x - point.x).toDouble(), (it.y - point.y).toDouble()) < 15.0 }) {
+            giftedPoints.add(point)
+        }
+    }
+
+    fun isAlreadyGiftedOrSkipped(x: Int, y: Int, sh: Int): Boolean {
+        val radius = (sh * 0.020f).toDouble()
+        val isGifted = giftedPoints.any { pt ->
+            hypot((pt.x - x).toDouble(), (pt.y - y).toDouble()) < radius
+        }
+        if (isGifted) return true
+
+        val isSkipped = skippedPoints.any { pt ->
+            hypot((pt.x - x).toDouble(), (pt.y - y).toDouble()) < radius
+        }
+        if (isSkipped) return true
+
+        val attempts = buttonClickCounts.entries.firstOrNull { (pt, _) ->
+            hypot((pt.x - x).toDouble(), (pt.y - y).toDouble()) < radius
+        }?.value ?: 0
+        return attempts >= 2
+    }
+
+    fun isAlreadyGifted(x: Int, y: Int, sh: Int): Boolean = isAlreadyGiftedOrSkipped(x, y, sh)
 
     /**
      * 檢查畫面上是否仍顯示剩餘贈送額度 (例如 5/5、4/5、3/5、2/5、1/5、剩餘 3 次 等)
@@ -193,16 +249,11 @@ class FriendGiftTask {
             }
 
             for (rect in clusters) {
-                if (!isAlreadyGifted(rect.centerX(), rect.centerY(), sh)) {
+                if (!isAlreadyGiftedOrSkipped(rect.centerX(), rect.centerY(), sh)) {
                     return rect
                 }
             }
-            // 若畫面上找得到綠色按鈕群組，但全都被 isAlreadyGifted 阻擋：
-            // 代表是滑動清單後座標重疊或遮罩過大，立即清空重置，避免漏失好友！
-            if (clusters.isNotEmpty()) {
-                giftedPoints.clear()
-                return clusters.first()
-            }
+            // 當前畫面上的綠色按鈕均已送禮完畢或已達略過門檻，回傳 null 以驅動向下滾動！
         }
 
         // 2. OCR 備援：辨識「禮物」文字 (x > 0.75f, y in 0.38f..0.85f)
@@ -219,7 +270,7 @@ class FriendGiftTask {
             val cx = item.bounds.centerX()
             val cy = item.bounds.centerY()
             val btnCenterY = cy - (sh * 0.035f).toInt()
-            if (!isAlreadyGifted(cx, btnCenterY, sh)) {
+            if (!isAlreadyGiftedOrSkipped(cx, btnCenterY, sh)) {
                 return Rect(
                     (sw * 0.78f).toInt(),
                     btnCenterY - (sh * 0.030f).toInt(),
@@ -227,17 +278,6 @@ class FriendGiftTask {
                     btnCenterY + (sh * 0.030f).toInt()
                 )
             }
-        }
-        if (giftOcrItems.isNotEmpty()) {
-            giftedPoints.clear()
-            val item = giftOcrItems.first()
-            val btnCenterY = item.bounds.centerY() - (sh * 0.035f).toInt()
-            return Rect(
-                (sw * 0.78f).toInt(),
-                btnCenterY - (sh * 0.030f).toInt(),
-                (sw * 0.94f).toInt(),
-                btnCenterY + (sh * 0.030f).toInt()
-            )
         }
 
         return null
@@ -397,16 +437,6 @@ class FriendGiftTask {
         )
     }
 
-    fun markGifted(point: android.graphics.Point) {
-        giftedPoints.add(point)
-    }
-
-    private fun isAlreadyGifted(x: Int, y: Int, sh: Int): Boolean {
-        val radius = (sh * 0.020f).toDouble()
-        return giftedPoints.any { pt ->
-            hypot((pt.x - x).toDouble(), (pt.y - y).toDouble()) < radius
-        }
-    }
 
     /**
      * 檢查送禮完成確認彈窗（如『贈送完畢』『已贈送金幣給你自己和...』，下方有 [關閉] 按鈕）

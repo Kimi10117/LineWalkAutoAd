@@ -186,6 +186,7 @@ class AutomationEngine private constructor(private val context: Context) {
     private var friendGiftReturnHomeTicks = 0
     private var friendGiftOpenDrawerTicks = 0
     private var friendGiftDialogRetryCount = 0
+    private var pendingGiftButtonClickPoint: android.graphics.Point? = null
     internal val claimedBingoColumns = mutableSetOf<Int>()
     internal val bingoColumnRetryCount = mutableMapOf<Int, Int>()
     internal var bingoOpenCellRetryCount = 0
@@ -265,6 +266,7 @@ class AutomationEngine private constructor(private val context: Context) {
         friendGiftReturnHomeTicks = 0
         friendGiftOpenDrawerTicks = 0
         friendGiftDialogRetryCount = 0
+        pendingGiftButtonClickPoint = null
         friendGiftTask.resetSession()
         currentPhaseEmptyTicks = 0
         currentTab = tabPriorityOrder.firstOrNull { it.isEnabled(config) } ?: MainTab.MOVE
@@ -753,7 +755,9 @@ class AutomationEngine private constructor(private val context: Context) {
         val sentCompletedCloseBtn = friendGiftTask.findSentCompletedCloseButton(screenBitmap, ocrItems)
         if (sentCompletedCloseBtn != null) {
             nonGameScreenTicks = 0
-            friendGiftTask.clearGiftedPoints()
+            // 嚴禁在此清空 giftedPoints，保留已贈送好友之記憶
+            pendingGiftButtonClickPoint?.let { friendGiftTask.markGifted(it) }
+            pendingGiftButtonClickPoint = null
             appendLog("[禮物]【好友送禮】偵測到「贈送完畢」彈窗，點擊 [關閉] 繼續流程！")
             FloatingOverlayService.clickWithOverlayPassthrough(sentCompletedCloseBtn) {
                 service.clickRect(sentCompletedCloseBtn)
@@ -886,22 +890,24 @@ class AutomationEngine private constructor(private val context: Context) {
                              missionTask.isMissionDialogOpen(ocrItems, sh, screenBitmap) ||
                              receiveGiftTask.isReceiveGiftDialogOpen(ocrItems, sh) ||
                              friendGiftTask.isFriendsPage(ocrItems, sh)
-        if (!isAnySubDialog) {
-            val geoX = templateMatcher.detectCornerGeometricX(
-                screenBitmap = screenBitmap,
-                blacklistedCoord = { x, y ->
-                    FloatingOverlayService.isInsideOverlay(x, y) ||
-                    y < sh * 0.08f
+        if (!bingoTask.isBingoDialogOpen(ocrItems, sh)) {
+            if (!isAnySubDialog) {
+                val geoX = templateMatcher.detectCornerGeometricX(
+                    screenBitmap = screenBitmap,
+                    blacklistedCoord = { x, y ->
+                        FloatingOverlayService.isInsideOverlay(x, y) ||
+                        y < sh * 0.08f
+                    }
+                )
+                if (geoX != null) {
+                    nonGameScreenTicks = 0
+                    appendLog("[關閉] 偵測到全螢幕宣傳頁/彈窗角落關閉鈕 (${geoX.label})，自動點擊關閉！")
+                    FloatingOverlayService.clickWithOverlayPassthrough(geoX.bounds) {
+                        service.clickRect(geoX.bounds)
+                    }
+                    updateDetail("[關閉] 已點擊關閉按鈕 (${geoX.label})，返回遊戲...", "[關閉] 關閉彈窗中...")
+                    return
                 }
-            )
-            if (geoX != null) {
-                nonGameScreenTicks = 0
-                appendLog("[關閉] 偵測到全螢幕宣傳頁/彈窗角落關閉鈕 (${geoX.label})，自動點擊關閉！")
-                FloatingOverlayService.clickWithOverlayPassthrough(geoX.bounds) {
-                    service.clickRect(geoX.bounds)
-                }
-                updateDetail("[關閉] 已點擊關閉按鈕 (${geoX.label})，返回遊戲...", "[關閉] 關閉彈窗中...")
-                return
             }
         }
 
@@ -1064,6 +1070,16 @@ class AutomationEngine private constructor(private val context: Context) {
             return
         }
 
+        // 最優先檢查：是否停留在看完廣告後的『獲得15張票券！ / 獲得金幣！』中央彈窗，優先點擊關閉
+        val modalCloseBtn = ocrRecognizer.findCenterRewardModalCloseButton(screenBitmap, ocrItems)
+        if (modalCloseBtn != null) {
+            appendLog("[抽抽樂] 偵測到領獎完成彈窗，點擊關閉: ${modalCloseBtn.first}")
+            FloatingOverlayService.clickWithOverlayPassthrough(modalCloseBtn.second) {
+                service.clickRect(modalCloseBtn.second)
+            }
+            return
+        }
+
         // 0. 檢查是否處於抽獎結果畫面（中獎囉、中獎等）
         val hasLotteryResultContext = ocrItems.any { item ->
             val t = item.text.replace(" ", "")
@@ -1160,22 +1176,25 @@ class AutomationEngine private constructor(private val context: Context) {
         }
 
         // 兩次檢查確認 50 抽與免費抽皆不可點 (50 抽已無次數/票券不足，且免費抽已完成，且嚴格不點 5 抽)
-        currentPhaseEmptyTicks++
-        if (currentPhaseEmptyTicks < 2) {
-            updateDetail("[抽抽樂] 檢查可抽項目 ($currentPhaseEmptyTicks/2)...", "[抽抽樂] 檢查中...")
-            return
-        }
+        // 且確認畫面上無待領獎彈窗且不在結果畫面時，才允許點擊右上角 X 關閉視窗！
+        if (modalCloseBtn == null && !hasLotteryResultContext) {
+            currentPhaseEmptyTicks++
+            if (currentPhaseEmptyTicks < 2) {
+                updateDetail("[抽抽樂] 檢查可抽項目 ($currentPhaseEmptyTicks/2)...", "[抽抽樂] 檢查中...")
+                return
+            }
 
-        currentPhaseEmptyTicks = 0
-        hasClickedLotteryAdReward = false
-        isLotteryCompleted = true
-        appendLog("[完成]【抽抽樂】已無可抽項目 (50抽已滿或票券不足，免費抽已完成，且絕不點5張)，關閉視窗")
-        val closeBtn = lotteryTask.getCloseButtonBounds(sw, sh)
-        FloatingOverlayService.clickWithOverlayPassthrough(closeBtn) {
-            service.clickRect(closeBtn)
+            currentPhaseEmptyTicks = 0
+            hasClickedLotteryAdReward = false
+            isLotteryCompleted = true
+            appendLog("[完成]【抽抽樂】已無可抽項目 (50抽已滿或票券不足，免費抽已完成，且絕不點5張)，關閉視窗")
+            val closeBtn = lotteryTask.getCloseButtonBounds(sw, sh)
+            FloatingOverlayService.clickWithOverlayPassthrough(closeBtn) {
+                service.clickRect(closeBtn)
+            }
+            currentPhase = getNextPhase(PatrolPhase.LOTTERY)
+            updateDetail("[完成] 抽抽樂已完成，準備進入下一項...", "[完成] 抽抽樂完成")
         }
-        currentPhase = getNextPhase(PatrolPhase.LOTTERY)
-        updateDetail("[完成] 抽抽樂已完成，準備進入下一項...", "[完成] 抽抽樂完成")
     }
 
     private suspend fun handleMissionDialog(
@@ -1320,7 +1339,9 @@ class AutomationEngine private constructor(private val context: Context) {
         // 0. 最優先檢查：是否跳出送禮結束的「贈送完畢」彈窗（已贈送金幣給你自己和XXX。[關閉]）！
         val completedCloseBtn = friendGiftTask.findSentCompletedCloseButton(screenBitmap, ocrItems)
         if (completedCloseBtn != null) {
-            friendGiftTask.clearGiftedPoints()
+            // 嚴禁在此清空 giftedPoints，保留已贈送好友之記憶
+            pendingGiftButtonClickPoint?.let { friendGiftTask.markGifted(it) }
+            pendingGiftButtonClickPoint = null
             appendLog("[禮物]【好友送禮】偵測到「贈送完畢」彈窗，點擊 [關閉] 繼續送禮！")
             FloatingOverlayService.clickWithOverlayPassthrough(completedCloseBtn) {
                 service.clickRect(completedCloseBtn)
@@ -1343,11 +1364,10 @@ class AutomationEngine private constructor(private val context: Context) {
             return
         }
 
-        // 0B. 檢查贈送次數是否已達上限 (例如 0/5 或 今日上限)，且畫面上已無任何可點擊之綠色禮物按鈕
+        // 0B. 檢查贈送次數是否已達上限 (例如 0/5 或 今日上限)，立即判定送禮完成推進至收禮抽屜
         val hasGiftQuotaFull = friendGiftTask.isGiftQuotaFull(ocrItems)
         val hasRemainingQuota = friendGiftTask.hasRemainingGiftQuota(ocrItems)
-        val hasAnyGiftButton = friendGiftTask.findNextGiftButton(screenBitmap, ocrItems) != null
-        if (hasGiftQuotaFull && !hasAnyGiftButton) {
+        if (hasGiftQuotaFull) {
             appendLog("[禮物]【好友送禮】今日贈送次數已達上限 (0/5)，送禮完成！")
             isFriendGiftCompleted = true
         }
@@ -1388,6 +1408,11 @@ class AutomationEngine private constructor(private val context: Context) {
         val isGiftModalOpen = friendGiftTask.isSendGiftModalOpen(ocrItems)
         if (isGiftModalOpen) {
             friendGiftEmptyTicks = 0
+            // 彈窗成功開啟：確認前次點擊成功觸發送禮彈窗，將該好友標記為已送禮
+            pendingGiftButtonClickPoint?.let {
+                friendGiftTask.markGifted(it)
+                pendingGiftButtonClickPoint = null
+            }
             if (friendGiftDialogRetryCount == 0) {
                 val selfGiftOption = friendGiftTask.findSelfGiftButton(screenBitmap, ocrItems)
                 if (selfGiftOption != null) {
@@ -1436,15 +1461,27 @@ class AutomationEngine private constructor(private val context: Context) {
             }
         } else {
             friendGiftDialogRetryCount = 0
+            // 彈窗未開啟：檢查前次點擊之按鈕是否已達 2 次嘗試上限
+            val lastPoint = pendingGiftButtonClickPoint
+            if (lastPoint != null) {
+                val attempts = friendGiftTask.getButtonClickCount(lastPoint, sh)
+                if (attempts >= 2) {
+                    appendLog("[略過]【好友送禮】好友按鈕 (${lastPoint.x}, ${lastPoint.y}) 點擊達 2 次仍未觸發彈窗，加入略過名單！")
+                    friendGiftTask.markSkipped(lastPoint)
+                    pendingGiftButtonClickPoint = null
+                }
+            }
         }
 
-        // 2. 搜尋畫面上是否有未贈送的綠色「禮物」按鈕
+        // 2. 搜尋畫面上是否有未贈送且未略過的綠色「禮物」按鈕
         val nextGiftBtn = friendGiftTask.findNextGiftButton(screenBitmap, ocrItems)
         if (nextGiftBtn != null) {
             friendGiftEmptyTicks = 0
             friendGiftDialogRetryCount = 0
-            friendGiftTask.markGifted(android.graphics.Point(nextGiftBtn.centerX(), nextGiftBtn.centerY()))
-            appendLog("[禮物]【好友送禮】點擊好友排行榜綠色禮物按鈕 (座標: ${nextGiftBtn.centerX()}, ${nextGiftBtn.centerY()})！")
+            val btnPoint = android.graphics.Point(nextGiftBtn.centerX(), nextGiftBtn.centerY())
+            pendingGiftButtonClickPoint = btnPoint
+            val attempt = friendGiftTask.recordButtonClick(btnPoint, sh)
+            appendLog("[禮物]【好友送禮】點擊好友排行榜綠色禮物按鈕 (座標: ${btnPoint.x}, ${btnPoint.y}，第 $attempt 次嘗試)！")
             updateDetail("[禮物] 點擊好友禮物按鈕，等待送禮彈窗...", "[禮物] 贈送禮物中...")
             FloatingOverlayService.clickWithOverlayPassthrough(nextGiftBtn) {
                 service.clickRect(nextGiftBtn)
@@ -1453,12 +1490,13 @@ class AutomationEngine private constructor(private val context: Context) {
             return
         }
 
-        // 3. 畫面上沒有未贈送的禮物按鈕了，向下滾動清單搜尋更多好友！
+        // 3. 畫面上無可用禮物按鈕，向下滾動清單搜尋更多好友！
+        pendingGiftButtonClickPoint = null
         friendGiftEmptyTicks++
         if (friendGiftEmptyTicks <= 2) {
-            appendLog("[清單]【好友送禮】向下滾動清單搜尋更多好友 ($friendGiftEmptyTicks/2)...")
-            updateDetail("[清單] 滾動清單搜尋更多好友 ($friendGiftEmptyTicks/2)...", "[清單] 滾動好友清單...")
-            friendGiftTask.clearGiftedPoints()
+            appendLog("[清單]【好友送禮】畫面上無可用按鈕，向下滾動搜尋新好友 ($friendGiftEmptyTicks/3)...")
+            updateDetail("[清單] 滾動清單搜尋更多好友 ($friendGiftEmptyTicks/3)...", "[清單] 滾動好友清單...")
+            // 絕不清空 giftedPoints，保留已知好友記憶
             service.performSwipe(
                 startX = sw * 0.50f,
                 startY = sh * 0.70f,
@@ -1470,25 +1508,7 @@ class AutomationEngine private constructor(private val context: Context) {
             return
         }
 
-        // 4. 連續兩次滾動皆無新禮物按鈕：
-        // 嚴格防護：若畫面上仍明確顯示有剩餘額度 (如 3/5)，絕不可直接判定完成！
-        if (hasRemainingQuota) {
-            if (friendGiftEmptyTicks <= 4) {
-                appendLog("[清單]【好友送禮】尚有剩餘額度，向上滾動清單重新檢查 ($friendGiftEmptyTicks/4)...")
-                updateDetail("[清單] 向上滾動清單搜尋好友 ($friendGiftEmptyTicks/4)...", "[清單] 滾動好友清單...")
-                friendGiftTask.clearGiftedPoints()
-                service.performSwipe(
-                    startX = sw * 0.50f,
-                    startY = sh * 0.35f,
-                    endX = sw * 0.50f,
-                    endY = sh * 0.70f,
-                    durationMs = 380L
-                )
-                delay(600)
-                return
-            }
-        }
-
+        // 4. 連續滾動 2~3 次皆未發現新好友，判定好友送禮全數完成！
         isFriendGiftCompleted = true
         if (config.enableFriendGiftTask && !isReceiveGiftCompleted) {
             currentPhase = PatrolPhase.RECEIVE_GIFT
@@ -1839,6 +1859,7 @@ class AutomationEngine private constructor(private val context: Context) {
         friendGiftReturnHomeTicks = 0
         friendGiftOpenDrawerTicks = 0
         friendGiftDialogRetryCount = 0
+        pendingGiftButtonClickPoint = null
         friendGiftTask.resetSession()
 
         currentTab = tabPriorityOrder.firstOrNull { it.isEnabled(config) } ?: MainTab.MOVE
@@ -2041,7 +2062,8 @@ class AutomationEngine private constructor(private val context: Context) {
         // 若彈出好友送禮「贈送完畢」彈窗，立即點擊 [關閉] 並返回主畫面/好友分頁繼續巡邏！
         val completedCloseBtn = friendGiftTask.findSentCompletedCloseButton(screenBitmap, ocrItems)
         if (completedCloseBtn != null) {
-            friendGiftTask.clearGiftedPoints()
+            pendingGiftButtonClickPoint?.let { friendGiftTask.markGifted(it) }
+            pendingGiftButtonClickPoint = null
             appendLog("[禮物]【好友送禮】等待彈窗中偵測到「贈送完畢」彈窗，點擊 [關閉]！")
             FloatingOverlayService.clickWithOverlayPassthrough(completedCloseBtn) {
                 service.clickRect(completedCloseBtn)
