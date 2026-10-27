@@ -68,7 +68,7 @@ enum class MainTab(
     val tabName: String,
     val shortLabel: String,
     val xRatio: Float,
-    val yRatio: Float = 0.115f
+    val yRatio: Float = 0.165f
 ) {
     MOVE(0, "首頁(移動)", "移動", 0.125f),
     STEP(1, "步數", "步數", 0.375f),
@@ -182,7 +182,6 @@ class AutomationEngine private constructor(private val context: Context) {
     var isFriendGiftCompleted = false
         internal set
     private val checkedMissionTabs = mutableSetOf<String>()
-    private val missionTabSequence = listOf("特別", "每日", "每週")
     private var friendGiftEmptyTicks = 0
     private var friendGiftReturnHomeTicks = 0
     private var friendGiftOpenDrawerTicks = 0
@@ -574,10 +573,10 @@ class AutomationEngine private constructor(private val context: Context) {
         // 1. 排除賓果彈窗
         if (bingoTask.isBingoDialogOpen(ocrItems, sh)) return false
 
-        // 2. 排除主畫面頂部分頁 (cy in 0.08f..0.20f)
+        // 2. 排除主畫面頂部分頁 (cy in 0.05f..0.30f)
         val hasMainTabs = ocrItems.any { item ->
             val cy = item.bounds.centerY().toFloat() / sh
-            cy in 0.08f..0.20f && (
+            cy in 0.05f..0.30f && (
                 item.text.contains("首頁") || item.text.contains("步數") ||
                 item.text.contains("時間") || item.text.contains("遊戲")
             )
@@ -915,7 +914,7 @@ class AutomationEngine private constructor(private val context: Context) {
         val hasMainScreenMarkers = ocrItems.any { item ->
             val cy = item.bounds.centerY().toFloat() / sh
             val t = item.text.replace(" ", "")
-            (cy in 0.08f..0.18f && (t.contains("首頁") || t.contains("步數") || t.contains("時間") || t.contains("遊戲"))) ||
+            (cy in 0.05f..0.30f && (t.contains("首頁") || t.contains("步數") || t.contains("時間") || t.contains("遊戲"))) ||
             (cy > 0.85f && (
                 t == "集點" ||
                 (t.contains("好友") && !t.contains("邀請") && !t.contains("被") && !t.contains("名單") && t.length <= 4) ||
@@ -1268,8 +1267,9 @@ class AutomationEngine private constructor(private val context: Context) {
         sw: Int,
         sh: Int
     ) {
-        val activeTab = missionTask.detectCurrentActiveTab(screenBitmap)
-        appendLog("[任務]【任務視窗】當前處於【$activeTab】分頁 (已檢查: ${checkedMissionTabs.joinToString()})")
+        val availableTabs = missionTask.getAvailableTabs(ocrItems, sh)
+        val activeTab = missionTask.detectCurrentActiveTab(screenBitmap, availableTabs)
+        appendLog("[任務]【任務視窗】當前處於【$activeTab】分頁 (現存分頁: ${availableTabs.joinToString()} | 已檢查: ${checkedMissionTabs.joinToString()})")
 
         // 1. 尋找清單中綠色「領取」按鈕 (嚴格排除「挑戰」與「已領取」)
         val claimBtn = missionTask.findClaimableMissionButton(screenBitmap, ocrItems)
@@ -1293,8 +1293,7 @@ class AutomationEngine private constructor(private val context: Context) {
         // 2. 當前分頁已無可領取項目，將當前分頁加入已檢查清單
         checkedMissionTabs.add(activeTab)
 
-        // 3. 判斷是否還有未檢查的分頁：LINE 散步趣任務彈窗固定包含「特別」、「每日」、「每週」三大分頁！
-        val availableTabs = listOf("特別", "每日", "每週")
+        // 3. 判斷是否還有未檢查的分頁：動態掃描現存分頁清單
         val nextTab = availableTabs.firstOrNull { it !in checkedMissionTabs }
         if (nextTab != null) {
             appendLog("[切換]【任務】$activeTab 分頁已無可領取項目，切換至【$nextTab】分頁檢查...")
@@ -1307,10 +1306,10 @@ class AutomationEngine private constructor(private val context: Context) {
             return
         }
 
-        // 4. 所有分頁 (特別、每日、每週) 皆已檢查完畢，確實標記完成並關閉視窗！
+        // 4. 所有現存分頁皆已檢查完畢，確實標記完成並關閉視窗！
         isMissionCompleted = true
         checkedMissionTabs.clear()
-        appendLog("[完成]【任務】所有分頁（特別、每日、每週）皆已檢查完畢，關閉視窗並推進至下一階段！")
+        appendLog("[完成]【任務】所有現存分頁（${availableTabs.joinToString()}）皆已檢查完畢，關閉視窗並推進至下一階段！")
         val closeBtn = missionTask.getCloseButtonBounds(sw, sh)
         FloatingOverlayService.clickWithOverlayPassthrough(closeBtn) {
             service.clickRect(closeBtn)
@@ -1598,54 +1597,62 @@ class AutomationEngine private constructor(private val context: Context) {
         }
     }
 
-    private fun getTabRect(tab: MainTab, sw: Int, sh: Int, ocrItems: List<OcrItem>): Rect {
+    private fun getTabRect(tab: MainTab, sw: Int, sh: Int, ocrItems: List<OcrItem>, screenBitmap: android.graphics.Bitmap? = null): Rect {
+        // 1. 動態掃描 cy < sh * 0.30f 之頂部四大分頁文字
+        val matchedTabs = ocrItems.filter { item ->
+            val cy = item.bounds.centerY().toFloat() / sh
+            val t = item.text.replace(" ", "")
+            cy in 0.05f..0.30f && (
+                t.contains("首頁") || t.contains("移動") ||
+                t.contains("步數") || t.contains("時間") || t.contains("遊戲")
+            )
+        }
+
+        // 2. 計算動態基準線 Y_anchor，若 OCR 未辨識則嘗試探測黑色底線或採用全機型通用基準線 0.165f
+        val dynamicYAnchor = if (matchedTabs.isNotEmpty()) {
+            matchedTabs.map { it.bounds.centerY() }.average().toInt()
+        } else {
+            val probedY = if (screenBitmap != null) templateMatcher.findActiveMainTabBarY(screenBitmap) else null
+            if (probedY != null) {
+                (probedY - (sh * 0.015f).toInt()).coerceIn((sh * 0.130f).toInt(), (sh * 0.225f).toInt())
+            } else {
+                (sh * 0.165f).toInt()
+            }
+        }
+
+        // 3. 四大分頁點擊座標水平採用 4 等分相對象限中心 (0.125f, 0.375f, 0.625f, 0.875f)
+        val targetCenterX = (sw * tab.xRatio).toInt()
+        val halfW = (sw * 0.10f).toInt()
+        val halfH = (sh * 0.018f).toInt().coerceAtLeast(24)
+
+        // 若該目標分頁直接具有精準 OCR 文字，優先對齊其水平中心
         val tabKeywords = when (tab) {
             MainTab.MOVE -> listOf("首頁", "移動")
             MainTab.STEP -> listOf("步數")
             MainTab.TIME -> listOf("時間")
             MainTab.GAME -> listOf("遊戲")
         }
-
-        val ocrMatch = ocrItems.firstOrNull { item ->
-            val cy = item.bounds.centerY()
-            val cx = item.bounds.centerX()
-            val yInRange = cy in (sh * 0.08f).toInt()..(sh * 0.16f).toInt()
-            val xInRange = when (tab) {
-                MainTab.MOVE -> cx < sw * 0.28f
-                MainTab.STEP -> cx in (sw * 0.22f).toInt()..(sw * 0.52f).toInt()
-                MainTab.TIME -> cx in (sw * 0.48f).toInt()..(sw * 0.78f).toInt()
-                MainTab.GAME -> cx > sw * 0.72f
-            }
-            yInRange && xInRange && tabKeywords.any { kw -> item.text.contains(kw) }
+        val directOcr = matchedTabs.firstOrNull { item ->
+            val t = item.text.replace(" ", "")
+            tabKeywords.any { kw -> t.contains(kw) }
         }
 
-        if (ocrMatch != null) {
+        return if (directOcr != null) {
             val padX = max(24, (sw * 0.04f).toInt())
-            val padY = max(12, (sh * 0.015f).toInt())
-            return Rect(
-                (ocrMatch.bounds.left - padX).coerceIn(0, sw),
-                (ocrMatch.bounds.top - padY).coerceIn(0, sh),
-                (ocrMatch.bounds.right + padX).coerceIn(0, sw),
-                (ocrMatch.bounds.bottom + padY).coerceIn(0, sh)
+            Rect(
+                (directOcr.bounds.left - padX).coerceIn(0, sw),
+                (dynamicYAnchor - halfH).coerceIn(0, sh),
+                (directOcr.bounds.right + padX).coerceIn(0, sw),
+                (dynamicYAnchor + halfH).coerceIn(0, sh)
+            )
+        } else {
+            Rect(
+                (targetCenterX - halfW).coerceIn(0, sw),
+                (dynamicYAnchor - halfH).coerceIn(0, sh),
+                (targetCenterX + halfW).coerceIn(0, sw),
+                (dynamicYAnchor + halfH).coerceIn(0, sh)
             )
         }
-
-        // Fallback: 幾何座標 (每個分頁佔 25% 寬度，高 10.5%~14.2%)
-        val left = when (tab) {
-            MainTab.MOVE -> (sw * 0.02f).toInt()
-            MainTab.STEP -> (sw * 0.26f).toInt()
-            MainTab.TIME -> (sw * 0.51f).toInt()
-            MainTab.GAME -> (sw * 0.76f).toInt()
-        }
-        val right = when (tab) {
-            MainTab.MOVE -> (sw * 0.24f).toInt()
-            MainTab.STEP -> (sw * 0.49f).toInt()
-            MainTab.TIME -> (sw * 0.74f).toInt()
-            MainTab.GAME -> (sw * 0.98f).toInt()
-        }
-        val top = (sh * 0.105f).toInt()
-        val bottom = (sh * 0.142f).toInt()
-        return Rect(left, top, right, bottom)
     }
 
     /**
@@ -1704,7 +1711,7 @@ class AutomationEngine private constructor(private val context: Context) {
                 if (needsInitialTabSync || currentTab != desiredTab) {
                     emptyTicksOnCurrentTab = 0
                     tabSwitchRetries++
-                    val tabRect = getTabRect(desiredTab, sw, sh, ocrItems)
+                    val tabRect = getTabRect(desiredTab, sw, sh, ocrItems, screenBitmap)
                     appendLog("[切換] 依優先順序切換至【${desiredTab.tabName}】(目前在【${currentTab.tabName}】，嘗試:$tabSwitchRetries/3)...")
                     FloatingOverlayService.clickWithOverlayPassthrough(tabRect) {
                         service.clickRect(tabRect)
@@ -1786,7 +1793,7 @@ class AutomationEngine private constructor(private val context: Context) {
 
                 val nextTab = nextRemainingTabs.first()
                 val remainOrderStr = nextRemainingTabs.joinToString("➔") { it.shortLabel }
-                val tabRect = getTabRect(nextTab, sw, sh, ocrItems)
+                val tabRect = getTabRect(nextTab, sw, sh, ocrItems, screenBitmap)
                 appendLog("[切換]【${currentTab.tabName}】已領完，依序切換至【${nextTab.tabName}】(待檢查:$remainOrderStr)")
                 needsInitialTabSync = true
                 tabSwitchRetries = 0

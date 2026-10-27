@@ -562,26 +562,45 @@ class FriendGiftTask {
     }
 
     /**
-     * 底部導覽列「好友」按鈕 (第 2 顆，位於底部 x ≈ 0.25f..0.50f, y ≈ 0.915f..0.975f，避開邊緣與首頁手勢)
+     * 底部導覽列「好友」按鈕 (第 2 顆，位於底部 x ≈ 0.375f, y ≈ 0.910f)
+     * 優先透過 OCR 鎖定文字本體，備援座標嚴格錨定於 sh * 0.910f，精準避開底部 3 鍵導覽列 (54dp, y >= 0.93f) 與手勢條 (16dp)
      */
     fun getBottomFriendsTabRect(sw: Int, sh: Int, ocrItems: List<OcrItem> = emptyList()): Rect {
-        return Rect(
-            (sw * 0.27f).toInt(),
-            (sh * 0.915f).toInt(),
-            (sw * 0.48f).toInt(),
-            (sh * 0.975f).toInt()
-        )
+        val ocrMatch = ocrItems.firstOrNull { item ->
+            val cy = item.bounds.centerY().toFloat() / sh
+            val cx = item.bounds.centerX().toFloat() / sw
+            val t = item.text.replace(" ", "")
+            cy > 0.85f && cx in 0.20f..0.55f &&
+            t.contains("好友") && !t.contains("邀請") && !t.contains("被") && !t.contains("名單") && t.length <= 4
+        }
+        if (ocrMatch != null) {
+            return ocrMatch.bounds
+        }
+        val targetX = (sw * 0.375f).toInt()
+        val targetY = (sh * 0.910f).toInt()
+        val halfW = (sw * 0.08f).toInt()
+        val halfH = (sh * 0.020f).toInt().coerceAtLeast(24)
+        return Rect(targetX - halfW, targetY - halfH, targetX + halfW, targetY + halfH)
     }
 
     /**
-     * 底部導覽列「集點」(首頁) 按鈕 (第 1 顆，位於底部 x ≈ 0.03f..0.23f, y ≈ 0.915f..0.975f，避開邊緣與首頁手勢)
+     * 底部導覽列「集點」(首頁) 按鈕 (第 1 顆，位於底部 x ≈ 0.125f, y ≈ 0.910f)
+     * 優先透過 OCR 鎖定文字本體，備援座標嚴格錨定於 sh * 0.910f，精準避開底部 3 鍵導覽列 (54dp, y >= 0.93f) 與手勢條 (16dp)
      */
     fun getBottomMainTabRect(sw: Int, sh: Int, ocrItems: List<OcrItem> = emptyList()): Rect {
-        return Rect(
-            (sw * 0.03f).toInt(),
-            (sh * 0.915f).toInt(),
-            (sw * 0.23f).toInt(),
-            (sh * 0.975f).toInt()
-        )
+        val ocrMatch = ocrItems.firstOrNull { item ->
+            val cy = item.bounds.centerY().toFloat() / sh
+            val cx = item.bounds.centerX().toFloat() / sw
+            val t = item.text.replace(" ", "")
+            cy > 0.85f && cx < 0.30f && (t == "集點" || (t.contains("集點") && t.length <= 4))
+        }
+        if (ocrMatch != null) {
+            return ocrMatch.bounds
+        }
+        val targetX = (sw * 0.125f).toInt()
+        val targetY = (sh * 0.910f).toInt()
+        val halfW = (sw * 0.08f).toInt()
+        val halfH = (sh * 0.020f).toInt().coerceAtLeast(24)
+        return Rect(targetX - halfW, targetY - halfH, targetX + halfW, targetY + halfH)
     }
 }

@@ -93,17 +93,22 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
             tag_name: latest-apk
-            name: "散步趣助手 v1.15.51 (重構巡邏廣告辨識優先權根除幾何X死循環、強化Reward granted內部返回鍵與彈窗防卡死 - Run #${{ github.run_number }})"
+            name: "散步趣助手 v1.15.52 (全機型通用自適應架構、動態錨定與象限導覽、全域略過符號秒點、防放棄彈窗攔截、50抽票券防護與動態任務面板 - Run #${{ github.run_number }})"
             body: |
-              **散步趣助手 v1.15.51 (Run #${{ github.run_number }})**
-              1. **【重構巡邏流程廣告偵測優先權，根除幾何 X 空點死循環】**：
-                 - 調整 `handleInGameScan` 執行順序，將全螢幕廣告與可玩式互動廣告識別（`hasPlayableOrStoreAdOcr`）置於幾何 X（`detectCornerGeometricX`）之前。
-                 - 徹底解決 Coupang 等互動廣告彈出時被巡邏階段誤當成一般遊戲彈窗反覆點擊右上角 X（每 2 秒點一次長達 6 分鐘）卻無法進入廣告監控模式的致命缺陷。
-              2. **【巡邏角落關閉鈕點擊上限保護 (Retry Limit)】**：
-                 - 引入 `geoXConsecutiveClicks` 計數機制，若連續 3 次點擊角落關閉鈕未關閉畫面，立即發送安全返回鍵（`allowInGame = true`）強行關閉彈窗，杜絕無限空點。
-              3. **【解除內部廣告獎勵返回鍵阻斷】**：
-                 - 針對 `Reward granted` 廣告，若已點擊關閉鈕或已顯示達 8 秒且畫面非主畫面（`!isGameVisible`），立即派發 `service.safeNavigateBack(allowInGame = true)` 退出廣告，解決因檢查 `!isGame` 導致內部廣告返回鍵全面失效的問題。
-              4. **【彈窗過渡防卡死機制修復】**：
-                 - 修正 `handleTriggerAdPopup` 中的 `hasAdOcrDirect` 判定，避免因抽獎殘留狀態將真實廣告誤判為功能子視窗而提前退出至巡邏狀態。
+              **散步趣助手 v1.15.52 (Run #${{ github.run_number }}) - 升級自 v1.15.51**
+              1. **【全機型四大分頁通用自適應架構 (Universal Y-Anchor & Quadrant Navigation)】**：
+                 - 動態掃描頂部四大分頁文字計算動態基準線 Y_anchor，水平採用 4 等分相對象限中心（0.125f, 0.375f, 0.625f, 0.875f），徹底根除在 SM-S7210 (22:9) 及各式設備上的點擊偏移。
+              2. **【全畫面 `▶|` / `>|` / `>>` 略過符號全域放行秒點】**：
+                 - 全畫面放行快速略過符號（包含 ShopBack 等左上角 `▶| Google Play` 膠囊），跳轉 Play 商店後自動安全返回並推進至結束卡片關閉。
+              3. **【英文/多語系防放棄確認彈窗優先最高攔截】**：
+                 - 檢測確認彈窗誘騙按鈕，從 `AD_CLOSE_OCR_KEYWORDS` 剔除「放棄獎勵」、「放棄」、「Close」、「Quit」，100% 點擊「Keep watching / Resume / Continue / 繼續觀看」。
+              4. **【抽抽樂 50 抽反灰判定與票券數驅動】**：
+                 - 提取頂部資產票券數，明確 `< 50` 時邏輯直接禁止點擊 50 抽並自動轉點「免費抽1次」或關閉；按鈕內部像素採樣判定反灰。
+              5. **【任務面板動態分頁清單】**：
+                 - 動態掃描現存分頁，特別任務完成消失時自動收斂為每日與每週，所有分頁檢查完畢後點擊 (X) 退出，杜絕死循環。
+              6. **【底部導覽列通用動態定位】**：
+                 - 優先 OCR 鎖定文字本體，備援座標錨定 Y=0.910f 精準避開虛擬導覽列與手勢條。
+              7. **【宣傳廣告熱區擴展與編譯發布】**：
+                 - 宣傳廣告關閉鈕掃描範圍擴展至 0.050f..0.120f，補齊缺失 import 與 TAG 常數，版本發布 v1.15.52 (versionCode 85)。
             files: LineWalkAutoAd.apk
             prerelease: false

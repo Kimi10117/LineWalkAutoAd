@@ -29,10 +29,10 @@ class MissionTask {
         sh: Int = 0,
         screenBitmap: Bitmap? = null
     ): Boolean {
-        // 嚴格排除主畫面四大分頁特徵
+        // 嚴格排除主畫面四大分頁特徵 (cy in 0.05f..0.30f)
         val hasMainTabs = ocrItems.any { item ->
             val cy = item.bounds.centerY()
-            val inRange = if (sh > 0) cy in (sh * 0.08f).toInt()..(sh * 0.18f).toInt() else cy in 150..450
+            val inRange = if (sh > 0) cy in (sh * 0.05f).toInt()..(sh * 0.30f).toInt() else cy in 100..750
             val t = item.text
             inRange && (t.contains("首頁") || t.contains("步數") || t.contains("時間") || t.contains("遊戲"))
         }
@@ -54,14 +54,30 @@ class MissionTask {
     }
 
     /**
-     * 偵測分頁列 (y in 0.16f..0.22f) 是否存在當前選中之深黑色圓角膠囊按鈕
+     * 動態掃描任務面板現存分頁 (cy in 0.12f..0.28f)：
+     * 當「特別」分頁已完成並消失時，動態收斂為 ["每日", "每週"]
+     */
+    fun getAvailableTabs(ocrItems: List<OcrItem>, sh: Int): List<String> {
+        val standardOrder = listOf("特別", "每日", "每週")
+        val effectiveSh = if (sh > 0) sh else 2400
+        val detected = standardOrder.filter { tabName ->
+            ocrItems.any { item ->
+                val cy = item.bounds.centerY().toFloat() / effectiveSh
+                cy in 0.12f..0.28f && item.text.contains(tabName)
+            }
+        }
+        return if (detected.isNotEmpty()) detected else listOf("每日", "每週")
+    }
+
+    /**
+     * 偵測分頁列 (y in 0.15f..0.25f) 是否存在當前選中之深黑色圓角膠囊按鈕
      */
     fun hasTabPill(screenBitmap: Bitmap): Boolean {
         val sw = screenBitmap.width
         val sh = screenBitmap.height
         var blackCount = 0
-        val yStart = (sh * 0.16f).toInt()
-        val yEnd = (sh * 0.22f).toInt()
+        val yStart = (sh * 0.15f).toInt()
+        val yEnd = (sh * 0.25f).toInt()
         for (y in yStart..yEnd step 3) {
             for (x in 0 until sw step 4) {
                 val c = screenBitmap.getPixel(x, y)
@@ -78,15 +94,18 @@ class MissionTask {
     }
 
     /**
-     * 偵測當前畫面選中的分頁名稱：
-     * LINE 散步趣任務彈窗標準為三繁體分頁「特別」(左側 x ≈ 0.20)、「每日」(中央 x ≈ 0.50) 與「每週」(右側 x ≈ 0.80)
+     * 偵測當前畫面選中的任務分頁名稱：
+     * 支援動態 2 分頁 ("每日", "每週") 或 3 分頁 ("特別", "每日", "每週")
      */
-    fun detectCurrentActiveTab(screenBitmap: Bitmap): String {
+    fun detectCurrentActiveTab(
+        screenBitmap: Bitmap,
+        availableTabs: List<String> = listOf("特別", "每日", "每週")
+    ): String {
         val sw = screenBitmap.width
         val sh = screenBitmap.height
         val blackXs = mutableListOf<Int>()
-        val yStart = (sh * 0.16f).toInt()
-        val yEnd = (sh * 0.22f).toInt()
+        val yStart = (sh * 0.15f).toInt()
+        val yEnd = (sh * 0.25f).toInt()
         for (y in yStart..yEnd step 3) {
             for (x in 0 until sw step 4) {
                 val c = screenBitmap.getPixel(x, y)
@@ -98,15 +117,23 @@ class MissionTask {
                 }
             }
         }
-        if (blackXs.size >= 15) {
+        if (blackXs.size >= 12) {
             val avgXRatio = blackXs.average().toFloat() / sw
-            return when {
-                avgXRatio < 0.35f -> "特別"
-                avgXRatio in 0.35f..0.65f -> "每日"
-                else -> "每週"
+            return if (availableTabs.size == 2) {
+                // 2-tab 佈局: 左側 (每日) vs 右側 (每週)
+                if (avgXRatio < 0.50f) availableTabs[0] else availableTabs[1]
+            } else if (availableTabs.size == 1) {
+                availableTabs[0]
+            } else {
+                // 3-tab 佈局: 特別 (x < 0.35f) vs 每日 (0.35f..0.65f) vs 每週 (> 0.65f)
+                when {
+                    avgXRatio < 0.35f -> "特別"
+                    avgXRatio in 0.35f..0.65f -> "每日"
+                    else -> "每週"
+                }
             }
         }
-        return "特別"
+        return availableTabs.firstOrNull() ?: "每日"
     }
 
     /**
@@ -244,18 +271,23 @@ class MissionTask {
      * 優先比對 OCR 關鍵字，若 OCR 未抓取則使用精準相對座標熱區
      */
     fun getTabRect(tabName: String, sw: Int, sh: Int, ocrItems: List<OcrItem> = emptyList()): Rect {
+        val effectiveSh = if (sh > 0) sh else 2400
         val ocrMatch = ocrItems.firstOrNull { item ->
-            item.bounds.centerY() in (sh * 0.15f).toInt()..(sh * 0.24f).toInt() &&
-            item.text.contains(tabName)
+            val cy = item.bounds.centerY().toFloat() / effectiveSh
+            cy in 0.12f..0.28f && item.text.contains(tabName)
         }
         if (ocrMatch != null) {
             return ocrMatch.bounds
         }
 
+        val hasSpecial = ocrItems.any { item ->
+            val cy = item.bounds.centerY().toFloat() / effectiveSh
+            cy in 0.12f..0.28f && item.text.contains("特別")
+        }
         val xRatio = when (tabName) {
             "特別" -> 0.20f
-            "每週" -> 0.80f
-            else -> 0.50f // "每日"：三繁體分頁佈局下中心點約 0.50f
+            "每週" -> if (hasSpecial) 0.80f else 0.67f
+            else -> if (hasSpecial) 0.50f else 0.33f
         }
         val yCenter = (sh * 0.188f).toInt()
         val halfW = (sw * 0.14f).toInt()

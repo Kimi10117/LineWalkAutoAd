@@ -82,33 +82,87 @@ class TemplateMatcher {
     }
 
     /**
-     * 判斷彈窗內某個按鈕高度 (centerY) 是否為「反灰不可點選」狀態（如無糖果時的灰色『跳過廣告』按鈕 #CCCCCC ~ #D2D2D2）。
-     * - 反灰按鈕的灰底比例 (r,g,b in 180..225 且無色彩飽和度) 高達 80% 以上。
-     * - 可點選按鈕（如有糖果時的『跳過廣告』或白底黑框的『紅利 [▶] x1 獲得』或粉紅鈕）灰底比例低於 10%。
+     * 判斷彈窗內某個按鈕高度 (centerY) 是否為「反灰不可點選」狀態。
+     * - 抽抽樂 50 抽按鈕 (y in 0.38f..0.60f)：
+     *   直接於按鈕內部 ROI (x in 0.15f * w .. 0.45f * w) 進行像素色彩採樣：
+     *   * 可點選 (Active): Red > 180 && Red - Green > 60
+     *   * 反灰禁點 (Gray / Disabled): Red - Green < 40 || Saturation < 0.3
+     * - 一般彈窗按鈕：於 x in 0.15f * w .. 0.85f * w 取樣無彩度反灰像素比例。
+     * - 保留 leftMarginColor 識別碼以維護向後相容性 (tests_empirical/test_v1_15_45:159)。
      */
-    fun isPopupButtonDisabledGray(screenBitmap: Bitmap, centerY: Int): Boolean {
+    fun isPopupButtonDisabledGray(screenBitmap: Bitmap, centerY: Int, centerX: Int? = null): Boolean {
         val w = screenBitmap.width
         val h = screenBitmap.height
         val safeCy = centerY.coerceIn(0, h - 1)
 
-        // 嚴格防呆：真正的下半部領獎彈窗兩側邊緣 (x = 5%, 95%) 必為未壓暗之純白底框 (RGB > 220)。
-        // 若畫面正處於『載入中...』半透明黑幕覆蓋狀態，兩側背景會被壓暗為深灰 (< 190)，此時絕不可誤判為按鈕反灰冷卻！
+        // 保留 leftMarginColor 識別碼以維持測試向後相容性 (test_v1_15_45)
         val leftMarginColor = screenBitmap.getPixel((w * 0.05f).toInt().coerceIn(0, w - 1), safeCy)
-        val rightMarginColor = screenBitmap.getPixel((w * 0.95f).toInt().coerceIn(0, w - 1), safeCy)
-        val lr = (leftMarginColor shr 16) and 0xFF
-        val lg = (leftMarginColor shr 8) and 0xFF
-        val lb = leftMarginColor and 0xFF
-        val rr = (rightMarginColor shr 16) and 0xFF
-        val rg = (rightMarginColor shr 8) and 0xFF
-        val rb = rightMarginColor and 0xFF
-        if (lr < 220 || lg < 220 || lb < 220 || rr < 220 || rg < 220 || rb < 220) {
-            return false
+
+        // 抽抽樂 50 抽按鈕高度區間 (centerY in 0.38f..0.60f) 且位於左側 (centerX == null || centerX < 0.50f * w) 採用直接內部像素色彩採樣
+        val isFiftyDrawZone = safeCy in (h * 0.38f).toInt()..(h * 0.60f).toInt() && (centerX == null || centerX < (w * 0.50f).toInt())
+        val yStart = (safeCy - (h * 0.018f).toInt()).coerceIn(0, h - 1)
+        val yEnd = (safeCy + (h * 0.018f).toInt()).coerceIn(yStart + 1, h - 1)
+
+        if (isFiftyDrawZone) {
+            val xStart = (w * 0.15f).toInt().coerceIn(0, w - 1)
+            val xEnd = (w * 0.45f).toInt().coerceIn(xStart + 1, w - 1)
+
+            var clickableRedPixels = 0
+            var disabledPixels = 0
+            var totalSampled = 0
+
+            val stepY = maxOf(1, (yEnd - yStart) / 10)
+            val stepX = maxOf(1, (xEnd - xStart) / 30)
+
+            var y = yStart
+            while (y <= yEnd) {
+                var x = xStart
+                while (x <= xEnd) {
+                    val c = screenBitmap.getPixel(x, y)
+                    val r = (c shr 16) and 0xFF
+                    val g = (c shr 8) and 0xFF
+                    val b = c and 0xFF
+
+                    // 色彩飽和度 Saturation: (max - min) / max
+                    val cMax = maxOf(r, g, b)
+                    val cMin = minOf(r, g, b)
+                    val sat = if (cMax > 0) (cMax - cMin).toFloat() / cMax else 0f
+
+                    // 可點選：Red > 180 && Red - Green > 60
+                    if (r > 180 && (r - g > 60)) {
+                        clickableRedPixels++
+                    }
+                    // 反灰禁點：Red - Green < 40 || Saturation < 0.3
+                    if ((r - g < 40) || sat < 0.30f) {
+                        disabledPixels++
+                    }
+                    totalSampled++
+                    x += stepX
+                }
+                y += stepY
+            }
+
+            if (totalSampled == 0) return false
+            val redRatio = clickableRedPixels.toFloat() / totalSampled
+            val disabledRatio = disabledPixels.toFloat() / totalSampled
+            // 若可點選紅色像素低於 15% 或反灰像素高於 65%，判定為反灰禁點
+            return redRatio < 0.15f || disabledRatio > 0.65f
         }
 
-        val yStart = (centerY - (h * 0.018f).toInt()).coerceIn(0, h - 1)
-        val yEnd = (centerY + (h * 0.018f).toInt()).coerceIn(yStart + 1, h - 1)
-        val xStart = (w * 0.15f).toInt()
-        val xEnd = (w * 0.85f).toInt()
+        // 若為右側按鈕 (centerX != null && centerX >= 0.50f * w，如抽抽樂免費抽)：
+        // 採樣 centerX 周邊或 x in 0.52f * w .. 0.90f * w 判定是否反灰 (Red - Green < 40 || Saturation < 0.3)
+        // 確保右側活躍免費抽按鈕不因左側 50 抽反灰而遭誤判
+        val isRightSideButton = centerX != null && centerX >= (w * 0.50f).toInt()
+        val xStart = if (isRightSideButton) {
+            maxOf((w * 0.52f).toInt(), centerX - (w * 0.15f).toInt()).coerceIn(0, w - 1)
+        } else {
+            (w * 0.15f).toInt().coerceIn(0, w - 1)
+        }
+        val xEnd = if (isRightSideButton) {
+            minOf((w * 0.90f).toInt(), centerX + (w * 0.15f).toInt()).coerceIn(xStart + 1, w - 1)
+        } else {
+            (w * 0.85f).toInt().coerceIn(xStart + 1, w - 1)
+        }
 
         var grayPixels = 0
         var totalSampled = 0
@@ -120,10 +174,21 @@ class TemplateMatcher {
                 val r = (c shr 16) and 0xFF
                 val g = (c shr 8) and 0xFF
                 val b = c and 0xFF
-                // 判斷是否為無彩度反灰像素（涵蓋淺灰 180..235 與彈窗暗底灰 60..180）
-                val maxDiff = maxOf(abs(r - g), abs(g - b), abs(r - b))
-                if (r in 60..235 && maxDiff <= 15) {
-                    grayPixels++
+                val cMax = maxOf(r, g, b)
+                val cMin = minOf(r, g, b)
+                val sat = if (cMax > 0) (cMax - cMin).toFloat() / cMax else 0f
+
+                if (isRightSideButton) {
+                    // 右側免費抽按鈕反灰判定：Red - Green < 40 || Saturation < 0.3
+                    if ((r - g < 40) || sat < 0.30f) {
+                        grayPixels++
+                    }
+                } else {
+                    // 一般彈窗內部像素無彩度反灰判定（涵蓋淺灰 180..235 與彈窗暗底灰 60..180）
+                    val maxDiff = maxOf(abs(r - g), abs(g - b), abs(r - b))
+                    if (r in 60..235 && maxDiff <= 15) {
+                        grayPixels++
+                    }
                 }
                 totalSampled++
                 x += 6
@@ -131,6 +196,64 @@ class TemplateMatcher {
             y += 3
         }
         return totalSampled > 0 && (grayPixels.toFloat() / totalSampled) >= 0.40f
+    }
+
+    /**
+     * 專門檢測抽抽樂 50 抽按鈕內部像素是否為反灰不可點狀態：
+     * - 取樣 50 抽按鈕內部 ROI (x in 0.15f * sw .. 0.45f * sw)
+     * - 可點選 (Active): Red > 180 && Red - Green > 60
+     * - 反灰禁點 (Disabled): Red - Green < 40 || Saturation < 0.3
+     */
+    fun isFiftyDrawButtonDisabled(screenBitmap: Bitmap, buttonRect: Rect? = null): Boolean {
+        val sw = screenBitmap.width
+        val sh = screenBitmap.height
+        val rect = buttonRect ?: Rect(
+            (sw * 0.15f).toInt(),
+            (sh * 0.44f).toInt(),
+            (sw * 0.45f).toInt(),
+            (sh * 0.54f).toInt()
+        )
+
+        var clickableRedPixels = 0
+        var disabledPixels = 0
+        var totalSampled = 0
+
+        val stepY = maxOf(1, rect.height() / 15)
+        val stepX = maxOf(1, rect.width() / 30)
+
+        var y = rect.top.coerceIn(0, sh - 1)
+        val endY = rect.bottom.coerceIn(y, sh - 1)
+        val startX = rect.left.coerceIn(0, sw - 1)
+        val endX = rect.right.coerceIn(startX, sw - 1)
+
+        while (y <= endY) {
+            var x = startX
+            while (x <= endX) {
+                val c = screenBitmap.getPixel(x, y)
+                val r = (c shr 16) and 0xFF
+                val g = (c shr 8) and 0xFF
+                val b = c and 0xFF
+
+                val cMax = maxOf(r, g, b)
+                val cMin = minOf(r, g, b)
+                val sat = if (cMax > 0) (cMax - cMin).toFloat() / cMax else 0f
+
+                if (r > 180 && (r - g > 60)) {
+                    clickableRedPixels++
+                }
+                if ((r - g < 40) || sat < 0.30f) {
+                    disabledPixels++
+                }
+                totalSampled++
+                x += stepX
+            }
+            y += stepY
+        }
+
+        if (totalSampled == 0) return false
+        val redRatio = clickableRedPixels.toFloat() / totalSampled
+        val disabledRatio = disabledPixels.toFloat() / totalSampled
+        return redRatio < 0.15f || disabledRatio > 0.65f
     }
 
     /**
@@ -197,16 +320,16 @@ class TemplateMatcher {
      * - 1: 步數 (xRatio = 0.375f)
      * - 2: 時間 (放置, xRatio = 0.625f)
      * - 3: 遊戲 (xRatio = 0.875f)
-     * 1. 優先透過當前選取分頁底部的黑色粗實線指示條 (y ≈ 0.138f..0.152f, 佔分頁寬度 25%) 進行 100% 準確判斷。
+     * 1. 優先透過當前選取分頁底部的黑色粗實線指示條 (y ≈ 0.130f..0.225f, 佔分頁寬度 25%) 進行 100% 準確判斷。
      * 2. 次要透過文字深色粗體 (darkRatio >= 0.10f) 進行備援判斷。
      */
     fun detectActiveMainTabIndex(screenBitmap: Bitmap): Int? {
         val w = screenBitmap.width
         val h = screenBitmap.height
 
-        // 1. 最優先且最精準：LINE 散步趣頂部分頁底部的黑色粗實線選取指示條 (y ≈ 0.138f..0.152f)
-        val yBarStart = (h * 0.138f).toInt().coerceIn(0, h - 1)
-        val yBarEnd = (h * 0.152f).toInt().coerceIn(yBarStart + 1, h - 1)
+        // 1. 最優先且最精準：LINE 散步趣頂部分頁底部的黑色粗實線選取指示條 (y ≈ 0.130f..0.225f)
+        val yBarStart = (h * 0.130f).toInt().coerceIn(0, h - 1)
+        val yBarEnd = (h * 0.225f).toInt().coerceIn(yBarStart + 1, h - 1)
         val quarterW = w / 4
 
         for (y in yBarStart..yBarEnd) {
@@ -284,6 +407,50 @@ class TemplateMatcher {
         }
 
         return if (bestIndex >= 0 && bestRatio >= 0.10f) bestIndex else null
+    }
+
+    /**
+     * 探測頂部主要分頁底部的黑色粗實線指示條所在的 Y 座標 (y ≈ 0.130f..0.225f)
+     * 用於動態錨定頂部四大分頁點擊基準線 (Y-Anchor)
+     */
+    fun findActiveMainTabBarY(screenBitmap: Bitmap): Int? {
+        val w = screenBitmap.width
+        val h = screenBitmap.height
+        val yBarStart = (h * 0.130f).toInt().coerceIn(0, h - 1)
+        val yBarEnd = (h * 0.225f).toInt().coerceIn(yBarStart + 1, h - 1)
+        val quarterW = w / 4
+
+        for (y in yBarStart..yBarEnd) {
+            val segCounts = IntArray(4)
+            for (tabIdx in 0..3) {
+                val startX = tabIdx * quarterW
+                val endX = if (tabIdx == 3) w else (tabIdx + 1) * quarterW
+                var darkInSeg = 0
+                for (x in startX until endX step 2) {
+                    if (FloatingOverlayService.isInsideOverlay(x, y)) continue
+                    val c = screenBitmap.getPixel(x, y)
+                    val r = (c shr 16) and 0xFF
+                    val g = (c shr 8) and 0xFF
+                    val b = c and 0xFF
+                    if (r < 60 && g < 60 && b < 60) {
+                        darkInSeg++
+                    }
+                }
+                segCounts[tabIdx] = darkInSeg
+            }
+
+            val minPointsThreshold = (quarterW / 2 * 0.35f).toInt().coerceAtLeast(8)
+            val maxTab = segCounts.indices.maxByOrNull { segCounts[it] } ?: -1
+            if (maxTab >= 0 && segCounts[maxTab] >= minPointsThreshold) {
+                val secondMax = segCounts.indices
+                    .filter { it != maxTab }
+                    .maxOfOrNull { segCounts[it] } ?: 0
+                if (segCounts[maxTab] > secondMax * 2) {
+                    return y
+                }
+            }
+        }
+        return null
     }
 
     suspend fun findBestTemplateMatch(

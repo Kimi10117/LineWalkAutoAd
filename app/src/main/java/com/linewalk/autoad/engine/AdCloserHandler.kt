@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.Point
 import android.graphics.Rect
 import android.graphics.RectF
+import android.util.Log
 import com.linewalk.autoad.config.AppConfig
 import com.linewalk.autoad.config.TemplateCategory
 import com.linewalk.autoad.config.TemplateStorage
@@ -14,6 +15,8 @@ import com.linewalk.autoad.vision.OcrItem
 import com.linewalk.autoad.vision.OcrRecognizer
 import com.linewalk.autoad.vision.TemplateMatcher
 import kotlin.math.hypot
+import kotlin.math.max
+import kotlin.math.min
 
 sealed class AdStepResult {
     data class RedirectRecovered(val externalPkg: String) : AdStepResult()
@@ -300,6 +303,87 @@ class AdCloserHandler(
             }
         }
 
+        // 3A. 【最高優先攔截：英文/多語系防放棄確認彈窗】
+        // 當畫面出現 "Would you like to close this ad? You will lose your reward." 等多語系確認視窗時，
+        // 100% 點擊「Keep watching / Resume / Continue / Cancel / 繼續觀看 / 繼續 / 取消」，絕不可點關閉或放棄！
+        val antiAbandonTriggerKeywords = listOf(
+            "close this ad",
+            "lose your reward",
+            "would you like to close",
+            "lose reward",
+            "give up",
+            "quit",
+            "放棄獎勵",
+            "無法獲得獎勵",
+            "reward will be lost",
+            "discard reward",
+            "quit and forfeit",
+            "確定要離開",
+            "確定要退出",
+            "確定要放棄",
+            "確定放棄",
+            "確定離開",
+            "確定退出",
+            "離開廣告"
+        )
+        val hasAntiAbandonPopup = ocrItems.any { item ->
+            val t = item.text.trim().lowercase()
+            antiAbandonTriggerKeywords.any { kw ->
+                val matchesKeyword = if (kw == "quit") {
+                    Regex("""\bquit\b""", RegexOption.IGNORE_CASE).containsMatchIn(t)
+                } else {
+                    t.contains(kw.lowercase())
+                }
+                matchesKeyword
+            }
+        }
+        if (hasAntiAbandonPopup) {
+            val continueKeywords = listOf(
+                "Keep watching",
+                "Resume",
+                "Continue",
+                "Cancel",
+                "繼續觀看",
+                "繼續",
+                "取消"
+            )
+            val baitWords = listOf("Close", "CLOSE", "Quit", "QUIT", "Discard", "DISCARD", "放棄獎勵", "放棄", "離開", "退出")
+
+            val continueBtn = ocrItems.firstOrNull { item ->
+                val cx = item.bounds.centerX()
+                val cy = item.bounds.centerY()
+                val t = item.text.trim()
+                val matches = continueKeywords.any { kw -> t.equals(kw, ignoreCase = true) || t.contains(kw, ignoreCase = true) }
+                val isBait = baitWords.any { bait -> t.equals(bait, ignoreCase = true) || t.contains(bait, ignoreCase = true) }
+                matches && !isBait && !isInvalidOrBlacklisted(cx, cy)
+            }
+
+            if (continueBtn != null) {
+                hasAdActuallyShown = true
+                lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
+                recordAndClick(service, continueBtn.bounds)
+                return AdStepResult.ClickedCloseOrSkip("防放棄繼續[${continueBtn.text}]", continueBtn.bounds)
+            }
+
+            val rootNode = service.getSafeRootNode()
+            val continueNode = nodeInspector.findNodeByKeywords(
+                root = rootNode,
+                keywords = continueKeywords,
+                screenWidth = sw,
+                screenHeight = sh,
+                excludeKeywords = baitWords
+            )
+            if (continueNode != null && !isInvalidOrBlacklisted(continueNode.bounds.centerX(), continueNode.bounds.centerY())) {
+                hasAdActuallyShown = true
+                lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
+                recordAndClick(service, continueNode.bounds)
+                return AdStepResult.ClickedCloseOrSkip("防放棄繼續[${continueNode.label}]", continueNode.bounds)
+            }
+
+            // 0% accidental close: 確認彈窗出現時，嚴格攔截所有關閉/略過行為
+            return AdStepResult.ScanningAd(elapsedSec)
+        }
+
         // 3. 廣告前保護期 (4 秒)：靜候播放
         if (elapsedSec < 4) {
             return AdStepResult.WaitingGracePeriod(elapsedSec)
@@ -331,6 +415,25 @@ class AdCloserHandler(
             lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
             recordAndClick(service, explicitSkipNode.bounds)
             return AdStepResult.ClickedCloseOrSkip(explicitSkipNode.label, explicitSkipNode.bounds)
+        }
+
+        // 4A-1. 【全畫面 ▶| / >| / >> / >>| 略過符號全域放行秒點】
+        // 畫面上任何區域（不論左上角、右上角、左下角或右下角），只要偵測到 ▶|、>|、>>、>>| 符號
+        // （包含 ShopBack 等廣告左上角之 ▶| Google Play 膠囊按鈕），一律發送點擊！
+        // 絕不受 Google Play 排除關鍵字抑制，全域放行秒點。
+        val fastSkipSymbols = listOf("▶|", ">|", ">>|", ">>")
+        val fastSkipMatch = ocrItems.firstOrNull { item ->
+            val cx = item.bounds.centerX()
+            val cy = item.bounds.centerY()
+            val t = item.text.replace(" ", "")
+            val hasSymbol = fastSkipSymbols.any { sym -> t.contains(sym) }
+            hasSymbol && !isInvalidOrBlacklisted(cx, cy)
+        }
+        if (fastSkipMatch != null) {
+            hasAdActuallyShown = true
+            lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
+            recordAndClick(service, fastSkipMatch.bounds, allowBlacklist = true)
+            return AdStepResult.ClickedCloseOrSkip("快速略過[${fastSkipMatch.text}]", fastSkipMatch.bounds)
         }
 
         // 4B. 全畫面 OCR 明確略過按鈕搜尋 (包含「略過廣告」、「可略過廣告」、「Skip Ad」、「略過」等)
@@ -882,6 +985,7 @@ class AdCloserHandler(
     }
 
     companion object {
+        private const val TAG = "AdCloserHandler"
         private const val BLACKLIST_RADIUS_PX = 65.0
     }
 }

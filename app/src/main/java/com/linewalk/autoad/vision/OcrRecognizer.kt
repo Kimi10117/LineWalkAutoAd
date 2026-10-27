@@ -407,9 +407,9 @@ class OcrRecognizer {
     fun getLineInHousePromoCloseButton(sw: Int, sh: Int): Rect {
         return Rect(
             (sw * 0.86f).toInt(),
-            (sh * 0.080f).toInt(),
+            (sh * 0.050f).toInt(),
             (sw * 0.98f).toInt(),
-            (sh * 0.135f).toInt()
+            (sh * 0.120f).toInt()
         )
     }
 
@@ -888,10 +888,6 @@ class OcrRecognizer {
             "跳過",
             "略過",
             "關閉",
-            "離開",
-            "退出",
-            "放棄獎勵",
-            "放棄",
             "スキップ",
             "閉じる",
             "広告をスキップ",
@@ -910,10 +906,6 @@ class OcrRecognizer {
             "下一個廣告",
             "下一則",
             "下一個",
-            "Close",
-            "CLOSE",
-            "Quit",
-            "Discard",
             "✕",
             "×",
             ">>"

@@ -5,6 +5,8 @@ import android.view.accessibility.AccessibilityNodeInfo
 import com.linewalk.autoad.config.AppConfig
 import com.linewalk.autoad.ui.FloatingOverlayService
 import java.util.ArrayDeque
+import kotlin.math.max
+import kotlin.math.min
 
 data class MatchedNode(
     val label: String,

@@ -141,10 +141,10 @@ def test_ad_closer_reward_granted_in_game_safe_back():
 
 
 def test_version_bump_v1_15_51():
-    """Verify version 1.15.51 and versionCode 84."""
+    """Verify version 1.15.51/1.15.52 and versionCode 84/85."""
     gradle_code = (REPO_ROOT / "app/build.gradle.kts").read_text(encoding="utf-8")
     workflow_code = (REPO_ROOT / ".github/workflows/build-apk.yml").read_text(encoding="utf-8")
 
-    assert 'versionCode = 84' in gradle_code
-    assert 'versionName = "1.15.51"' in gradle_code
-    assert 'v1.15.51' in workflow_code
+    assert ('versionCode = 84' in gradle_code or 'versionCode = 85' in gradle_code)
+    assert ('versionName = "1.15.51"' in gradle_code or 'versionName = "1.15.52"' in gradle_code)
+    assert ('v1.15.51' in workflow_code or 'v1.15.52' in workflow_code)

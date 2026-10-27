@@ -56,8 +56,88 @@ class LotteryTask {
     }
 
     /**
+     * 提取抽抽樂彈窗頂部或畫面頂部資產列的票券數量：
+     * 1. 彈窗頂部票券膠囊：cy in 0.16f..0.25f, cx > 0.60f，包含數字 (\d+)
+     * 2. 備援畫面頂部資產列：cy in 0.03f..0.10f, cx in 0.48f..0.80f
+     */
+    fun extractTicketCount(
+        ocrItems: List<OcrItem>,
+        screenBitmap: Bitmap? = null,
+        sh: Int = screenBitmap?.height ?: 0,
+        sw: Int = screenBitmap?.width ?: 0
+    ): Int? {
+        val effectiveSh = if (sh > 0) sh else (screenBitmap?.height ?: 0)
+        val effectiveSw = if (sw > 0) sw else (screenBitmap?.width ?: 0)
+
+        // 1. 檢查抽抽樂彈窗頂部票券膠囊 (cy in 0.16f..0.25f, cx > 0.60f)
+        val modalPillItem = ocrItems.firstOrNull { item ->
+            val cy = item.bounds.centerY()
+            val cx = item.bounds.centerX()
+            val inY = if (effectiveSh > 0) {
+                cy in (effectiveSh * 0.15f).toInt()..(effectiveSh * 0.26f).toInt()
+            } else {
+                cy in 120..650 || (ocrItems.isNotEmpty() && cy.toFloat() / maxOf(1, ocrItems.maxOf { it.bounds.bottom }) in 0.14f..0.27f)
+            }
+            val inX = if (effectiveSw > 0) {
+                cx > (effectiveSw * 0.58f).toInt()
+            } else {
+                cx > 350 || (ocrItems.isNotEmpty() && cx.toFloat() / maxOf(1, ocrItems.maxOf { it.bounds.right }) > 0.55f)
+            }
+            val t = item.text.replace(" ", "").replace(",", "")
+            inY && inX && Regex("""\d+""").containsMatchIn(t)
+        }
+        if (modalPillItem != null) {
+            val cleanText = modalPillItem.text.replace(",", "")
+            val num = Regex("""\d+""").find(cleanText)?.value?.toIntOrNull()
+            if (num != null) return num
+        }
+
+        // 2. 備援：檢查畫面頂部資產列票券區域 (cy in 0.03f..0.10f, cx in 0.48f..0.80f)
+        val topBarItem = ocrItems.firstOrNull { item ->
+            val cy = item.bounds.centerY()
+            val cx = item.bounds.centerX()
+            val inY = if (effectiveSh > 0) {
+                cy in (effectiveSh * 0.03f).toInt()..(effectiveSh * 0.10f).toInt()
+            } else {
+                cy in 30..180 || (ocrItems.isNotEmpty() && cy.toFloat() / maxOf(1, ocrItems.maxOf { it.bounds.bottom }) in 0.03f..0.11f)
+            }
+            val inX = if (effectiveSw > 0) {
+                cx in (effectiveSw * 0.48f).toInt()..(effectiveSw * 0.80f).toInt()
+            } else {
+                cx in 400..900 || (ocrItems.isNotEmpty() && cx.toFloat() / maxOf(1, ocrItems.maxOf { it.bounds.right }) in 0.45f..0.85f)
+            }
+            val t = item.text.replace(" ", "").replace(",", "")
+            inY && inX && Regex("""\d+""").containsMatchIn(t)
+        }
+        if (topBarItem != null) {
+            val cleanText = topBarItem.text.replace(",", "")
+            val num = Regex("""\d+""").find(cleanText)?.value?.toIntOrNull()
+            if (num != null) return num
+        }
+
+        // 3. 通用備援：若任何項目位於頂部 (cy < 0.25f 或 cy < 500) 且包含票券特徵與數字
+        val ticketKeywordItem = ocrItems.firstOrNull { item ->
+            val cy = item.bounds.centerY()
+            val inTop = if (effectiveSh > 0) cy < effectiveSh * 0.25f else cy < 500
+            val t = item.text.replace(" ", "").replace(",", "")
+            inTop && (t.contains("張") || t.contains("票") || t.contains("ticket", ignoreCase = true)) && Regex("""\d+""").containsMatchIn(t)
+        }
+        if (ticketKeywordItem != null) {
+            val cleanText = ticketKeywordItem.text.replace(",", "")
+            val num = Regex("""\d+""").find(cleanText)?.value?.toIntOrNull()
+            if (num != null) return num
+        }
+
+        return null
+    }
+
+    fun extractTicketCount(ocrItems: List<OcrItem>, sh: Int, sw: Int = 0): Int? {
+        return extractTicketCount(ocrItems, null, sh, sw)
+    }
+
+    /**
      * 尋找符合規則的抽抽樂按鈕：
-     * - 【第一優先】：50 抽按鈕 (含 "50張")
+     * - 【第一優先】：50 抽按鈕 (含 "50張")，若票券不足 (< 50) 則嚴禁點擊
      * - 【第二順位】：免費抽按鈕 (含 "免費抽" 或 "免費")，抽完即進入倒計時冷卻！
      * - 絕對過濾排除 "5張" 按鈕！
      */
@@ -68,6 +148,10 @@ class LotteryTask {
     ): Pair<String, Rect>? {
         val sh = screenBitmap.height
         val sw = screenBitmap.width
+
+        // 檢查票券數量：若票券數明確 < 50，嚴禁點擊 50 抽！
+        val ticketCount = extractTicketCount(ocrItems, screenBitmap, sh, sw)
+        val isTicketInsufficient = ticketCount != null && ticketCount < 50
 
         // 0A. 檢查「免費抽」(右側偏下區域 x > 0.48f, y in 0.45f..0.62f) 是否處於倒計時冷卻中
         val isFreeInCooldown = ocrItems.any { item ->
@@ -95,8 +179,8 @@ class LotteryTask {
             )
         }
 
-        // 1. 【第一順位】：50 抽 (BIG 50張 抽1次，僅在未冷卻且票券/次數充足時搜尋「50張 抽1次」紅色按鈕)
-        if (!isFiftyInCooldown) {
+        // 1. 【第一順位】：50 抽 (BIG 50張 抽1次，僅在未冷卻且票券充足時搜尋「50張 抽1次」紅色按鈕)
+        if (!isFiftyInCooldown && !isTicketInsufficient) {
             val fiftyDrawOcr = ocrItems.firstOrNull { item ->
                 val cy = item.bounds.centerY()
                 val cx = item.bounds.centerX()
@@ -108,14 +192,15 @@ class LotteryTask {
             }
             if (fiftyDrawOcr != null) {
                 val cy = fiftyDrawOcr.bounds.centerY()
-                if (!templateMatcher.isPopupButtonDisabledGray(screenBitmap, cy)) {
+                val cx = fiftyDrawOcr.bounds.centerX()
+                if (!templateMatcher.isPopupButtonDisabledGray(screenBitmap, cy, cx)) {
                     return Pair("50張抽一次", fiftyDrawOcr.bounds)
                 }
             }
 
             // 備援：2D 紅色按鈕聚類偵測 (限定按鈕實際高度 y in 0.44f..0.54f，絕對排除 y < 0.44f 的 BIG 紅色抽獎箱！)
             val leftRedBtn = findFiftyDrawByColor(screenBitmap)
-            if (leftRedBtn != null && !templateMatcher.isPopupButtonDisabledGray(screenBitmap, leftRedBtn.centerY())) {
+            if (leftRedBtn != null && !templateMatcher.isPopupButtonDisabledGray(screenBitmap, leftRedBtn.centerY(), leftRedBtn.centerX())) {
                 return Pair("50張抽一次(紅色按鈕)", leftRedBtn)
             }
         }
@@ -128,6 +213,24 @@ class LotteryTask {
 
         // 3. 【嚴格防呆】：若任何候選含有 "5張"，絕對回傳 null！
         return null
+    }
+
+    /**
+     * 自動轉向決策：
+     * - 若票券數充足 (>= 50 或未識別) 且 50 抽按鈕可點 ➔ 回傳 50 抽按鈕
+     * - 若票券不足 (< 50) 或 50 抽反灰/冷卻 ➔ 自動轉向「免費抽1次」
+     * - 若無可抽項目 (50 抽不可點且免費抽不可點) ➔ 回傳關閉視窗 (X) 按鈕熱區，乾淨關閉彈窗
+     */
+    fun resolveNextAction(
+        screenBitmap: Bitmap,
+        ocrItems: List<OcrItem>,
+        templateMatcher: TemplateMatcher
+    ): Pair<String, Rect> {
+        val target = findTargetDrawButton(screenBitmap, ocrItems, templateMatcher)
+        if (target != null) {
+            return target
+        }
+        return Pair("關閉", getCloseButtonBounds(screenBitmap.width, screenBitmap.height))
     }
 
     /**
@@ -165,14 +268,15 @@ class LotteryTask {
         }
         if (freeDrawOcr != null) {
             val cy = freeDrawOcr.bounds.centerY()
-            if (!templateMatcher.isPopupButtonDisabledGray(screenBitmap, cy)) {
+            val cx = freeDrawOcr.bounds.centerX()
+            if (!templateMatcher.isPopupButtonDisabledGray(screenBitmap, cy, cx)) {
                 return Pair("免費看廣告抽一次", freeDrawOcr.bounds)
             }
         }
 
         // 備援：2D 黃色按鈕聚類偵測 (x: 0.52f..0.98f, y: 0.49f..0.58f，黃底白字『▶ 免費抽1次』)
         val freeYellowBtn = findFreeDrawByColor(screenBitmap)
-        if (freeYellowBtn != null && !templateMatcher.isPopupButtonDisabledGray(screenBitmap, freeYellowBtn.centerY())) {
+        if (freeYellowBtn != null && !templateMatcher.isPopupButtonDisabledGray(screenBitmap, freeYellowBtn.centerY(), freeYellowBtn.centerX())) {
             return Pair("免費看廣告抽一次(黃色按鈕)", freeYellowBtn)
         }
         return null
