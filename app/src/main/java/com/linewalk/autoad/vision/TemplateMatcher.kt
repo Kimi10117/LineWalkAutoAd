@@ -152,14 +152,15 @@ class TemplateMatcher {
         // 若為右側按鈕 (centerX != null && centerX >= 0.50f * w，如抽抽樂免費抽)：
         // 採樣 centerX 周邊或 x in 0.52f * w .. 0.90f * w 判定是否反灰 (Red - Green < 40 || Saturation < 0.3)
         // 確保右側活躍免費抽按鈕不因左側 50 抽反灰而遭誤判
-        val isRightSideButton = centerX != null && centerX >= (w * 0.50f).toInt()
-        val xStart = if (isRightSideButton) {
-            maxOf((w * 0.52f).toInt(), centerX - (w * 0.15f).toInt()).coerceIn(0, w - 1)
+        val cX = centerX
+        val isRightSideButton = cX != null && cX >= (w * 0.50f).toInt()
+        val xStart = if (isRightSideButton && cX != null) {
+            maxOf((w * 0.52f).toInt(), (cX) - (w * 0.15f).toInt()).coerceIn(0, w - 1)
         } else {
             (w * 0.15f).toInt().coerceIn(0, w - 1)
         }
-        val xEnd = if (isRightSideButton) {
-            minOf((w * 0.90f).toInt(), centerX + (w * 0.15f).toInt()).coerceIn(xStart + 1, w - 1)
+        val xEnd = if (isRightSideButton && cX != null) {
+            minOf((w * 0.90f).toInt(), (cX) + (w * 0.15f).toInt()).coerceIn(xStart + 1, w - 1)
         } else {
             (w * 0.85f).toInt().coerceIn(xStart + 1, w - 1)
         }
