@@ -669,9 +669,9 @@ class TemplateMatcher {
             // 右上角 (廣告標準關閉鈕位置，避開最頂部系統狀態列與通知列 y < 8.2%，涵蓋 y in 8.2%..16%)
             Rect((sw * 0.75f).toInt(), topLimitY, (sw * 0.98f).toInt(), (sh * 0.16f).toInt())
         )
-        // 右上角高位區 (專門應對 InMobi / AdMob / AppLovin 等全螢幕廣告位於 y in 4.8%..8.2% 的關閉 X 鈕)
+        // 右上角高位與預覽區 (專門應對 InMobi / AdMob / AppLovin / Meta Web Preview 等全螢幕廣告位於 y in 4.8%..16% 的關閉 X 鈕)
         val rightUpperTopLimitY = max((sh * 0.048f).toInt(), 48)
-        val rightUpperBottomLimitY = topLimitY
+        val rightUpperBottomLimitY = max((sh * 0.16f).toInt(), topLimitY)
         searchZones.add(Rect((sw * 0.75f).toInt(), rightUpperTopLimitY, (sw * 0.98f).toInt(), rightUpperBottomLimitY))
 
         if (includeLeftZone) {
@@ -742,7 +742,7 @@ class TemplateMatcher {
                             continue
                         }
                     } else {
-                        // 右上角高位區 (InMobi / AdMob / AppLovin 等廣告)：頂部限制為 4.0% sh 或 40px，覆蓋 y ≈ 6.25% 的關閉按鈕
+                        // 右上角高位/預覽區 (InMobi / AdMob / AppLovin / Meta 網頁預覽等)：覆蓋 y >= 4.0% sh 的關閉按鈕
                         if (absY - r < max((sh * 0.040f).toInt(), 40)) {
                             cx += step
                             continue

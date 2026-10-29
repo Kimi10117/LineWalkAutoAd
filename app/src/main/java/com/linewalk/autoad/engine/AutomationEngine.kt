@@ -791,6 +791,13 @@ class AutomationEngine private constructor(private val context: Context) {
             return
         }
 
+        // B3.5. 檢查是否正在好友送禮確認彈窗（如『要向...贈送金幣嗎？』『也送給自己』『剩餘贈送次數』）
+        if (friendGiftTask.isSendGiftModalOpen(ocrItems)) {
+            nonGameScreenTicks = 0
+            handleFriendsPage(service, screenBitmap, ocrItems, sw, sh)
+            return
+        }
+
         // B4. 檢查是否正在「接收禮物」彈窗
         if (receiveGiftTask.isReceiveGiftDialogOpen(ocrItems, sh)) {
             nonGameScreenTicks = 0
@@ -1049,10 +1056,10 @@ class AutomationEngine private constructor(private val context: Context) {
     ) {
         // 1. 【使用者指示第 1 步】：必須先點擊完橘色「立即開啟賓果格」直到全部開完或冷卻！
         val openCellBtn = bingoTask.findOpenCellButton(screenBitmap, ocrItems, templateMatcher)
-        if (openCellBtn != null && bingoOpenCellRetryCount < 2) {
+        if (openCellBtn != null && bingoOpenCellRetryCount < 5) {
             currentPhaseEmptyTicks = 0
             bingoOpenCellRetryCount++
-            appendLog("[目標]【每日賓果】先點擊「立即開啟賓果格」！(嘗試: $bingoOpenCellRetryCount/2)")
+            appendLog("[目標]【每日賓果】先點擊「立即開啟賓果格」！(嘗試: $bingoOpenCellRetryCount/5)")
             FloatingOverlayService.clickWithOverlayPassthrough(openCellBtn) {
                 service.clickRect(openCellBtn)
             }
@@ -1061,8 +1068,8 @@ class AutomationEngine private constructor(private val context: Context) {
             transitionTo(EngineState.TRIGGER_AD_POPUP, "已點擊「立即開啟賓果格」，等待開格或廣告結果...", "[賓果] 廣告開格中...")
             return
         }
-        if (openCellBtn != null && bingoOpenCellRetryCount >= 2) {
-            appendLog("[賓果]「立即開啟賓果格」已達點擊上限 ($bingoOpenCellRetryCount/2，處於冷卻或已無格可開)，跳過開格直接檢查連線獎勵！")
+        if (openCellBtn != null && bingoOpenCellRetryCount >= 5) {
+            appendLog("[賓果]「立即開啟賓果格」已達點擊上限 (5/5，處於冷卻或已無格可開)，跳過開格直接檢查連線獎勵！")
         }
 
         // 2. 【使用者指示第 2 步】：開格點完後，再依序點擊所有連線獎勵 [Get]，直到沒有 Get 可點！

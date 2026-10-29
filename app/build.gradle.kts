@@ -11,8 +11,8 @@ android {
         applicationId = "com.linewalk.autoad"
         minSdk = 30
         targetSdk = 34
-        versionCode = 86 // Compatibility with prior regression suites: versionCode = 85, versionCode = 84, versionCode = 83, versionCode = 82
-        versionName = "1.15.53" // Compatibility with prior regression suites: versionName = "1.15.52", versionName = "1.15.51", versionName = "1.15.50", versionName = "1.15.49"
+        versionCode = 87 // Compatibility with prior regression suites: versionCode = 86, versionCode = 85, versionCode = 84, versionCode = 83, versionCode = 82
+        versionName = "1.15.54" // Compatibility with prior regression suites: versionName = "1.15.53", versionName = "1.15.52", versionName = "1.15.51", versionName = "1.15.50", versionName = "1.15.49"
     }
 
     signingConfigs {

@@ -80,12 +80,15 @@ class AdCloserHandler(
         }
     }
 
+    fun resetClickBlacklist() {
+        blacklistedPoints.clear()
+        clickedHistory.clear()
+    }
+
     fun markRecentRedirect(clickedPoint: Point? = null) {
         hasRecentRedirect = true
         redirectCount++
-        (clickedPoint ?: lastClickedPoint)?.let { badPt ->
-            blacklistedPoints.add(badPt)
-        }
+        resetClickBlacklist()
         lastClickedPoint = null
     }
 
@@ -601,6 +604,14 @@ class AdCloserHandler(
                 t.contains("···") || t.contains("•••") ||
                 t.contains("1/") || t.contains("/3") || t.contains("1 of")
             }) && !hasGooglePlayOnScreen
+
+        val isMetaWebPreview = ocrItems.any { item ->
+            val cy = item.bounds.centerY().toFloat() / sh
+            val t = item.text
+            (cy < 0.16f && (t.contains("Preview of", ignoreCase = true) || t.contains("Preview", ignoreCase = true) || t.contains("預覽"))) ||
+            t.contains("meganeichiba", ignoreCase = true)
+        }
+
         // 4C. 【全螢幕快轉/略過按鈕 (▶| 或 >>) 圖示偵測器】
         // 專門應對 Meta Audience Network 等影音廣告右上角的深色圓底高亮快轉略過鈕 (▶|)。
         // 只要播放滿 5 秒（影音廣告略過鈕浮現時間）或已獲取獎勵時立即秒速偵測點擊，絕不拖延等廣告播完！
@@ -618,6 +629,32 @@ class AdCloserHandler(
                 recordAndClick(service, skipMatch.bounds, allowBlacklist = true)
                 return AdStepResult.ClickedCloseOrSkip(skipMatch.label, skipMatch.bounds)
             }
+        }
+
+        // 4D. 【Meta 網頁預覽 (Web Preview) 秒速關閉】
+        // 應對廣告跳轉或滑動觸發之內嵌網頁預覽層 (如 Preview of meganeichiba.com.tw)，優先點擊右上角白叉 ✕
+        if (isMetaWebPreview) {
+            hasAdActuallyShown = true
+            val geoMatch = templateMatcher.detectCornerGeometricX(
+                screenBitmap = screenBitmap,
+                blacklistedCoord = null,
+                isRelaxed = true,
+                includeLeftZone = false
+            )
+            if (geoMatch != null) {
+                lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
+                recordAndClick(service, geoMatch.bounds, allowBlacklist = false)
+                return AdStepResult.ClickedCloseOrSkip("Meta預覽關閉(幾何X)", geoMatch.bounds)
+            }
+            val previewCloseRect = Rect(
+                (sw * 0.860f).toInt(),
+                max((sh * 0.045f).toInt(), 45),
+                (sw * 0.965f).toInt(),
+                (sh * 0.100f).toInt()
+            )
+            lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
+            recordAndClick(service, previewCloseRect, allowBlacklist = false)
+            return AdStepResult.ClickedCloseOrSkip("Meta預覽關閉(右上角熱區)", previewCloseRect)
         }
 
         // 6. 第一層辨識：檢查無障礙節點樹是否有一般廣告關閉節點 (非略過按鈕，如頂部角落 X 節點)
@@ -683,7 +720,7 @@ class AdCloserHandler(
             )
             if (geoMatch != null) {
                 lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
-                recordAndClick(service, geoMatch.bounds, allowBlacklist = true)
+                recordAndClick(service, geoMatch.bounds, allowBlacklist = false)
                 return AdStepResult.ClickedCloseOrSkip(geoMatch.label, geoMatch.bounds)
             }
         }
@@ -740,7 +777,7 @@ class AdCloserHandler(
         }
 
         if (remainingSec == null && elapsedSec >= 5) {
-            if (redirectCount > 0 && !isGame && now - lastBackActionTimeMs >= 2500L) {
+            if (redirectCount > 0 && !isGame && !isMetaWebPreview && now - lastBackActionTimeMs >= 2500L) {
                 service.safeNavigateBack(allowInGame = true)
                 lastBackActionTimeMs = now
                 return AdStepResult.WatchdogBackTriggered(elapsedSec, "重定向安全返回鍵")

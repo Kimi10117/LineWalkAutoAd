@@ -118,9 +118,12 @@ class ReceiveGiftTask {
         val hasSendGiftModal = ocrItems.any { item ->
             val t = item.text.replace(" ", "")
             t.contains("也送給自己") || t.contains("送給自己") || t.contains("剩餘贈送次數") ||
-            (t.contains("要向") && t.contains("金幣")) ||
+            (t.contains("要向") && (t.contains("金幣") || t.contains("贈送"))) ||
+            t.contains("贈送金幣") || t.contains("送禮物給") || t.contains("贈送禮物") ||
             t.contains("贈送完畢") || (t.contains("已贈送") && t.contains("金幣")) ||
-            (t.contains("或者") && t.contains("贈送"))
+            (t.contains("或者") && t.contains("贈送")) || t.contains("確認贈送") ||
+            t.contains("送禮物也送自己") ||
+            (t.contains("次數") && (t.contains("5/5") || t.contains("4/5") || t.contains("3/5") || t.contains("2/5") || t.contains("1/5") || t.contains("0/5")))
         }
         if (hasSendGiftModal) return false
 
@@ -138,7 +141,7 @@ class ReceiveGiftTask {
                 t.contains("一起送達") ||
                 t.contains("禮物囉") ||
                 t.contains("送來的") ||
-                (t.contains("收到") && (t.contains("禮") || t.contains("送")))
+                (t.contains("收到") && (t.contains("禮物") || t.contains("送來")))
             )
         }
         if (hasSingleLineDrawerContent) return true
@@ -152,21 +155,7 @@ class ReceiveGiftTask {
         if (combinedMiddleText.contains("收到") && combinedMiddleText.contains("禮物")) return true
         if (combinedMiddleText.contains("送來") && (combinedMiddleText.contains("禮物") || combinedMiddleText.contains("禮"))) return true
         if ((combinedMiddleText.contains("剩下") || combinedMiddleText.contains("剩餘") || combinedMiddleText.contains("截止")) &&
-            (combinedMiddleText.contains("收到") || combinedMiddleText.contains("禮") || combinedMiddleText.contains("送"))) return true
-
-        // 檢查「禮物」抽屜標題 (y in 0.18f..0.32f)
-        val hasDrawerTitle = ocrItems.any { item ->
-            val cy = item.bounds.centerY().toFloat() / effectiveSh
-            val t = item.text.trim()
-            cy in 0.18f..0.32f && (t == "禮物" || t == "禮物盒" || t.contains("禮物"))
-        }
-        if (hasDrawerTitle) {
-            val hasDrawerSubText = middleItems.any { item ->
-                val t = item.text.replace(" ", "")
-                t.contains("止") || t.contains("剩下") || t.contains("剩餘") || t.contains("天") || t == "領取" || t.contains("送")
-            }
-            if (hasDrawerSubText) return true
-        }
+            combinedMiddleText.contains("收到") && (combinedMiddleText.contains("禮物") || combinedMiddleText.contains("送來"))) return true
 
         // 檢查中段背景是否可見好友排行榜或主畫面看板（當禮物抽屜開啟時，y = 0.20..0.95 被白底抽屜完全遮蔽）
         val hasUnderlyingMiddleContent = ocrItems.any { item ->
@@ -181,6 +170,20 @@ class ReceiveGiftTask {
                 t.contains("累積數量") ||
                 t.contains("今天的步數")
             )
+        }
+
+        // 檢查「禮物」抽屜標題 (y in 0.18f..0.32f)
+        val hasDrawerTitle = ocrItems.any { item ->
+            val cy = item.bounds.centerY().toFloat() / effectiveSh
+            val t = item.text.trim()
+            cy in 0.18f..0.32f && (t == "禮物" || t == "禮物盒" || t.contains("禮物"))
+        }
+        if (hasDrawerTitle) {
+            val hasDrawerSubText = middleItems.any { item ->
+                val t = item.text.replace(" ", "")
+                t.contains("止") || (t.contains("剩下") && t.contains("天")) || (t.contains("剩餘") && t.contains("天")) || t == "領取" || t.contains("送來") || t.contains("收到")
+            }
+            if (hasDrawerSubText && !hasUnderlyingMiddleContent) return true
         }
 
         return hasDrawerTitle && !hasUnderlyingMiddleContent
