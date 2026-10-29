@@ -450,7 +450,11 @@ class FloatingOverlayService : Service() {
             setCollapsedState(!isCollapsed)
         }
 
-        val defaultY = (resources.displayMetrics.heightPixels * 0.165f).toInt().coerceAtLeast(280)
+        // 預設位置：靠左停靠 x = 12，垂直 y 設為螢幕高度之 29% (y ≈ 0.290f)，
+        // 嚴格避開頂部狀態列(0~8%)、資產列(8~14%)、各類分頁標籤(14~22%)、
+        // 彈窗標題與右上關閉叉叉(9~15% 及 20~26%)、主畫面圖示列(38~46%)以及底部導覽列(85~95%)，
+        // 確保 100% 絕不遮擋任何可能要判斷的地方！
+        val defaultY = (resources.displayMetrics.heightPixels * 0.290f).toInt().coerceAtLeast(420)
         val wmParams = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -460,7 +464,7 @@ class FloatingOverlayService : Service() {
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = 16
+            x = 12
             y = defaultY
         }
 

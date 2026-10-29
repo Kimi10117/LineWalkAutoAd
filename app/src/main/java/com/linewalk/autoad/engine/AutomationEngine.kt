@@ -794,7 +794,8 @@ class AutomationEngine private constructor(private val context: Context) {
         // B4. 檢查是否正在「接收禮物」彈窗
         if (receiveGiftTask.isReceiveGiftDialogOpen(ocrItems, sh)) {
             nonGameScreenTicks = 0
-            if (isReceiveGiftCompleted) {
+            val hasGifts = receiveGiftTask.findNextClaimGiftButton(screenBitmap, ocrItems) != null
+            if (isReceiveGiftCompleted && !hasGifts) {
                 currentPhase = getNextPhase(PatrolPhase.RECEIVE_GIFT)
                 val closeBtn = receiveGiftTask.getCloseButtonBounds(sw, sh)
                 appendLog("[禮物] 禮物已領取完畢，點擊右上角 (X) 關閉視窗")
@@ -803,6 +804,9 @@ class AutomationEngine private constructor(private val context: Context) {
                 }
                 delay(350)
                 return
+            }
+            if (hasGifts) {
+                isReceiveGiftCompleted = false
             }
             handleReceiveGiftDialog(service, screenBitmap, ocrItems, sw, sh)
             return
@@ -1267,7 +1271,7 @@ class AutomationEngine private constructor(private val context: Context) {
         sw: Int,
         sh: Int
     ) {
-        val availableTabs = missionTask.getAvailableTabs(ocrItems, sh)
+        val availableTabs = missionTask.getAvailableTabs(ocrItems, sw, sh)
         val activeTab = missionTask.detectCurrentActiveTab(screenBitmap, availableTabs)
         appendLog("[任務]【任務視窗】當前處於【$activeTab】分頁 (現存分頁: ${availableTabs.joinToString()} | 已檢查: ${checkedMissionTabs.joinToString()})")
 

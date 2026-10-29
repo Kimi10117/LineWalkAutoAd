@@ -109,10 +109,9 @@ class ReceiveGiftTask {
     /**
      * 判斷「禮物」抽屜彈窗是否開啟中：
      * 1. 嚴格排除好友送禮相關彈窗（『要向...贈送金幣嗎？』『也送給自己』『剩餘贈送次數』『贈送完畢』）
-     * 2. 若具備空抽屜文字或專屬清單內容（『送來的禮物』『一起送達』），立即判定開啟
-     * 3. 若具備置中標題『禮物』(y in 0.18..0.32, 排除右側好友列按鈕下方小字 cx >= sh * 0.34f)，
-     *    且畫面中段 (y in 0.16..0.55) 無好友排行榜或主畫面看板文字（因已被禮物白底抽屜覆蓋），
-     *    即使禮物剛全部領完導致抽屜內無剩餘項目，亦能 100% 判定禮物抽屜開啟中並執行關閉！
+     * 2. 若具備空抽屜文字或專屬清單內容（『送來的禮物』『一起送達』『收到...送來的禮』『禮物囉』），立即判定開啟
+     * 3. 支援跨行文字合併比對（如第一行『收到黃小鬼送來的禮』與第二行『物囉！』）
+     * 4. 若具備標題『禮物』(y in 0.18..0.32)，且畫面中段無好友排行榜文字，判定為開啟
      */
     fun isReceiveGiftDialogOpen(ocrItems: List<OcrItem>, sh: Int): Boolean {
         // 嚴格排除好友送禮相關彈窗（如『要向...贈送金幣嗎？』『也送給自己』『剩餘贈送次數』『贈送完畢』）
@@ -128,36 +127,50 @@ class ReceiveGiftTask {
         // 檢查是否為空抽屜狀態（『尚未收到禮物。』）
         if (hasEmptyDrawer(ocrItems)) return true
 
-        // 檢查是否具有「禮物」抽屜專屬內容特徵：
-        val hasDrawerContent = ocrItems.any { item ->
-            val cy = item.bounds.centerY().toFloat() / sh
+        val effectiveSh = if (sh > 0) sh else 2400
+
+        // 檢查單行專屬內容特徵
+        val hasSingleLineDrawerContent = ocrItems.any { item ->
+            val cy = item.bounds.centerY().toFloat() / effectiveSh
             val t = item.text.replace(" ", "")
-            cy in 0.25f..0.88f && (
+            cy in 0.22f..0.88f && (
                 t.contains("送來的禮物") ||
                 t.contains("一起送達") ||
-                (t.contains("收到") && t.contains("禮物"))
+                t.contains("禮物囉") ||
+                t.contains("送來的") ||
+                (t.contains("收到") && (t.contains("禮") || t.contains("送")))
             )
         }
-        if (hasDrawerContent) return true
+        if (hasSingleLineDrawerContent) return true
 
-        // 檢查「禮物」抽屜置中標題 (y in 0.18f..0.32f，排除右側好友列按鈕下方的「禮物」標籤 cx >= sh * 0.34f)
-        val hasDrawerTitle = ocrItems.any { item ->
-            val cy = item.bounds.centerY().toFloat() / sh
-            val t = item.text.trim()
-            val isCenteredX = sh <= 0 || item.bounds.centerX() < (sh * 0.34f).toInt()
-            cy in 0.18f..0.32f && isCenteredX && (t == "禮物" || t == "禮物盒")
+        // 檢查中段文字跨行合併特徵 (解決『收到黃小鬼送來的禮』+『物囉！』被 OCR 分割為兩行)
+        val middleItems = ocrItems.filter { item ->
+            val cy = item.bounds.centerY().toFloat() / effectiveSh
+            cy in 0.22f..0.88f
         }
-        if (!hasDrawerTitle) return false
+        val combinedMiddleText = middleItems.joinToString("") { it.text.replace(" ", "") }
+        if (combinedMiddleText.contains("收到") && combinedMiddleText.contains("禮物")) return true
+        if (combinedMiddleText.contains("送來") && (combinedMiddleText.contains("禮物") || combinedMiddleText.contains("禮"))) return true
+        if ((combinedMiddleText.contains("剩下") || combinedMiddleText.contains("剩餘") || combinedMiddleText.contains("截止")) &&
+            (combinedMiddleText.contains("收到") || combinedMiddleText.contains("禮") || combinedMiddleText.contains("送"))) return true
 
-        val hasDrawerSubText = ocrItems.any { item ->
-            val cy = item.bounds.centerY().toFloat() / sh
-            val t = item.text.replace(" ", "")
-            cy in 0.28f..0.92f && (t.contains("止") || t.contains("剩下") || t == "領取")
+        // 檢查「禮物」抽屜標題 (y in 0.18f..0.32f)
+        val hasDrawerTitle = ocrItems.any { item ->
+            val cy = item.bounds.centerY().toFloat() / effectiveSh
+            val t = item.text.trim()
+            cy in 0.18f..0.32f && (t == "禮物" || t == "禮物盒" || t.contains("禮物"))
+        }
+        if (hasDrawerTitle) {
+            val hasDrawerSubText = middleItems.any { item ->
+                val t = item.text.replace(" ", "")
+                t.contains("止") || t.contains("剩下") || t.contains("剩餘") || t.contains("天") || t == "領取" || t.contains("送")
+            }
+            if (hasDrawerSubText) return true
         }
 
         // 檢查中段背景是否可見好友排行榜或主畫面看板（當禮物抽屜開啟時，y = 0.20..0.95 被白底抽屜完全遮蔽）
         val hasUnderlyingMiddleContent = ocrItems.any { item ->
-            val cy = item.bounds.centerY().toFloat() / (if (sh > 0) sh else 1000)
+            val cy = item.bounds.centerY().toFloat() / effectiveSh
             val t = item.text.replace(" ", "")
             cy in 0.16f..0.55f && (
                 t.contains("好友排行榜") ||
@@ -170,7 +183,7 @@ class ReceiveGiftTask {
             )
         }
 
-        return hasDrawerSubText || !hasUnderlyingMiddleContent
+        return hasDrawerTitle && !hasUnderlyingMiddleContent
     }
 
     /**
@@ -227,21 +240,21 @@ class ReceiveGiftTask {
                 if (pt.y - prevY <= 15) {
                     currentCluster.add(pt)
                 } else {
-                    evaluateAndAddCluster(currentCluster, sw, sh, solidClaims, adPlays)
+                    evaluateAndAddCluster(currentCluster, screenBitmap, sw, sh, solidClaims, adPlays)
                     currentCluster = mutableListOf(pt)
                 }
                 prevY = pt.y
             }
-            evaluateAndAddCluster(currentCluster, sw, sh, solidClaims, adPlays)
+            evaluateAndAddCluster(currentCluster, screenBitmap, sw, sh, solidClaims, adPlays)
         }
 
         // 2. 【OCR 輔助搜尋】：
-        // 2A. 尋找「領取」OCR 按鈕 (x > 0.60f, y in 0.25f..0.52f, 嚴格排除「已領取」)
+        // 2A. 尋找「領取」OCR 按鈕 (x > 0.60f, y in 0.22f..0.85f, 嚴格排除「已領取」)
         val directClaimOcr = ocrItems.filter { item ->
             val cy = item.bounds.centerY().toFloat() / sh
             val cx = item.bounds.centerX().toFloat() / sw
             val t = item.text.trim()
-            cy in 0.25f..0.52f && cx > 0.60f && (t == "領取" || (t.contains("領取") && !t.contains("已")))
+            cy in 0.22f..0.85f && cx > 0.60f && (t == "領取" || (t.contains("領取") && !t.contains("已")))
         }.sortedBy { it.bounds.top }
 
         for (item in directClaimOcr) {
@@ -263,7 +276,7 @@ class ReceiveGiftTask {
         val togetherGiftOcr = ocrItems.filter { item ->
             val cy = item.bounds.centerY().toFloat() / sh
             val t = item.text.replace(" ", "")
-            cy in 0.25f..0.52f && t.contains("一起送達")
+            cy in 0.22f..0.85f && t.contains("一起送達")
         }.sortedBy { it.bounds.top }
 
         for (item in togetherGiftOcr) {
@@ -291,7 +304,7 @@ class ReceiveGiftTask {
         val playOcr = ocrItems.filter { item ->
             val cy = item.bounds.centerY().toFloat() / sh
             val cx = item.bounds.centerX().toFloat() / sw
-            cy in 0.25f..0.52f && cx > 0.60f && (item.text.contains("▶") || item.text.contains(">"))
+            cy in 0.22f..0.85f && cx > 0.60f && (item.text.contains("▶") || item.text.contains(">"))
         }.sortedBy { it.bounds.top }
 
         for (item in playOcr) {
@@ -300,11 +313,16 @@ class ReceiveGiftTask {
             }
         }
 
-        // 2D. 尋找「收到...送來的禮物」文字行 (按鈕就在右側)
+        // 2D. 尋找「收到...送來的禮物」文字行 (支援跨行『送來的』『禮物囉』等，按鈕就在右側)
         val friendGiftTextOcr = ocrItems.filter { item ->
             val cy = item.bounds.centerY().toFloat() / sh
             val t = item.text
-            cy in 0.25f..0.52f && (t.contains("送來的禮物") || (t.contains("收到") && t.contains("禮物")))
+            cy in 0.22f..0.85f && (
+                t.contains("送來的禮物") ||
+                t.contains("送來的") ||
+                t.contains("禮物囉") ||
+                (t.contains("收到") && (t.contains("禮") || t.contains("送")))
+            )
         }.sortedBy { it.bounds.top }
 
         for (item in friendGiftTextOcr) {
@@ -322,7 +340,7 @@ class ReceiveGiftTask {
         val deadlineItem = ocrItems.firstOrNull { item ->
             val cy = item.bounds.centerY().toFloat() / sh
             val cx = item.bounds.centerX().toFloat() / sw
-            cy in 0.30f..0.52f && cx > sw * 0.55f &&
+            cy in 0.25f..0.85f && cx > sw * 0.55f &&
             ((item.text.contains("今天") && item.text.contains("止")) ||
              item.text.contains("剩餘") || item.text.contains("剩下") || item.text.contains("天"))
         }
@@ -353,6 +371,7 @@ class ReceiveGiftTask {
 
     private fun evaluateAndAddCluster(
         cluster: List<android.graphics.Point>,
+        screenBitmap: Bitmap,
         sw: Int,
         sh: Int,
         solidClaims: MutableList<Rect>,
@@ -370,10 +389,38 @@ class ReceiveGiftTask {
             height in (sh * 0.018f).toInt()..(sh * 0.070f).toInt()
         ) {
             val rect = Rect(minX, minY, maxX, maxY)
-            val totalSamples = ((width / 2) * (height / 2)).coerceAtLeast(1)
-            val density = cluster.size.toFloat() / totalSamples
-            // 實心「領取」按鈕內部全填滿亮綠色 (密度高達 90% 以上或點數 > 400)
-            val isSolid = density > 0.55f || cluster.size > 400
+            val insetX = (width * 0.25f).toInt().coerceAtLeast(2)
+            val insetY = (height * 0.25f).toInt().coerceAtLeast(2)
+            var whiteCount = 0
+            var greenCount = 0
+            var totalInner = 0
+
+            val startX = (minX + insetX).coerceIn(0, sw - 1)
+            val endX = (maxX - insetX).coerceIn(startX, sw - 1)
+            val startY = (minY + insetY).coerceIn(0, sh - 1)
+            val endY = (maxY - insetY).coerceIn(startY, sh - 1)
+
+            for (iy in startY..endY step 2) {
+                for (ix in startX..endX step 2) {
+                    val c = screenBitmap.getPixel(ix, iy)
+                    val r = (c shr 16) and 0xFF
+                    val g = (c shr 8) and 0xFF
+                    val b = c and 0xFF
+                    totalInner++
+                    if (r > 200 && g > 200 && b > 200) {
+                        whiteCount++
+                    } else if (g > 140 && g > r + 25 && g > b + 25) {
+                        greenCount++
+                    }
+                }
+            }
+
+            val whiteRatio = if (totalInner > 0) whiteCount.toFloat() / totalInner else 0f
+            val greenRatio = if (totalInner > 0) greenCount.toFloat() / totalInner else 0f
+
+            // 綠框播放按鈕 [ ▶ ]：內部為白底 (whiteRatio > 0.40f)，中間含綠色播放三角形；
+            // 實心「領取」按鈕：內部大面積全填滿綠色 (greenRatio > 0.60f)
+            val isSolid = greenRatio > 0.60f || (whiteRatio < 0.25f && cluster.size > (width * height * 0.55f))
             if (isSolid) {
                 solidClaims.add(rect)
             } else {
@@ -383,14 +430,18 @@ class ReceiveGiftTask {
     }
 
     /**
-     * 禮物彈窗右上角關閉 (X) 按鈕熱區
+     * 禮物彈窗右上角關閉 (X) 按鈕熱區 (校準至實機中心 x ≈ 0.890f, y ≈ 0.231f)
      */
     fun getCloseButtonBounds(sw: Int, sh: Int): Rect {
+        val centerX = (sw * 0.890f).toInt()
+        val centerY = (sh * 0.231f).toInt()
+        val halfW = (sw * 0.060f).toInt()
+        val halfH = (sh * 0.025f).toInt()
         return Rect(
-            (sw * 0.84f).toInt(),
-            (sh * 0.18f).toInt(),
-            (sw * 0.98f).toInt(),
-            (sh * 0.26f).toInt()
+            centerX - halfW,
+            centerY - halfH,
+            centerX + halfW,
+            centerY + halfH
         )
     }
 }

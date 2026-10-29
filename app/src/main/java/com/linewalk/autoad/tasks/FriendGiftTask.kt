@@ -115,7 +115,14 @@ class FriendGiftTask {
         }
     }
 
-    fun isFriendsPage(ocrItems: List<OcrItem>, sh: Int = 0): Boolean {
+    fun isFriendsPage(
+        ocrItems: List<OcrItem>,
+        sh: Int = 0,
+        receiveGiftTask: ReceiveGiftTask = ReceiveGiftTask()
+    ): Boolean {
+        // -1. 嚴格互斥：若當前處於「禮物」抽屜視窗中，絕非好友常規頁面！
+        if (receiveGiftTask.isReceiveGiftDialogOpen(ocrItems, sh)) return false
+
         // 0. 若畫面上出現送禮確認彈窗（如『要向...贈送金幣嗎？』『也送給自己』『剩餘贈送次數』『贈送完畢』），必定屬於好友頁面！
         val hasSendGiftModal = ocrItems.any { item ->
             val t = item.text.replace(" ", "")

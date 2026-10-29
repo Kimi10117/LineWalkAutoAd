@@ -3,6 +3,7 @@ package com.linewalk.autoad.tasks
 import android.graphics.Bitmap
 import android.graphics.Rect
 import com.linewalk.autoad.config.AppConfig
+import com.linewalk.autoad.ui.FloatingOverlayService
 import com.linewalk.autoad.vision.OcrItem
 
 /**
@@ -54,20 +55,52 @@ class MissionTask {
     }
 
     /**
+     * 判定當前任務彈窗中是否存在「特別」分頁：
+     * 1. 若明確辨識到「特別」文字，必定為 3 分頁模式。
+     * 2. 若「特別」被懸浮窗暫時遮擋，根據「每日」與「每週」的水平座標反推：
+     *    - 3 分頁模式下：「每日」被擠壓至畫面中央 (cx > 0.42f * sw)，「每週」在右側 (cx > 0.74f * sw)。
+     *    - 2 分頁模式下（特別任務完成消失）：「每日」在左側 (cx < 0.40f * sw)，「每週」在右側 (cx < 0.73f * sw)。
+     */
+    fun hasSpecialTab(ocrItems: List<OcrItem>, sw: Int = 0, sh: Int = 0): Boolean {
+        val effectiveSh = if (sh > 0) sh else 2400
+        val tabItems = ocrItems.filter { item ->
+            val cy = item.bounds.centerY().toFloat() / effectiveSh
+            cy in 0.12f..0.28f
+        }
+        if (tabItems.any { it.text.contains("特別") }) return true
+
+        val dailyItem = tabItems.firstOrNull { it.text.contains("每日") }
+        val weeklyItem = tabItems.firstOrNull { it.text.contains("每週") }
+
+        if (sw > 0) {
+            if (dailyItem != null) {
+                val cxRatio = dailyItem.bounds.centerX().toFloat() / sw
+                if (cxRatio > 0.42f) return true
+                if (cxRatio < 0.40f) return false
+            }
+            if (weeklyItem != null) {
+                val cxRatio = weeklyItem.bounds.centerX().toFloat() / sw
+                if (cxRatio > 0.74f) return true
+                if (cxRatio < 0.73f) return false
+            }
+        }
+        return false
+    }
+
+    /**
      * 動態掃描任務面板現存分頁 (cy in 0.12f..0.28f)：
      * 當「特別」分頁已完成並消失時，動態收斂為 ["每日", "每週"]
      */
-    fun getAvailableTabs(ocrItems: List<OcrItem>, sh: Int): List<String> {
-        val standardOrder = listOf("特別", "每日", "每週")
-        val effectiveSh = if (sh > 0) sh else 2400
-        val detected = standardOrder.filter { tabName ->
-            ocrItems.any { item ->
-                val cy = item.bounds.centerY().toFloat() / effectiveSh
-                cy in 0.12f..0.28f && item.text.contains(tabName)
-            }
+    fun getAvailableTabs(ocrItems: List<OcrItem>, sw: Int = 0, sh: Int = 0): List<String> {
+        return if (hasSpecialTab(ocrItems, sw, sh)) {
+            listOf("特別", "每日", "每週")
+        } else {
+            listOf("每日", "每週")
         }
-        return if (detected.isNotEmpty()) detected else listOf("每日", "每週")
     }
+
+    fun getAvailableTabs(ocrItems: List<OcrItem>, sh: Int): List<String> =
+        getAvailableTabs(ocrItems, 0, sh)
 
     /**
      * 偵測分頁列 (y in 0.15f..0.25f) 是否存在當前選中之深黑色圓角膠囊按鈕
@@ -80,6 +113,7 @@ class MissionTask {
         val yEnd = (sh * 0.25f).toInt()
         for (y in yStart..yEnd step 3) {
             for (x in 0 until sw step 4) {
+                if (FloatingOverlayService.isInsideOverlay(x, y)) continue
                 val c = screenBitmap.getPixel(x, y)
                 val r = (c shr 16) and 0xFF
                 val g = (c shr 8) and 0xFF
@@ -108,6 +142,7 @@ class MissionTask {
         val yEnd = (sh * 0.25f).toInt()
         for (y in yStart..yEnd step 3) {
             for (x in 0 until sw step 4) {
+                if (FloatingOverlayService.isInsideOverlay(x, y)) continue
                 val c = screenBitmap.getPixel(x, y)
                 val r = (c shr 16) and 0xFF
                 val g = (c shr 8) and 0xFF
@@ -120,7 +155,7 @@ class MissionTask {
         if (blackXs.size >= 12) {
             val avgXRatio = blackXs.average().toFloat() / sw
             return if (availableTabs.size == 2) {
-                // 2-tab 佈局: 左側 (每日) vs 右側 (每週)
+                // 2-tab 佈局: 左側 (每日，約 0.33f) vs 右側 (每週，約 0.67f)
                 if (avgXRatio < 0.50f) availableTabs[0] else availableTabs[1]
             } else if (availableTabs.size == 1) {
                 availableTabs[0]
@@ -280,10 +315,7 @@ class MissionTask {
             return ocrMatch.bounds
         }
 
-        val hasSpecial = ocrItems.any { item ->
-            val cy = item.bounds.centerY().toFloat() / effectiveSh
-            cy in 0.12f..0.28f && item.text.contains("特別")
-        }
+        val hasSpecial = hasSpecialTab(ocrItems, sw, sh)
         val xRatio = when (tabName) {
             "特別" -> 0.20f
             "每週" -> if (hasSpecial) 0.80f else 0.67f
