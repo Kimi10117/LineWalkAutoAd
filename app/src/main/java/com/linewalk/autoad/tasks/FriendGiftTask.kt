@@ -343,50 +343,46 @@ class FriendGiftTask {
             return Pair("也送給自己(OCR)", btnRect)
         }
 
-        // 2. 綠色按鈕色彩聚類 (LINE 亮綠 #06C755: g > 130 && g > r + 25 && g > b + 25, y in 0.45..0.60, x in 0.15..0.85)
-        // 彈窗中央的「也送給自己」為亮綠色膠囊按鈕 (寬度約 66% 螢幕寬度)
+        // 2. 綠色按鈕色彩聚類 (LINE 亮綠 #06C755: g > 130 && g > r + 20 && g > b + 20, y in 0.40..0.66, x in 0.15..0.85)
+        // 彈窗中央的「也送給自己」為亮綠色膠囊按鈕 (寬度約 66% 螢幕寬度，全機型自適應)
         val greenPts = mutableListOf<android.graphics.Point>()
-        val yStart = (sh * 0.45f).toInt()
-        val yEnd = (sh * 0.60f).toInt()
+        val yStart = (sh * 0.40f).toInt()
+        val yEnd = (sh * 0.66f).toInt()
         val xStart = (sw * 0.15f).toInt()
         val xEnd = (sw * 0.85f).toInt()
 
-        for (y in yStart..yEnd step 3) {
-            for (x in xStart..xEnd step 3) {
+        for (y in yStart..yEnd step 2) {
+            for (x in xStart..xEnd step 2) {
                 val c = screenBitmap.getPixel(x, y)
                 val r = (c shr 16) and 0xFF
                 val g = (c shr 8) and 0xFF
                 val b = c and 0xFF
-                if (g > 130 && (g - r) > 25 && (g - b) > 25) {
+                if (g > 130 && (g - r) > 20 && (g - b) > 20) {
                     greenPts.add(android.graphics.Point(x, y))
                 }
             }
         }
-        if (greenPts.size >= 35) {
+        if (greenPts.size >= 20) {
             val minX = greenPts.minOf { it.x }
             val maxX = greenPts.maxOf { it.x }
             val minY = greenPts.minOf { it.y }
             val maxY = greenPts.maxOf { it.y }
             val btnW = maxX - minX
             val btnH = maxY - minY
-            if (btnW > sw * 0.40f && btnH in 15..(sh * 0.08f).toInt()) {
+            if (btnW > sw * 0.35f && btnH in 12..(sh * 0.10f).toInt()) {
                 return Pair("也送給自己(綠色按鈕)", Rect(minX, minY, maxX, maxY))
             }
         }
 
-        // 3. 備援：一般「贈送 / 送出 / 送禮物」按鈕
-        val normalGiftOcr = ocrItems.firstOrNull { item ->
-            val cy = item.bounds.centerY()
-            val t = item.text.trim()
-            cy in (sh * 0.55f).toInt()..(sh * 0.75f).toInt() && (
-                t == "贈送" || t == "送出" || t == "送禮物" || t == "確認"
-            )
-        }
-        if (normalGiftOcr != null) {
-            return Pair("一般贈送", normalGiftOcr.bounds)
-        }
-
-        return null
+        // 3. 【最高收益保障】：若 OCR 與色彩分析因動畫或特殊主題未匹配，
+        // 100% 派發彈窗中央綠色膠囊預設幾何熱區 (y in 47%..56%)，絕不在此降級點擊「一般贈送」！
+        val defaultSelfGiftRect = Rect(
+            (sw * 0.18f).toInt(),
+            (sh * 0.47f).toInt(),
+            (sw * 0.82f).toInt(),
+            (sh * 0.56f).toInt()
+        )
+        return Pair("也送給自己(預設熱區)", defaultSelfGiftRect)
     }
 
     /**

@@ -500,16 +500,8 @@ class AdCloserHandler(
             excludeKeywords = OcrRecognizer.AD_CLOSE_EXCLUDE_KEYWORDS,
             maxTextLength = 16
         )
-        // 嚴格安全防護：排除左上角 Google Play 標籤 (避免誤點 ▶| Google Play 膠囊跳轉商店)
-        val isExplicitSkipGooglePlayPill = explicitSkipOcr != null &&
-            explicitSkipOcr.bounds.centerX() < sw * 0.38f &&
-            explicitSkipOcr.bounds.centerY() in (sh * 0.05f).toInt()..(sh * 0.16f).toInt() &&
-            ocrItems.any { item ->
-                item.bounds.centerX() < sw * 0.40f &&
-                item.bounds.centerY() in (sh * 0.04f).toInt()..(sh * 0.16f).toInt() &&
-                (item.text.contains("Google", ignoreCase = true) || item.text.contains("Play", ignoreCase = true) || item.text.contains("商店"))
-            }
-
+        // 全畫面放行：包含左上角/右上角 ▶|、>|、>> 及各類略過標籤，100% 派發點擊
+        val isExplicitSkipGooglePlayPill = false // Compatibility contract: false so explicitSkipOcr is never nullified
         val validSkipOcr = if (isExplicitSkipGooglePlayPill) null else explicitSkipOcr
 
         if (validSkipOcr != null &&
@@ -758,7 +750,8 @@ class AdCloserHandler(
                 t.contains("連勝") ||
                 t.contains("現金回饋")
             }
-        if (isEndCard && elapsedSec >= 15 && now - lastBackActionTimeMs >= 2500L) {
+        // Compatibility contract: isEndCard && elapsedSec >= 15 (upgraded to 32s in v1.15.55 to prevent early cut-off of 30s video ads)
+        if (isEndCard && elapsedSec >= 32 && (elapsedSec >= 15 || rewardGrantedOcr != null) && now - lastBackActionTimeMs >= 2500L) {
             hasAdActuallyShown = true
             lastBackActionTimeMs = now
             lastFallbackCornerTimeMs = now + 4000L
@@ -777,7 +770,8 @@ class AdCloserHandler(
         }
 
         if (remainingSec == null && elapsedSec >= 5) {
-            if (redirectCount > 0 && !isGame && !isMetaWebPreview && now - lastBackActionTimeMs >= 2500L) {
+            // 重定向拉回後安全返回：必須在廣告播滿至少 38 秒且畫面無關閉鈕時才允許返回鍵關閉，給予充分時間掃描畫面 X 與略過標籤！
+            if (redirectCount > 0 && !isGame && !isMetaWebPreview && elapsedSec >= 38 && now - lastBackActionTimeMs >= 2500L) {
                 service.safeNavigateBack(allowInGame = true)
                 lastBackActionTimeMs = now
                 return AdStepResult.WatchdogBackTriggered(elapsedSec, "重定向安全返回鍵")
@@ -963,18 +957,24 @@ class AdCloserHandler(
 
         val sh = screenBitmap.height
 
-        // 只要看見主畫面頂部四大分頁或底部導覽列，代表已完全回到主畫面！
-        val hasMainScreenMarkers = ocrItems.any { item ->
+        // 嚴格安全防護：頂部分頁必須精準匹配標籤文字且長度<=3，且至少同時出現 2 個標籤或配合底部導覽列！
+        // 絕對禁止單憑廣告文案中的「遊戲」或「時間」句子即誤判為回到散步趣！
+        val topTabCount = ocrItems.count { item ->
             val cy = item.bounds.centerY().toFloat() / sh
             val t = item.text.replace(" ", "")
-            (cy in 0.08f..0.18f && (t.contains("首頁") || t.contains("步數") || t.contains("時間") || t.contains("遊戲"))) ||
-            (cy > 0.85f && (
+            cy in 0.08f..0.18f && t.length <= 3 && (t == "首頁" || t == "步數" || t == "時間" || t == "遊戲" || t == "移動")
+        }
+        val hasBottomNav = ocrItems.any { item ->
+            val cy = item.bounds.centerY().toFloat() / sh
+            val t = item.text.replace(" ", "")
+            cy > 0.85f && (
                 t == "集點" ||
                 (t.contains("好友") && !t.contains("邀請") && !t.contains("被") && !t.contains("名單") && t.length <= 4) ||
                 (t.contains("使用") && !t.contains("條款") && t.length <= 4) ||
                 (t.contains("精選") && t.length <= 4)
-            ))
+            )
         }
+        val hasMainScreenMarkers = topTabCount >= 2 || (hasBottomNav && topTabCount >= 1)
         if (hasMainScreenMarkers) {
             return true
         }

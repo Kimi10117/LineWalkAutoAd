@@ -392,11 +392,12 @@ class LotteryTask {
         val hasLotteryResultContext = ocrItems.any { item ->
             val t = item.text.replace(" ", "")
             t.contains("中獎囉") || (t.contains("中獎") && !t.contains("好友")) ||
-            (t.contains("枚金幣") && t.contains("中獎")) ||
-            (t.contains("金幣") && t.contains("中獎")) ||
+            (t.contains("枚金幣") && (t.contains("中獎") || t.contains("獲得") || t.contains("恭喜"))) ||
+            (t.contains("金幣") && (t.contains("中獎") || t.contains("獲得"))) ||
+            t.contains("恭喜獲得") || t.contains("恭喜中獎") ||
             (item.bounds.centerY() > sh * 0.65f && (t.contains("分享給好友") || t.contains("分享"))) ||
-            (item.bounds.centerY() in (sh * 0.60f).toInt()..(sh * 0.74f).toInt() &&
-                (t.contains("x1", ignoreCase = true) || t.contains("1張")) &&
+            (item.bounds.centerY() in (sh * 0.50f).toInt()..(sh * 0.78f).toInt() &&
+                (t.contains("x1", ignoreCase = true) || t.contains("1張") || t.contains("獲得")) &&
                 !t.contains("金幣") && !t.contains("票券"))
         }
         if (!hasLotteryResultContext) {
@@ -404,15 +405,15 @@ class LotteryTask {
         }
 
         // 1. 優先策略 A：連續實心綠色行分析 (Contiguous Solid Green Rows)
-        // 實心膠囊按鈕在 y: 0.60f..0.74f, x: 0.10f..0.90f
-        val yStart = (sh * 0.60f).toInt()
-        val yEnd = (sh * 0.74f).toInt()
+        // 實心膠囊按鈕在 y: 0.52f..0.78f, x: 0.10f..0.90f (全機型自適應長螢幕與普通螢幕)
+        val yStart = (sh * 0.52f).toInt()
+        val yEnd = (sh * 0.78f).toInt()
         val xStart = (sw * 0.10f).toInt()
         val xEnd = (sw * 0.90f).toInt()
         val stepY = 2
         val stepX = 2
         val roiSampledWidth = (xEnd - xStart) / stepX
-        val minSolidRowGreen = (roiSampledWidth * 0.35f).toInt()
+        val minSolidRowGreen = (roiSampledWidth * 0.25f).toInt()
 
         val solidRows = mutableListOf<Int>()
         for (y in yStart..yEnd step stepY) {
@@ -422,7 +423,7 @@ class LotteryTask {
                 val r = (c shr 16) and 0xFF
                 val g = (c shr 8) and 0xFF
                 val b = c and 0xFF
-                if (g > 130 && (g - r > 30) && (g - b > 30)) {
+                if (g > 130 && (g - r > 25) && (g - b > 25)) {
                     greenCount++
                 }
             }
@@ -450,8 +451,8 @@ class LotteryTask {
             val yMin = run.first()
             val yMax = run.last()
             val runHeight = yMax - yMin
-            // 實心膠囊按鈕高度應佔螢幕 2.5% ~ 12% 且至少連續取樣 4 行
-            if (run.size >= 4 && runHeight in (sh * 0.025f).toInt()..(sh * 0.12f).toInt()) {
+            // 實心膠囊按鈕高度應佔螢幕 2.0% ~ 12% 且至少連續取樣 3 行
+            if (run.size >= 3 && runHeight in (sh * 0.020f).toInt()..(sh * 0.12f).toInt()) {
                 var xMin = Int.MAX_VALUE
                 var xMax = Int.MIN_VALUE
                 for (y in run) {
@@ -460,19 +461,19 @@ class LotteryTask {
                         val r = (c shr 16) and 0xFF
                         val g = (c shr 8) and 0xFF
                         val b = c and 0xFF
-                        if (g > 130 && (g - r > 30) && (g - b > 30)) {
+                        if (g > 130 && (g - r > 25) && (g - b > 25)) {
                             if (x < xMin) xMin = x
                             if (x > xMax) xMax = x
                         }
                     }
                 }
-                if (xMax > xMin && (xMax - xMin) >= (sw * 0.35f).toInt()) {
+                if (xMax > xMin && (xMax - xMin) >= (sw * 0.30f).toInt()) {
                     return Rect(xMin, yMin, xMax, yMax)
                 }
             }
         }
 
-        // 2. 備援策略 B：OCR 比對 (y: 0.60f..0.74f，文字包含 "x1"、"1張" 或 "獲得")
+        // 2. 備援策略 B：OCR 比對 (y: 0.52f..0.78f，文字包含 "x1"、"1張" 或 "獲得")
         val ocrMatch = ocrItems.firstOrNull { item ->
             val cy = item.bounds.centerY()
             val t = item.text.replace(" ", "")
@@ -490,14 +491,14 @@ class LotteryTask {
             return Rect(left, top, right, bottom)
         }
 
-        // 3. 備援策略 C：幾何中心綠色像素探針 (Center Green Probe)
+        // 3. 備援策略 C：幾何中心綠色像素探針 (Center Green Probe, y in 0.56f..0.74f)
         val cx = sw / 2
-        for (y in (sh * 0.64f).toInt()..(sh * 0.70f).toInt() step 4) {
+        for (y in (sh * 0.56f).toInt()..(sh * 0.74f).toInt() step 3) {
             val c = screenBitmap.getPixel(cx, y)
             val r = (c shr 16) and 0xFF
             val g = (c shr 8) and 0xFF
             val b = c and 0xFF
-            if (g > 130 && (g - r > 30) && (g - b > 30)) {
+            if (g > 130 && (g - r > 25) && (g - b > 25)) {
                 var lx = cx
                 while (lx > (sw * 0.08f).toInt()) {
                     val p = screenBitmap.getPixel(lx, y)

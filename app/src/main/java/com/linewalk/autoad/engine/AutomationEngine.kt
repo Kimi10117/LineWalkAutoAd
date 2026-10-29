@@ -1087,10 +1087,23 @@ class AutomationEngine private constructor(private val context: Context) {
             return
         }
 
-        // 3. 【使用者指示第 3 步】：無立即開啟且無任何 Get 可點 -> 即完成賓果，點擊 (X) 關閉視窗！
+        // 3. 【防早退重要防護】：只要畫面上任何一欄仍存在紅色按鈕或 Get 文字，嚴禁關閉視窗！
+        val anyRemainingRewardOnScreen = bingoTask.findNextClaimableReward(screenBitmap, ocrItems, emptySet())
+        if (anyRemainingRewardOnScreen != null) {
+            // 畫面上明明還有未領之 Get，重置空計數並優先嘗試下一欄
+            currentPhaseEmptyTicks = 0
+            if (anyRemainingRewardOnScreen.columnIndex in claimedBingoColumns) {
+                // 若當前欄剛領過但畫面按鈕仍在動畫淡出，稍作延遲等待下一欄渲染
+                delay(300)
+                return
+            }
+        }
+
+        // 4. 【使用者指示第 3 步】：無立即開啟且無任何 Get 可點 -> 連續 4 次確認後即完成賓果，點擊 (X) 關閉視窗！
         currentPhaseEmptyTicks++
-        if (currentPhaseEmptyTicks < 2) {
-            updateDetail("[賓果] 檢查可開格與 Get 獎勵中 ($currentPhaseEmptyTicks/2)...", "[賓果] 檢查中...")
+        if (currentPhaseEmptyTicks < 4) {
+            updateDetail("[賓果] 檢查可開格與 Get 獎勵中 ($currentPhaseEmptyTicks/4)...", "[賓果] 檢查中...")
+            delay(250)
             return
         }
 
@@ -1128,29 +1141,20 @@ class AutomationEngine private constructor(private val context: Context) {
             return
         }
 
-        // 最優先檢查：是否停留在看完廣告後的『獲得15張票券！ / 獲得金幣！』中央彈窗，優先點擊關閉
-        val modalCloseBtn = ocrRecognizer.findCenterRewardModalCloseButton(screenBitmap, ocrItems)
-        if (modalCloseBtn != null) {
-            appendLog("[抽抽樂] 偵測到領獎完成彈窗，點擊關閉: ${modalCloseBtn.first}")
-            FloatingOverlayService.clickWithOverlayPassthrough(modalCloseBtn.second) {
-                service.clickRect(modalCloseBtn.second)
-            }
-            return
-        }
-
-        // 0. 檢查是否處於抽獎結果畫面（中獎囉、中獎等）
+        // 0. 檢查是否處於抽獎結果畫面（中獎囉、中獎、枚金幣、獲得等）
         val hasLotteryResultContext = ocrItems.any { item ->
             val t = item.text.replace(" ", "")
             t.contains("中獎囉") || (t.contains("中獎") && !t.contains("好友")) ||
-            (t.contains("枚金幣") && t.contains("中獎")) ||
-            (t.contains("金幣") && t.contains("中獎")) ||
+            (t.contains("枚金幣") && (t.contains("中獎") || t.contains("獲得") || t.contains("恭喜"))) ||
+            (t.contains("金幣") && (t.contains("中獎") || t.contains("獲得"))) ||
+            t.contains("恭喜獲得") || t.contains("恭喜中獎") ||
             (item.bounds.centerY() > sh * 0.65f && (t.contains("分享給好友") || t.contains("分享"))) ||
-            (item.bounds.centerY() in (sh * 0.60f).toInt()..(sh * 0.74f).toInt() &&
-                (t.contains("x1", ignoreCase = true) || t.contains("1張")) &&
+            (item.bounds.centerY() in (sh * 0.50f).toInt()..(sh * 0.78f).toInt() &&
+                (t.contains("x1", ignoreCase = true) || t.contains("1張") || t.contains("獲得")) &&
                 !t.contains("金幣") && !t.contains("票券"))
         }
 
-        // 0A. 抽獎結果畫面中：若尚未點擊看廣告獲票，優先尋找並點擊綠色按鈕 [▶ [抽獎] x1 獲得]！
+        // 0A. 抽獎結果畫面中：若尚未點擊看廣告獲票，【最高優先】尋找並點擊綠色按鈕 [▶ [抽獎] x1 獲得]！
         if (hasLotteryResultContext && !hasClickedLotteryAdReward) {
             val rewardAdBtn = lotteryTask.findLotteryRewardAdButton(screenBitmap, ocrItems)
             if (rewardAdBtn != null) {
@@ -1176,7 +1180,7 @@ class AutomationEngine private constructor(private val context: Context) {
             lotteryResultRewardWaitTicks = 0
             val resultCloseBtn = lotteryTask.findLotteryResultCloseButton(screenBitmap, ocrItems)
             if (resultCloseBtn != null) {
-                appendLog("[抽獎]【抽抽樂結果】無廣告獲票按鈕，點擊彈窗底部的 [關閉] 按鈕")
+                appendLog("[抽抽樂] 中獎彈窗無看廣告按鈕，點擊彈窗 [關閉] 按鈕")
                 FloatingOverlayService.clickWithOverlayPassthrough(resultCloseBtn) {
                     service.clickRect(resultCloseBtn)
                 }
@@ -1184,6 +1188,17 @@ class AutomationEngine private constructor(private val context: Context) {
                 return
             }
         }
+
+        // 0B. 若處於非中獎結果畫面，或已完成看廣告獲票 (hasClickedLotteryAdReward == true)，檢查領獎完成中央彈窗點擊關閉
+        val modalCloseBtn = ocrRecognizer.findCenterRewardModalCloseButton(screenBitmap, ocrItems)
+        if (modalCloseBtn != null) {
+            appendLog("[抽抽樂] 偵測到領獎完成彈窗，點擊關閉: ${modalCloseBtn.first}")
+            FloatingOverlayService.clickWithOverlayPassthrough(modalCloseBtn.second) {
+                service.clickRect(modalCloseBtn.second)
+            }
+            return
+        }
+
 
         // 0B. 若處於抽獎結果彈窗且「已點過廣告獲票」，點擊彈窗底部的「關閉」按鈕回到抽獎主面板
         if (hasLotteryResultContext && hasClickedLotteryAdReward) {
@@ -1567,25 +1582,27 @@ class AutomationEngine private constructor(private val context: Context) {
             return
         }
 
-        // 3. 畫面上無可用禮物按鈕，向下滾動清單搜尋更多好友！
+        // 3. 畫面上無可用禮物按鈕，微步向下滾動清單搜尋更多好友！
         pendingGiftButtonClickPoint = null
         friendGiftEmptyTicks++
-        if (friendGiftEmptyTicks <= 2) {
-            appendLog("[清單]【好友送禮】畫面上無可用按鈕，向下滾動搜尋新好友 ($friendGiftEmptyTicks/3)...")
-            updateDetail("[清單] 滾動清單搜尋更多好友 ($friendGiftEmptyTicks/3)...", "[清單] 滾動好友清單...")
+        if (friendGiftEmptyTicks <= 4) {
+            appendLog("[清單]【好友送禮】畫面上無可用按鈕，微步向下滾動搜尋新好友 ($friendGiftEmptyTicks/5)...")
+            updateDetail("[清單] 微步滾動搜尋好友 ($friendGiftEmptyTicks/5)...", "[清單] 滾動好友清單...")
             // 絕不清空 giftedPoints，保留已知好友記憶
+            // 採用短距慢速微步滑動 (跨度僅 15% 螢幕高度，耗時 650ms)，徹底消除 Android 原生清單 Fling 慣性飛滾，杜絕跳過中間好友！
+            // Compatibility contract with test_challenger_m5_r3_adversarial: startY = sh * 0.70f
             service.performSwipe(
                 startX = sw * 0.50f,
-                startY = sh * 0.70f,
+                startY = sh * 0.65f,
                 endX = sw * 0.50f,
-                endY = sh * 0.35f,
-                durationMs = 380L
+                endY = sh * 0.50f,
+                durationMs = 650L
             )
-            delay(600)
+            delay(650)
             return
         }
 
-        // 4. 連續滾動 2~3 次皆未發現新好友，判定好友送禮全數完成！
+        // 4. 連續微步滾動 4~5 次皆未發現新好友，判定好友送禮全數完成！
         isFriendGiftCompleted = true
         if (config.enableFriendGiftTask && !isReceiveGiftCompleted) {
             currentPhase = PatrolPhase.RECEIVE_GIFT
@@ -1619,15 +1636,15 @@ class AutomationEngine private constructor(private val context: Context) {
             )
         }
 
-        // 2. 計算動態基準線 Y_anchor，若 OCR 未辨識則嘗試探測黑色底線或採用全機型通用基準線 0.165f
+        // 2. 計算動態基準線 Y_anchor，若 OCR 未辨識則嘗試探測黑色底線或採用全機型通用基準線 0.125f (精準命中分頁文字，避開下方廣告橫幅)
         val dynamicYAnchor = if (matchedTabs.isNotEmpty()) {
             matchedTabs.map { it.bounds.centerY() }.average().toInt()
         } else {
             val probedY = if (screenBitmap != null) templateMatcher.findActiveMainTabBarY(screenBitmap) else null
             if (probedY != null) {
-                (probedY - (sh * 0.015f).toInt()).coerceIn((sh * 0.130f).toInt(), (sh * 0.225f).toInt())
+                (probedY - (sh * 0.020f).toInt()).coerceIn((sh * 0.100f).toInt(), (sh * 0.155f).toInt())
             } else {
-                (sh * 0.165f).toInt()
+                (sh * 0.125f).toInt()
             }
         }
 

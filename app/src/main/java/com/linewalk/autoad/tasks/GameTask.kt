@@ -343,15 +343,15 @@ class GachaTask : GameTask {
         templateMatcher: TemplateMatcher,
         ocrRecognizer: OcrRecognizer
     ): TaskTriggerTarget? {
-        // 1. 遊戲機台中央『獲得金幣』按鈕位於 y = 0.46f..0.58f, x = 0.20f..0.80f
-        // 達成可領時為珊瑚粉紅，未達成/已領取為灰色
+        // 1. 遊戲機台中央『獲得金幣』按鈕位於 y = 0.32f..0.58f, x = 0.20f..0.80f (SM-S7210 實測 y ≈ 0.40f)
+        // 達成可領時為珊瑚粉紅/亮紅，未達成/已領取為灰色
         val pinkGameBtn = templateMatcher.findCoralPinkButton(
             screenBitmap = screenBitmap,
-            yStartRatio = 0.46f,
+            yStartRatio = 0.32f,
             yEndRatio = 0.58f,
             label = "機台[獲得金幣]粉紅鈕"
         )
-        if (pinkGameBtn != null && pinkGameBtn.bounds.centerY() >= screenBitmap.height * 0.45f) {
+        if (pinkGameBtn != null && pinkGameBtn.bounds.centerY() in (screenBitmap.height * 0.32f).toInt()..(screenBitmap.height * 0.58f).toInt()) {
             return TaskTriggerTarget(
                 taskName = displayName,
                 targetLabel = pinkGameBtn.label,
@@ -359,16 +359,16 @@ class GachaTask : GameTask {
             )
         }
 
-        // 2. OCR 嚴格鎖定機台區域 y = 0.46f..0.58f, x = 0.20f..0.80f，嚴格排除上方「輕鬆賺」AD廣告！
+        // 2. OCR 嚴格鎖定機台區域 y = 0.32f..0.58f, x = 0.20f..0.80f，嚴格排除上方「輕鬆賺」AD廣告！
         val gameCoinOcr = ocrRecognizer.findMatch(
             items = ocrItems,
             keywords = listOf("獲得金幣"),
             screenWidth = screenBitmap.width,
             screenHeight = screenBitmap.height,
-            roiNormalized = RectF(0.20f, 0.46f, 0.80f, 0.58f),
+            roiNormalized = RectF(0.20f, 0.32f, 0.80f, 0.58f),
             excludeKeywords = listOf("輕鬆賺", "輕鬆", "開始遊玩", "遊玩", "AD", "Sponsored", "adjoe", "雙重", "簡單賺金幣")
         )
-        if (gameCoinOcr != null && gameCoinOcr.bounds.centerY() >= screenBitmap.height * 0.45f) {
+        if (gameCoinOcr != null && gameCoinOcr.bounds.centerY() in (screenBitmap.height * 0.32f).toInt()..(screenBitmap.height * 0.58f).toInt()) {
             val isGray = templateMatcher.isPopupButtonDisabledGray(screenBitmap, gameCoinOcr.bounds.centerY())
             val isActive = isButtonColorfulAndActive(screenBitmap, gameCoinOcr.bounds)
             if (!isGray && isActive) {
@@ -377,6 +377,45 @@ class GachaTask : GameTask {
                     targetLabel = "按鈕[${gameCoinOcr.text}]",
                     bounds = gameCoinOcr.bounds
                 )
+            }
+        }
+
+        // 2B. 備援策略：機台中央紅色膠囊按鈕色彩分析 (y in 0.34f..0.50f, x in 0.20f..0.80f)
+        // 特別針對 SM-S7210 等機型上，OCR 漏抓或因按鈕文字被右上角小紅點角標「3」覆蓋時精準定位！
+        val sw = screenBitmap.width
+        val sh = screenBitmap.height
+        val redPoints = mutableListOf<android.graphics.Point>()
+        val yProbeStart = (sh * 0.34f).toInt()
+        val yProbeEnd = (sh * 0.50f).toInt()
+        val xProbeStart = (sw * 0.20f).toInt()
+        val xProbeEnd = (sw * 0.80f).toInt()
+        for (y in yProbeStart..yProbeEnd step 3) {
+            for (x in xProbeStart..xProbeEnd step 3) {
+                val c = screenBitmap.getPixel(x, y)
+                val r = (c shr 16) and 0xFF
+                val g = (c shr 8) and 0xFF
+                val b = c and 0xFF
+                if (r > 195 && (r - g > 65) && (r - b > 65)) {
+                    redPoints.add(android.graphics.Point(x, y))
+                }
+            }
+        }
+        if (redPoints.size >= 40) {
+            val minX = redPoints.minOf { it.x }
+            val maxX = redPoints.maxOf { it.x }
+            val minY = redPoints.minOf { it.y }
+            val maxY = redPoints.maxOf { it.y }
+            val btnW = maxX - minX
+            val btnH = maxY - minY
+            if (btnW in (sw * 0.30f).toInt()..(sw * 0.75f).toInt() && btnH in (sh * 0.035f).toInt()..(sh * 0.12f).toInt()) {
+                val candidateRect = Rect(minX, minY, maxX, maxY)
+                if (!templateMatcher.isPopupButtonDisabledGray(screenBitmap, candidateRect.centerY(), candidateRect.centerX())) {
+                    return TaskTriggerTarget(
+                        taskName = displayName,
+                        targetLabel = "機台[獲得金幣]紅色按鈕",
+                        bounds = candidateRect
+                    )
+                }
             }
         }
 

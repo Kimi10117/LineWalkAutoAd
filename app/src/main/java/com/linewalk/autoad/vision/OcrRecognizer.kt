@@ -645,8 +645,8 @@ class OcrRecognizer {
             val t = item.text.replace(" ", "")
             val cy = item.bounds.centerY().toFloat() / sh
 
-            // 頂部四大分頁 (cy in 0.08f..0.18f)
-            if (cy in 0.08f..0.18f && (t.contains("首頁") || t.contains("步數") || t.contains("時間") || t.contains("遊戲"))) {
+            // 頂部四大分頁 (cy in 0.08f..0.18f, 長度<=3 全詞比對，避免廣告文案誤判)
+            if (cy in 0.08f..0.18f && t.length <= 3 && (t == "首頁" || t == "步數" || t == "時間" || t == "遊戲" || t == "移動")) {
                 topTabCount++
             }
 
@@ -682,11 +682,11 @@ class OcrRecognizer {
                 hasBottomNav = true
             }
         }
-        hasTopTabs = topTabCount >= 1
+        hasTopTabs = topTabCount >= 2
 
-        // 必須具備頂部分頁、遊戲分頁特徵，或導覽列+頂部分頁/分頁內容，方為乾淨主畫面！
+        // 必須具備至少 2 個頂部分頁、遊戲分頁專屬特徵，或導覽列+頂部分頁/分頁內容，方為乾淨主畫面！
         // （絕不可單憑看見底部導覽列即認定為主畫面，因為日常子視窗多覆蓋於導覽列上方）
-        return hasTopTabs || hasGamePage || (hasBottomNav && (hasTopTabs || hasUpperStage)) || (hasTopCoins && hasUpperStage)
+        return hasTopTabs || hasGamePage || (hasBottomNav && (topTabCount >= 1 || hasUpperStage)) || (hasTopCoins && hasUpperStage)
     }
 
     /**
