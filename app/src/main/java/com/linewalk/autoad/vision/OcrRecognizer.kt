@@ -359,26 +359,35 @@ class OcrRecognizer {
         }
         if (isFriendOrLeaderboard) return false
 
+        // 絕對一票否決主畫面特徵（步數專屬特徵、頂部四大分頁標籤、底部導覽列）！
+        // 散步趣主畫面底部常有第三方廣告橫幅，絕不可因橫幅上的促銷文字誤判為全螢幕促銷彈窗！
+        val hasMainScreenMarkers = items.any { item ->
+            val t = item.text.replace(" ", "")
+            t.contains("今天的步數") || t.contains("距離下次累積還有") || t.contains("步數瓶")
+        } || items.count { item ->
+            val t = item.text.replace(" ", "")
+            (t.length <= 3 && (t == "首頁" || t == "步數" || t == "時間" || t == "遊戲" || t == "移動")) ||
+            (t == "集點" || t == "精選" || t == "好友" || t == "使用")
+        } >= 2
+        if (hasMainScreenMarkers) return false
+
         var hasPromoKeyword = false
         var hasInviteText = false
         var hasCoinsOrRewardText = false
 
         for (item in items) {
             val t = item.text.replace(" ", "")
+            // 嚴格比對專屬官方全螢幕宣傳彈窗句式，移除通用詞（如單獨的「快來領取」、「都能獲得」）
             if (t.contains("還沒有邀請") ||
-                t.contains("太可惜了") ||
-                t.contains("太可惜") ||
+                t.contains("實在太可惜了") ||
+                (t.contains("太可惜了") && t.contains("邀請")) ||
                 t.contains("獲得金幣的流程") ||
-                t.contains("快來領取") ||
+                t.contains("邀請好友賺") ||
                 t.contains("邀請好友吧") ||
                 t.contains("邀請任務觸發") ||
-                t.contains("都能獲得") ||
-                t.contains("雙方都") ||
-                t.contains("雙方") ||
                 t.contains("完成邀請任務") ||
-                t.contains("被邀請的好友") ||
-                t.contains("被邀請") ||
-                t.contains("邀請好友賺")
+                t.contains("邀請好友快來領取") ||
+                (t.contains("邀請好友") && (t.contains("快來領取") || t.contains("領取吧") || t.contains("賺取")))
             ) {
                 hasPromoKeyword = true
             }
@@ -395,7 +404,7 @@ class OcrRecognizer {
         if (hasPromoKeyword) return true
         if (hasInviteText && hasCoinsOrRewardText && items.any {
             val t = it.text.replace(" ", "")
-            t.contains("領取") || t.contains("獲得") || t.contains("任務") || t.contains("流程") || t.contains("完成")
+            (t.contains("邀請") && t.contains("任務")) || t.contains("獲得金幣的流程")
         }) return true
 
         return false
@@ -702,12 +711,17 @@ class OcrRecognizer {
 
     fun detectAdCountdownSeconds(items: List<OcrItem>, screenHeight: Int): Int? {
         val topBarThreshold = (screenHeight * 0.22f).toInt()
+        val hasLongPeriodTimer = items.any { item ->
+            val itText = item.text.replace(" ", "")
+            itText.contains("距離下次") || itText.contains("抽選還有") || itText.contains("分鐘") || itText.contains("次抽選")
+        }
+
         for (item in items) {
             if (item.bounds.centerY() > topBarThreshold) continue
             val t = item.text
             // 嚴格排除包含「分」、「分鐘」、「距離」、「下次」、「重置」、時間冒號「:」等長週期倒數計時（如賓果冷卻）！
             if (t.contains("分") || t.contains("距離") || t.contains("下次") ||
-                t.contains("重置") || t.contains("：") || t.contains(":")
+                t.contains("重置") || t.contains("：") || t.contains(":") || t.contains("抽選")
             ) {
                 continue
             }
@@ -718,12 +732,14 @@ class OcrRecognizer {
                     return sec
                 }
             }
-            // 支援頂部兩側角落純數字圓圈倒數計時 (如 15、25 等)
-            val trimmed = t.trim()
-            if (trimmed.length in 1..2 && trimmed.all { it.isDigit() }) {
-                val sec = trimmed.toIntOrNull()
-                if (sec != null && sec in 1..60) {
-                    return sec
+            // 支援頂部兩側角落純數字圓圈倒數計時 (如 15、25 等)，若存在遊戲內長週期計時器則嚴格略過純數字
+            if (!hasLongPeriodTimer) {
+                val trimmed = t.trim()
+                if (trimmed.length in 1..2 && trimmed.all { it.isDigit() }) {
+                    val sec = trimmed.toIntOrNull()
+                    if (sec != null && sec in 1..60) {
+                        return sec
+                    }
                 }
             }
         }

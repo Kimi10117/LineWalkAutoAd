@@ -710,12 +710,14 @@ class AutomationEngine private constructor(private val context: Context) {
             return
         }
 
-        // A0. 最優先檢查是否跳出 LINE 內部宣傳促銷全螢幕廣告（如『邀請好友 快來領取吧！！』『還沒有邀請好友 實在太可惜了！』）
-        if (ocrRecognizer.isLineInHousePromoAd(ocrItems)) {
+        // A0. 檢查是否跳出 LINE 內部宣傳促銷全螢幕廣告（如『邀請好友 快來領取吧！！』『還沒有邀請好友 實在太可惜了！』）
+        // 嚴格安全防護：若畫面為主畫面四大分頁（首頁/步數/時間/遊戲）或具有步數/導覽列特徵，絕不可誤判！
+        val onMainScreenForPromo = ocrRecognizer.isLineWalkMainScreenVisible(screenBitmap, ocrItems, templateMatcher)
+        if (!onMainScreenForPromo && ocrRecognizer.isLineInHousePromoAd(ocrItems)) {
             nonGameScreenTicks = 0
             val closeBtn = ocrRecognizer.getLineInHousePromoCloseButton(sw, sh)
             appendLog("[廣告] 偵測到 LINE 宣傳廣告/促銷彈窗，點擊右上角 (X) 關閉視窗")
-            updateDetail("[關閉] 正在關閉宣傳廣告視窗...", "[關閉] 關閉宣傳廣告中...")
+            updateDetail("[關閉] 正在關閉宣傳廣告視窗...", "[巡邏] 關閉宣傳視窗中...")
             FloatingOverlayService.clickWithOverlayPassthrough(closeBtn) {
                 service.clickRect(closeBtn)
             }
@@ -724,18 +726,6 @@ class AutomationEngine private constructor(private val context: Context) {
         }
 
         // B. 【子視窗與日常任務優先】優先檢查是否處於日常任務子彈窗或好友分頁（絕不可被底層導覽列誤判為主畫面而忽略已開啟的視窗！）：
-        // B0. 檢查是否跳出 LINE 內部宣傳促銷全螢幕廣告（如『還沒有邀請好友 實在太可惜了！』『獲得金幣的流程』）
-        if (ocrRecognizer.isLineInHousePromoAd(ocrItems)) {
-            nonGameScreenTicks = 0
-            val closeBtn = ocrRecognizer.getLineInHousePromoCloseButton(sw, sh)
-            appendLog("[廣告] 偵測到 LINE 宣傳廣告/促銷彈窗，點擊右上角 (X) 關閉視窗")
-            updateDetail("[關閉] 正在關閉宣傳廣告視窗...", "[關閉] 關閉宣傳廣告中...")
-            FloatingOverlayService.clickWithOverlayPassthrough(closeBtn) {
-                service.clickRect(closeBtn)
-            }
-            delay(500)
-            return
-        }
 
         // B0B. 【最高優先】：優先檢查是否跳出好友送禮「贈送完畢」彈窗（已贈送金幣給你自己和XXX。[關閉]）！
         val sentCompletedCloseBtn = friendGiftTask.findSentCompletedCloseButton(screenBitmap, ocrItems)
@@ -1054,8 +1044,14 @@ class AutomationEngine private constructor(private val context: Context) {
         sw: Int,
         sh: Int
     ) {
-        // 1. 【使用者指示第 1 步】：必須先點擊完橘色「立即開啟賓果格」直到全部開完或冷卻！
-        val openCellBtn = bingoTask.findOpenCellButton(screenBitmap, ocrItems, templateMatcher)
+        val isCoolingDown = bingoTask.isBingoCoolingDown(ocrItems)
+        val openCellBtn = if (!isCoolingDown && bingoOpenCellRetryCount < 5) {
+            bingoTask.findOpenCellButton(screenBitmap, ocrItems, templateMatcher)
+        } else {
+            null
+        }
+
+        // 1. 【使用者指示第 1 步】：必須先點擊完橘色「立即開啟賓果格」直到全部開完、冷卻或達 5 次！
         if (openCellBtn != null && bingoOpenCellRetryCount < 5) {
             currentPhaseEmptyTicks = 0
             bingoOpenCellRetryCount++
@@ -1068,7 +1064,10 @@ class AutomationEngine private constructor(private val context: Context) {
             transitionTo(EngineState.TRIGGER_AD_POPUP, "已點擊「立即開啟賓果格」，等待開格或廣告結果...", "[賓果] 廣告開格中...")
             return
         }
-        if (openCellBtn != null && bingoOpenCellRetryCount >= 5) {
+
+        if (isCoolingDown) {
+            appendLog("[賓果]「每日賓果」頂部顯示冷卻中 (距離下次抽選)，跳過開格直接檢查連線獎勵！")
+        } else if (bingoOpenCellRetryCount >= 5) {
             appendLog("[賓果]「立即開啟賓果格」已達點擊上限 (5/5，處於冷卻或已無格可開)，跳過開格直接檢查連線獎勵！")
         }
 
@@ -1099,19 +1098,21 @@ class AutomationEngine private constructor(private val context: Context) {
             }
         }
 
-        // 4. 【使用者指示第 3 步】：無立即開啟且無任何 Get 可點 -> 連續 4 次確認後即完成賓果，點擊 (X) 關閉視窗！
-        currentPhaseEmptyTicks++
-        if (currentPhaseEmptyTicks < 4) {
-            updateDetail("[賓果] 檢查可開格與 Get 獎勵中 ($currentPhaseEmptyTicks/4)...", "[賓果] 檢查中...")
-            delay(250)
-            return
+        // 4. 【使用者指示第 3 步】：若點按已達 5 次或處於冷卻中，且無任何 Get 可按 -> 立即點擊 (X) 關閉視窗，無須等待！
+        // 若為常規狀態，連續 4 次確認無目標後才關閉視窗 (currentPhaseEmptyTicks < 4)
+        if (!isCoolingDown && bingoOpenCellRetryCount < 5) {
+            currentPhaseEmptyTicks++
+            if (currentPhaseEmptyTicks < 4) {
+                updateDetail("[賓果] 檢查可開格與 Get 獎勵中 ($currentPhaseEmptyTicks/4)...", "[賓果] 檢查中...")
+                delay(250)
+                return
+            }
         }
 
         currentPhaseEmptyTicks = 0
         bingoOpenCellRetryCount = 0
         isBingoCompleted = true
-        // 保持 claimedBingoColumns 鎖定，不在此清空，防止關閉後立即重新開格誤觸！
-        appendLog("[完成]【每日賓果】所有開格與 Get 領取皆已完成，點擊右上角 (X) 關閉視窗")
+        appendLog("[完成]【每日賓果】開格已完成/冷卻且無連線獎勵可領，點擊右上角 (X) 關閉視窗")
         val closeBtn = bingoTask.getCloseButtonBounds(sw, sh)
         FloatingOverlayService.clickWithOverlayPassthrough(closeBtn) {
             service.clickRect(closeBtn)
@@ -2828,9 +2829,7 @@ class AutomationEngine private constructor(private val context: Context) {
         if (newState != EngineState.IN_GAME_SCAN) {
             nonGameScreenTicks = 0
         }
-        if (newState == EngineState.AD_WATCHING) {
-            bingoOpenCellRetryCount = 0
-        }
+
         _uiStatus.value = _uiStatus.value.copy(
             state = newState,
             statusDetail = detail,

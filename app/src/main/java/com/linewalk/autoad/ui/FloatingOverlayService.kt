@@ -251,7 +251,7 @@ class FloatingOverlayService : Service() {
             detail.contains("收禮") || safeDetail.contains("收禮") || detail.contains("接收禮物") || safeDetail.contains("接收禮物") -> {
                 "[接收禮物] 領取中"
             }
-            status.state == com.linewalk.autoad.engine.EngineState.AD_WATCHING || safeDetail.contains("廣告") -> {
+            status.state == com.linewalk.autoad.engine.EngineState.AD_WATCHING -> {
                 val secMatch = Regex("""\((\d+)s?\)""").find(safeDetail) ?: Regex("""\((\d+)s?\)""").find(detail)
                 if (secMatch != null) {
                     "[廣告監控] 播放中 (${secMatch.groupValues[1]}s)"

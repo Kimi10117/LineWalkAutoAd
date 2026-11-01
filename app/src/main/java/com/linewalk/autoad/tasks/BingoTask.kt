@@ -130,6 +130,20 @@ class BingoTask {
     )
 
     /**
+     * 檢查每日賓果開格是否處於 30 分鐘冷卻中：
+     * 特徵：頂部綠色橫幅出現「距離下次抽選還有」、「距離下次」、「抽選還有」，或「\d+分鐘」
+     */
+    fun isBingoCoolingDown(ocrItems: List<OcrItem>): Boolean {
+        return ocrItems.any { item ->
+            val t = item.text.replace(" ", "")
+            (t.contains("距離下次") && (t.contains("抽選") || t.contains("還有") || t.contains("分"))) ||
+            t.contains("距離下次抽選還有") ||
+            (t.contains("下次抽選") && t.contains("還有")) ||
+            (t.contains("抽選還有") && (t.contains("分") || t.contains("秒")))
+        }
+    }
+
+    /**
      * 尋找「立即開啟賓果格」橘色按鈕 (y ≈ 0.635f)
      */
     fun findOpenCellButton(
@@ -146,6 +160,9 @@ class BingoTask {
             t.contains("今日上限") || t.contains("已達到今日上限") || t.contains("9/9") || t.contains("已全數開啟")
         }
         if (hasReachedLimit) return null
+
+        // 0B. 若頂部出現冷卻倒數 (「距離下次抽選還有」)，代表開格進入 30 分鐘冷卻期，不再開格
+        if (isBingoCoolingDown(ocrItems)) return null
 
         val standardTimeRegex = Regex("""\d{1,2}:\d{2}""")
         val chineseTimeRegex = Regex("""\d+\s*小時|\d+\s*分鐘|\d+\s*分|\d+\s*秒""")
