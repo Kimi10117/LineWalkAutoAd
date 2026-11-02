@@ -190,6 +190,7 @@ class AutomationEngine private constructor(private val context: Context) {
     internal val claimedBingoColumns = mutableSetOf<Int>()
     internal val bingoColumnRetryCount = mutableMapOf<Int, Int>()
     internal var bingoOpenCellRetryCount = 0
+    internal var subDialogOpenAttempts = 0
     private var currentPhaseEmptyTicks = 0
     internal var nonGameScreenTicks = 0
     internal var geoXConsecutiveClicks = 0
@@ -256,6 +257,7 @@ class AutomationEngine private constructor(private val context: Context) {
         claimedBingoColumns.clear()
         bingoColumnRetryCount.clear()
         bingoOpenCellRetryCount = 0
+        subDialogOpenAttempts = 0
         isLotteryCompleted = false
         hasClickedLotteryAdReward = false
         lotteryResultRewardWaitTicks = 0
@@ -746,6 +748,7 @@ class AutomationEngine private constructor(private val context: Context) {
         // B1. 優先檢查是否正在「每日賓果」彈窗
         if (bingoTask.isBingoDialogOpen(ocrItems, sh)) {
             nonGameScreenTicks = 0
+            subDialogOpenAttempts = 0
             if (isBingoCompleted) {
                 val closeBtn = bingoTask.getCloseButtonBounds(sw, sh)
                 appendLog("[賓果] 每日賓果已完成，點擊右上角 (X) 關閉視窗")
@@ -762,6 +765,7 @@ class AutomationEngine private constructor(private val context: Context) {
         // B2. 檢查是否正在「抽抽樂」彈窗
         if (lotteryTask.isLotteryDialogOpen(ocrItems, sh)) {
             nonGameScreenTicks = 0
+            subDialogOpenAttempts = 0
             handleLotteryDialog(service, screenBitmap, ocrItems, sw, sh)
             return
         }
@@ -769,6 +773,7 @@ class AutomationEngine private constructor(private val context: Context) {
         // B3. 檢查是否正在「任務」彈窗
         if (missionTask.isMissionDialogOpen(ocrItems, sh, screenBitmap)) {
             nonGameScreenTicks = 0
+            subDialogOpenAttempts = 0
             if (isMissionCompleted) {
                 val closeBtn = missionTask.getCloseButtonBounds(sw, sh)
                 FloatingOverlayService.clickWithOverlayPassthrough(closeBtn) {
@@ -1044,14 +1049,12 @@ class AutomationEngine private constructor(private val context: Context) {
         sw: Int,
         sh: Int
     ) {
-        val isCoolingDown = bingoTask.isBingoCoolingDown(ocrItems)
-        val openCellBtn = if (!isCoolingDown && bingoOpenCellRetryCount < 5) {
+        // 1. 【使用者指示第 1 步】：必須先點擊完橘色「立即開啟賓果格」直到全部開完或達 5 次上限！
+        val openCellBtn = if (bingoOpenCellRetryCount < 5) {
             bingoTask.findOpenCellButton(screenBitmap, ocrItems, templateMatcher)
         } else {
             null
         }
-
-        // 1. 【使用者指示第 1 步】：必須先點擊完橘色「立即開啟賓果格」直到全部開完、冷卻或達 5 次！
         if (openCellBtn != null && bingoOpenCellRetryCount < 5) {
             currentPhaseEmptyTicks = 0
             bingoOpenCellRetryCount++
@@ -1065,9 +1068,7 @@ class AutomationEngine private constructor(private val context: Context) {
             return
         }
 
-        if (isCoolingDown) {
-            appendLog("[賓果]「每日賓果」頂部顯示冷卻中 (距離下次抽選)，跳過開格直接檢查連線獎勵！")
-        } else if (bingoOpenCellRetryCount >= 5) {
+        if (bingoOpenCellRetryCount >= 5) {
             appendLog("[賓果]「立即開啟賓果格」已達點擊上限 (5/5，處於冷卻或已無格可開)，跳過開格直接檢查連線獎勵！")
         }
 
@@ -1086,21 +1087,22 @@ class AutomationEngine private constructor(private val context: Context) {
             return
         }
 
-        // 3. 【防早退重要防護】：只要畫面上任何一欄仍存在紅色按鈕或 Get 文字，嚴禁關閉視窗！
+        // 3. 【防早退重要防護】：只要畫面上任何一欄仍存在紅色按鈕或 Get 文字，等待動畫淡出（最多 2 次防死鎖）！
         val anyRemainingRewardOnScreen = bingoTask.findNextClaimableReward(screenBitmap, ocrItems, emptySet())
         if (anyRemainingRewardOnScreen != null) {
-            // 畫面上明明還有未領之 Get，重置空計數並優先嘗試下一欄
-            currentPhaseEmptyTicks = 0
-            if (anyRemainingRewardOnScreen.columnIndex in claimedBingoColumns) {
-                // 若當前欄剛領過但畫面按鈕仍在動畫淡出，稍作延遲等待下一欄渲染
+            val colIdx = anyRemainingRewardOnScreen.columnIndex
+            val colRetries = (bingoColumnRetryCount[colIdx] ?: 0) + 1
+            bingoColumnRetryCount[colIdx] = colRetries
+            if (colIdx in claimedBingoColumns && colRetries <= 2) {
+                currentPhaseEmptyTicks = 0
                 delay(300)
                 return
             }
         }
 
-        // 4. 【使用者指示第 3 步】：若點按已達 5 次或處於冷卻中，且無任何 Get 可按 -> 立即點擊 (X) 關閉視窗，無須等待！
-        // 若為常規狀態，連續 4 次確認無目標後才關閉視窗 (currentPhaseEmptyTicks < 4)
-        if (!isCoolingDown && bingoOpenCellRetryCount < 5) {
+        // 4. 【使用者指示第 3 步】：若點按已達 5 次且無任何 Get 可按 -> 立即點擊 (X) 關閉視窗，無須等待！
+        // 若為常規狀態（如今日上限未點滿 5 次），連續 4 次確認無目標後關閉視窗 (currentPhaseEmptyTicks < 4)
+        if (bingoOpenCellRetryCount < 5) {
             currentPhaseEmptyTicks++
             if (currentPhaseEmptyTicks < 4) {
                 updateDetail("[賓果] 檢查可開格與 Get 獎勵中 ($currentPhaseEmptyTicks/4)...", "[賓果] 檢查中...")
@@ -1112,6 +1114,7 @@ class AutomationEngine private constructor(private val context: Context) {
         currentPhaseEmptyTicks = 0
         bingoOpenCellRetryCount = 0
         isBingoCompleted = true
+        // 保持 claimedBingoColumns 鎖定，不在此清空，防止關閉後立即重新開格誤觸！
         appendLog("[完成]【每日賓果】開格已完成/冷卻且無連線獎勵可領，點擊右上角 (X) 關閉視窗")
         val closeBtn = bingoTask.getCloseButtonBounds(sw, sh)
         FloatingOverlayService.clickWithOverlayPassthrough(closeBtn) {
@@ -1705,6 +1708,38 @@ class AutomationEngine private constructor(private val context: Context) {
         return null
     }
 
+    /**
+     * 確保當前主畫面不在【遊戲】分頁：
+     * 因為《LINE 散步趣》的「賓果、抽抽樂、糖果、任務」四顆日常任務圖示只存在於【首頁(移動)】、【步數】、【時間】分頁，
+     * 【遊戲】分頁中央為電動機台與遊戲列表，並無此四顆圖示！
+     * 若因關閉彈窗 (X) 座標重疊或廣告返回而落在【遊戲】分頁，必須先切換回【首頁(移動)】分頁，否則將無限點擊空氣卡死！
+     */
+    private suspend fun ensureOnTabWithDailyIcons(
+        service: AutoAdAccessibilityService,
+        screenBitmap: android.graphics.Bitmap,
+        ocrItems: List<OcrItem>,
+        sw: Int,
+        sh: Int
+    ): Boolean {
+        val activeTab = detectTabFromScreen(screenBitmap, ocrItems)
+        val hasGamePageFeatures = ocrItems.any { item ->
+            val t = item.text.replace(" ", "")
+            t.contains("秘寶挖挖哇") || t.contains("數獨達人") || t.contains("接龍高手") ||
+            t.contains("簡單賺金幣") || t.contains("POINTSGAME", ignoreCase = true)
+        }
+        if (activeTab == MainTab.GAME || hasGamePageFeatures) {
+            val moveTabRect = getTabRect(MainTab.MOVE, sw, sh, ocrItems, screenBitmap)
+            appendLog("[切換] 目前位於【遊戲】分頁（無日常任務圖示），先切換回【首頁(移動)】以開啟【${currentPhase.title}】...")
+            FloatingOverlayService.clickWithOverlayPassthrough(moveTabRect) {
+                service.clickRect(moveTabRect)
+            }
+            updateDetail("[切換] 切換回【首頁】準備開啟${currentPhase.title}...", "[切換] 切換回首頁...")
+            delay(600)
+            return false
+        }
+        return true
+    }
+
     private suspend fun handleMainScreenPatrol(
         service: AutoAdAccessibilityService,
         screenBitmap: android.graphics.Bitmap,
@@ -1839,7 +1874,24 @@ class AutomationEngine private constructor(private val context: Context) {
 
             PatrolPhase.BINGO -> {
                 if (!config.enableBingoTask || isBingoCompleted) {
+                    subDialogOpenAttempts = 0
                     currentPhase = getNextPhase(PatrolPhase.BINGO)
+                    return
+                }
+                if (!ensureOnTabWithDailyIcons(service, screenBitmap, ocrItems, sw, sh)) return
+                subDialogOpenAttempts++
+                if (subDialogOpenAttempts == 3) {
+                    val moveTabRect = getTabRect(MainTab.MOVE, sw, sh, ocrItems, screenBitmap)
+                    appendLog("[切換] 開啟【每日賓果】重試中，點擊【首頁(移動)】校準畫面分頁...")
+                    FloatingOverlayService.clickWithOverlayPassthrough(moveTabRect) { service.clickRect(moveTabRect) }
+                    delay(500)
+                    return
+                }
+                if (subDialogOpenAttempts >= 6) {
+                    subDialogOpenAttempts = 0
+                    isBingoCompleted = true
+                    currentPhase = getNextPhase(PatrolPhase.BINGO)
+                    appendLog("[提示] 連續嘗試開啟【每日賓果】無回應，推進至下一階段")
                     return
                 }
                 appendLog("[目標] 點擊主畫面【每日賓果】圖示按鈕...")
@@ -1852,7 +1904,24 @@ class AutomationEngine private constructor(private val context: Context) {
 
             PatrolPhase.LOTTERY -> {
                 if (!config.enableLotteryTask || isLotteryCompleted) {
+                    subDialogOpenAttempts = 0
                     currentPhase = getNextPhase(PatrolPhase.LOTTERY)
+                    return
+                }
+                if (!ensureOnTabWithDailyIcons(service, screenBitmap, ocrItems, sw, sh)) return
+                subDialogOpenAttempts++
+                if (subDialogOpenAttempts == 3) {
+                    val moveTabRect = getTabRect(MainTab.MOVE, sw, sh, ocrItems, screenBitmap)
+                    appendLog("[切換] 開啟【抽抽樂】重試中，點擊【首頁(移動)】校準畫面分頁...")
+                    FloatingOverlayService.clickWithOverlayPassthrough(moveTabRect) { service.clickRect(moveTabRect) }
+                    delay(500)
+                    return
+                }
+                if (subDialogOpenAttempts >= 6) {
+                    subDialogOpenAttempts = 0
+                    isLotteryCompleted = true
+                    currentPhase = getNextPhase(PatrolPhase.LOTTERY)
+                    appendLog("[提示] 連續嘗試開啟【抽抽樂】無回應，推進至下一階段")
                     return
                 }
                 appendLog("[抽獎] 點擊主畫面【抽抽樂】圖示按鈕...")
@@ -1865,7 +1934,24 @@ class AutomationEngine private constructor(private val context: Context) {
 
             PatrolPhase.MISSION -> {
                 if (!config.enableDailyMissionTask || isMissionCompleted) {
+                    subDialogOpenAttempts = 0
                     currentPhase = getNextPhase(PatrolPhase.MISSION)
+                    return
+                }
+                if (!ensureOnTabWithDailyIcons(service, screenBitmap, ocrItems, sw, sh)) return
+                subDialogOpenAttempts++
+                if (subDialogOpenAttempts == 3) {
+                    val moveTabRect = getTabRect(MainTab.MOVE, sw, sh, ocrItems, screenBitmap)
+                    appendLog("[切換] 開啟【任務】重試中，點擊【首頁(移動)】校準畫面分頁...")
+                    FloatingOverlayService.clickWithOverlayPassthrough(moveTabRect) { service.clickRect(moveTabRect) }
+                    delay(500)
+                    return
+                }
+                if (subDialogOpenAttempts >= 6) {
+                    subDialogOpenAttempts = 0
+                    isMissionCompleted = true
+                    currentPhase = getNextPhase(PatrolPhase.MISSION)
+                    appendLog("[提示] 連續嘗試開啟【任務】無回應，推進至下一階段")
                     return
                 }
                 appendLog("[目標] 點擊主畫面【任務】圖示按鈕...")
@@ -1950,6 +2036,7 @@ class AutomationEngine private constructor(private val context: Context) {
         claimedBingoColumns.clear()
         bingoColumnRetryCount.clear()
         bingoOpenCellRetryCount = 0
+        subDialogOpenAttempts = 0
         isLotteryCompleted = false
         hasClickedLotteryAdReward = false
         lotteryResultRewardWaitTicks = 0

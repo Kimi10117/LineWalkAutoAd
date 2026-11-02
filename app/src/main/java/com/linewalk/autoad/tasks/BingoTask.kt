@@ -161,9 +161,6 @@ class BingoTask {
         }
         if (hasReachedLimit) return null
 
-        // 0B. 若頂部出現冷卻倒數 (「距離下次抽選還有」)，代表開格進入 30 分鐘冷卻期，不再開格
-        if (isBingoCoolingDown(ocrItems)) return null
-
         val standardTimeRegex = Regex("""\d{1,2}:\d{2}""")
         val chineseTimeRegex = Regex("""\d+\s*小時|\d+\s*分鐘|\d+\s*分|\d+\s*秒""")
 
@@ -247,6 +244,15 @@ class BingoTask {
     ): BingoRewardTarget? {
         val sh = screenBitmap.height
         val sw = screenBitmap.width
+
+        // 0. 若畫面上明確顯示「0 BINGO」（代表目前達成連線數為 0），100% 無任何連線獎勵可領！
+        val isZeroBingo = ocrItems.any { item ->
+            val cy = item.bounds.centerY()
+            val t = item.text.replace(" ", "").uppercase()
+            cy in (sh * 0.45f).toInt()..(sh * 0.68f).toInt() && (t == "0BINGO" || t.startsWith("0BINGO"))
+        }
+        if (isZeroBingo) return null
+
         val colCenters = listOf(0.18f, 0.39f, 0.61f, 0.82f)
 
         for ((colIndex, cx) in colCenters.withIndex()) {
@@ -257,7 +263,7 @@ class BingoTask {
             val y1 = (sh * 0.74f).toInt().coerceIn(0, sh - 1)
             val y2 = (sh * 0.90f).toInt().coerceIn(y1 + 1, sh)
 
-            // 1. 檢查該欄是否有紅色膠囊按鈕
+            // 1. 檢查該欄是否有鮮紅色 [▶ Get] 膠囊按鈕 (嚴格排除米黃色/淺粉紅糖果與金幣圖示 r≈250, g≈210, b≈160)
             val redPoints = mutableListOf<android.graphics.Point>()
             var y = y1
             while (y < y2) {
@@ -267,7 +273,7 @@ class BingoTask {
                     val r = (c shr 16) and 0xFF
                     val g = (c shr 8) and 0xFF
                     val b = c and 0xFF
-                    if (r > 140 && r > g + 30 && r > b + 30) {
+                    if (r > 195 && g < 110 && b < 110 && (r - g) > 90 && (r - b) > 90) {
                         redPoints.add(android.graphics.Point(x, y))
                     }
                     x += 2
@@ -275,7 +281,7 @@ class BingoTask {
                 y += 2
             }
 
-            if (redPoints.size >= 20) {
+            if (redPoints.size >= 25) {
                 val minX = redPoints.minOf { it.x }
                 val maxX = redPoints.maxOf { it.x }
                 val minY = redPoints.minOf { it.y }

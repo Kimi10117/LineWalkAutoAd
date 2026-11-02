@@ -5,12 +5,12 @@ SRC_DIR = Path("app/src/main/java/com/linewalk/autoad")
 
 
 def test_v1_15_56_bingo_cooling_down_ast_and_logic():
-    """Verify isBingoCoolingDown detects cooldown text and findOpenCellButton respects it."""
+    """Verify isBingoCoolingDown detects cooldown text while findOpenCellButton allows up to 5 attempts."""
     bingo_code = (SRC_DIR / "tasks/BingoTask.kt").read_text(encoding="utf-8")
     assert "fun isBingoCoolingDown(ocrItems: List<OcrItem>): Boolean" in bingo_code
     assert "距離下次" in bingo_code
     assert "抽選" in bingo_code
-    assert "if (isBingoCoolingDown(ocrItems)) return null" in bingo_code
+    assert "if (isBingoCoolingDown(ocrItems)) return null" not in bingo_code
 
 
 def test_v1_15_56_bingo_retry_count_persistence():
@@ -25,9 +25,8 @@ def test_v1_15_56_bingo_retry_count_persistence():
 
 
 def test_v1_15_56_bingo_exit_on_limit_or_cooldown():
-    """Verify handleBingoDialog exits immediately when limit reached or cooling down with no Get."""
+    """Verify handleBingoDialog exits immediately when 5 open attempts reached with no Get."""
     engine_code = (SRC_DIR / "engine/AutomationEngine.kt").read_text(encoding="utf-8")
-    assert "val isCoolingDown = bingoTask.isBingoCoolingDown(ocrItems)" in engine_code
     assert "openCellBtn != null && bingoOpenCellRetryCount < 5" in engine_code
     assert "bingoOpenCellRetryCount >= 5" in engine_code
     assert "currentPhase = PatrolPhase.LOTTERY" in engine_code
