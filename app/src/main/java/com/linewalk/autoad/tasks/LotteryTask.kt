@@ -370,6 +370,70 @@ class LotteryTask {
      * - 嚴格安全機制：必須在具有抽抽樂/中獎上下文（中獎囉、中獎、枚金幣、分享給好友、抽抽樂等）時才生效！
      * - 絕對排除日常領獎標題（獲得票券！、獲得金幣！等）！
      */
+    /**
+     * 嚴格判定目前是否處於「抽抽樂中獎結果彈窗」（中獎囉！ / 5枚金幣 / [▶ x1 獲得] / 分享給好友 / 關閉）：
+     * - 絕對一票否決抽抽樂主面板特徵（查看獎項一覽、5張、50張、回復還需、完成任務、即可獲得、大量金幣），
+     *   徹底根除抽抽樂主面板下方黃色推廣橫幅「完成任務 即可獲得 大量金幣!!」被誤判為中獎結果而誤點進入 LINE 推廣頁的死循環！
+     */
+    fun isLotteryWinResultScreen(ocrItems: List<OcrItem>, sh: Int): Boolean {
+        val hasExplicitWinTitle = ocrItems.any { item ->
+            val t = item.text.replace(" ", "")
+            t.contains("中獎囉") || t.contains("恭喜中獎") || t.contains("分享給好友")
+        }
+
+        val hasMainLotteryPanelFeatures = ocrItems.any { item ->
+            val t = item.text.replace(" ", "")
+            t.contains("查看獎項") ||
+            t.contains("獎項一覽") ||
+            t.contains("回復還需") ||
+            t.contains("完成任務") ||
+            t.contains("即可獲得") ||
+            t.contains("大量金幣") ||
+            t.contains("5張") ||
+            t.contains("50張") ||
+            t.contains("免費抽")
+        }
+        if (hasMainLotteryPanelFeatures && !hasExplicitWinTitle) {
+            return false
+        }
+
+        return ocrItems.any { item ->
+            val t = item.text.replace(" ", "")
+            if (t.contains("完成任務") || t.contains("即可獲得") || t.contains("大量金幣") ||
+                t.contains("最多") || t.contains("查看獎項") || t.contains("獎項一覽") ||
+                t.contains("回復") || t.contains("還需") || t.contains("5張") ||
+                t.contains("50張") || t.contains("抽1次")
+            ) {
+                return@any false
+            }
+            t.contains("中獎囉") || (t.contains("中獎") && !t.contains("好友")) ||
+            t.contains("恭喜獲得") || t.contains("恭喜中獎") ||
+            (item.bounds.centerY() > sh * 0.65f && (t.contains("分享給好友") || t.contains("分享"))) ||
+            (item.bounds.centerY() in (sh * 0.50f).toInt()..(sh * 0.78f).toInt() &&
+                (t.contains("x1", ignoreCase = true) || t.contains("×1") || t.contains("1張")) &&
+                !t.contains("金幣") && !t.contains("票券"))
+        }
+    }
+
+    /**
+     * 檢查「50抽」與「免費抽」是否皆處於反灰或冷卻不可點狀態：
+     * 當兩者皆為灰色/冷卻時，可直接關閉抽抽樂視窗繼續檢查下一項，絕不點擊下方任何廣告區域。
+     */
+    fun areBothDrawsUnavailable(
+        screenBitmap: Bitmap,
+        ocrItems: List<OcrItem>,
+        templateMatcher: TemplateMatcher
+    ): Boolean {
+        if (findTargetDrawButton(screenBitmap, ocrItems, templateMatcher) != null) {
+            return false
+        }
+        val sw = screenBitmap.width
+        val sh = screenBitmap.height
+        val leftGray = templateMatcher.isPopupButtonDisabledGray(screenBitmap, (sh * 0.48f).toInt(), (sw * 0.26f).toInt())
+        val rightFreeGray = templateMatcher.isPopupButtonDisabledGray(screenBitmap, (sh * 0.53f).toInt(), (sw * 0.75f).toInt())
+        return leftGray && rightFreeGray
+    }
+
     fun findLotteryRewardAdButton(screenBitmap: Bitmap, ocrItems: List<OcrItem>): Rect? {
         val sw = screenBitmap.width
         val sh = screenBitmap.height
@@ -389,17 +453,7 @@ class LotteryTask {
             return null
         }
 
-        val hasLotteryResultContext = ocrItems.any { item ->
-            val t = item.text.replace(" ", "")
-            t.contains("中獎囉") || (t.contains("中獎") && !t.contains("好友")) ||
-            (t.contains("枚金幣") && (t.contains("中獎") || t.contains("獲得") || t.contains("恭喜"))) ||
-            (t.contains("金幣") && (t.contains("中獎") || t.contains("獲得"))) ||
-            t.contains("恭喜獲得") || t.contains("恭喜中獎") ||
-            (item.bounds.centerY() > sh * 0.65f && (t.contains("分享給好友") || t.contains("分享"))) ||
-            (item.bounds.centerY() in (sh * 0.50f).toInt()..(sh * 0.78f).toInt() &&
-                (t.contains("x1", ignoreCase = true) || t.contains("1張") || t.contains("獲得")) &&
-                !t.contains("金幣") && !t.contains("票券"))
-        }
+        val hasLotteryResultContext = isLotteryWinResultScreen(ocrItems, sh)
         if (!hasLotteryResultContext) {
             return null
         }
@@ -473,15 +527,17 @@ class LotteryTask {
             }
         }
 
-        // 2. 備援策略 B：OCR 比對 (y: 0.52f..0.78f，文字包含 "x1"、"1張" 或 "獲得")
+        // 2. 備援策略 B：OCR 比對 (y: 0.52f..0.78f，文字必須明確包含 "x1"、"×1" 或 "1張"，嚴禁單憑「獲得」誤點「完成任務 即可獲得」)
         val ocrMatch = ocrItems.firstOrNull { item ->
             val cy = item.bounds.centerY()
             val t = item.text.replace(" ", "")
             cy in yStart..yEnd &&
             !t.endsWith("！") && !t.endsWith("!") &&
             !t.contains("票券") && !t.contains("金幣") &&
+            !t.contains("完成任務") && !t.contains("即可獲得") && !t.contains("大量") &&
+            !t.contains("5張") && !t.contains("50張") && !t.contains("抽1次") &&
             !t.contains("分享") && !t.contains("關閉") &&
-            (t.contains("x1", ignoreCase = true) || t.contains("1張") || t.contains("獲得"))
+            (t.contains("x1", ignoreCase = true) || t.contains("×1") || t.contains("1張"))
         }
         if (ocrMatch != null) {
             val left = (sw * 0.15f).toInt()

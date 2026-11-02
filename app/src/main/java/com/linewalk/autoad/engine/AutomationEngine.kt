@@ -766,6 +766,15 @@ class AutomationEngine private constructor(private val context: Context) {
         if (lotteryTask.isLotteryDialogOpen(ocrItems, sh)) {
             nonGameScreenTicks = 0
             subDialogOpenAttempts = 0
+            if (isLotteryCompleted) {
+                val closeBtn = lotteryTask.getCloseButtonBounds(sw, sh)
+                appendLog("[抽抽樂] 抽抽樂已完成，點擊右上角 (X) 關閉視窗")
+                FloatingOverlayService.clickWithOverlayPassthrough(closeBtn) {
+                    service.clickRect(closeBtn)
+                }
+                delay(350)
+                return
+            }
             handleLotteryDialog(service, screenBitmap, ocrItems, sw, sh)
             return
         }
@@ -1145,18 +1154,8 @@ class AutomationEngine private constructor(private val context: Context) {
             return
         }
 
-        // 0. 檢查是否處於抽獎結果畫面（中獎囉、中獎、枚金幣、獲得等）
-        val hasLotteryResultContext = ocrItems.any { item ->
-            val t = item.text.replace(" ", "")
-            t.contains("中獎囉") || (t.contains("中獎") && !t.contains("好友")) ||
-            (t.contains("枚金幣") && (t.contains("中獎") || t.contains("獲得") || t.contains("恭喜"))) ||
-            (t.contains("金幣") && (t.contains("中獎") || t.contains("獲得"))) ||
-            t.contains("恭喜獲得") || t.contains("恭喜中獎") ||
-            (item.bounds.centerY() > sh * 0.65f && (t.contains("分享給好友") || t.contains("分享"))) ||
-            (item.bounds.centerY() in (sh * 0.50f).toInt()..(sh * 0.78f).toInt() &&
-                (t.contains("x1", ignoreCase = true) || t.contains("1張") || t.contains("獲得")) &&
-                !t.contains("金幣") && !t.contains("票券"))
-        }
+        // 0. 嚴格檢查是否處於抽獎中獎結果畫面（排除抽抽樂主面板「完成任務 即可獲得 大量金幣!!」推廣橫幅）
+        val hasLotteryResultContext = lotteryTask.isLotteryWinResultScreen(ocrItems, sh)
 
         // 0A. 抽獎結果畫面中：若尚未點擊看廣告獲票，【最高優先】尋找並點擊綠色按鈕 [▶ [抽獎] x1 獲得]！
         if (hasLotteryResultContext && !hasClickedLotteryAdReward) {
@@ -1271,8 +1270,9 @@ class AutomationEngine private constructor(private val context: Context) {
         // 兩次檢查確認 50 抽與免費抽皆不可點 (50 抽已無次數/票券不足，且免費抽已完成，且嚴格不點 5 抽)
         // 且確認畫面上無待領獎彈窗且不在結果畫面時，才允許點擊右上角 X 關閉視窗！
         if (modalCloseBtn == null && !hasLotteryResultContext) {
+            val bothGray = lotteryTask.areBothDrawsUnavailable(screenBitmap, ocrItems, templateMatcher)
             currentPhaseEmptyTicks++
-            if (currentPhaseEmptyTicks < 2) {
+            if (!bothGray && currentPhaseEmptyTicks < 2) {
                 updateDetail("[抽抽樂] 檢查可抽項目 ($currentPhaseEmptyTicks/2)...", "[抽抽樂] 檢查中...")
                 return
             }

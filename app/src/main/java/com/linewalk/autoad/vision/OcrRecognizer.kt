@@ -187,11 +187,15 @@ class OcrRecognizer {
         val sw = screenBitmap.width
         val sh = screenBitmap.height
 
-        // 若處於抽抽樂中獎結果畫面（中獎囉、中獎、分享給好友）或存在看廣告獲票鈕 [x1 獲得]，絕不直接點擊關閉，放行讓 LotteryTask 處理！
+        // 若處於抽抽樂中獎結果畫面（中獎囉、中獎、分享給好友）或抽抽樂主面板（查看獎項一覽、完成任務、即可獲得、大量金幣、5張抽1次），
+        // 絕不觸發中央領獎彈窗關閉（防止主面板『最多5000枚金幣』觸發備援座標點中下方『大量金幣!!』推廣橫幅）！
         val isLotteryResultScreen = items.any { item ->
             val cy = item.bounds.centerY().toFloat() / sh
             val t = item.text.replace(" ", "")
             t.contains("中獎囉") || t.contains("中獎") || t.contains("分享給好友") ||
+            t.contains("查看獎項") || t.contains("獎項一覽") ||
+            t.contains("完成任務") || t.contains("即可獲得") || t.contains("大量金幣") ||
+            t.contains("5張") || t.contains("50張") ||
             (cy in 0.60f..0.76f && (t.contains("x1", ignoreCase = true) || t.contains("1張")) && !t.contains("金幣") && !t.contains("票券"))
         }
         if (isLotteryResultScreen) {
@@ -243,6 +247,12 @@ class OcrRecognizer {
                 !t.contains("廣告") &&
                 !t.contains("推薦") &&
                 !t.contains("條款") &&
+                !t.contains("最多") &&
+                !t.contains("5000") &&
+                !t.contains("10000") &&
+                !t.contains("完成任務") &&
+                !t.contains("即可獲得") &&
+                !t.contains("大量") &&
                 (
                     t.contains("張票券") ||
                     t.contains("枚金幣") ||
