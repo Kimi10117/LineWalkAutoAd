@@ -87,17 +87,17 @@ jobs:
       - name: Update Tag and Publish APK to GitHub Releases
         run: |
           git tag -f latest-apk
-          git tag -f v1.15.59
+          git tag -f v1.15.60
           git push -f origin latest-apk || true
-          git push -f origin v1.15.59 || true
+          git push -f origin v1.15.60 || true
         
       - name: Publish APK to GitHub Releases (latest-apk)
         uses: softprops/action-gh-release@v2
         with:
             tag_name: latest-apk
-            name: "散步趣助手 v1.15.59 (FB誤跳轉立即返回散步趣、步數等領獎完成彈窗『獲得15張票券！』關閉按鈕修復 - Run #${{ github.run_number }})"
+            name: "散步趣助手 v1.15.60 (FB誤跳轉立即返回散步趣、步數等領獎完成彈窗『獲得15張票券！』關閉按鈕修復 - Run #${{ github.run_number }})"
             body: |
-              **散步趣助手 v1.15.59 (Run #${{ github.run_number }}) - 升級自 v1.15.58 (相容歷代版本 v1.15.57, v1.15.56, v1.15.55, v1.15.54, v1.15.53, v1.15.52, v1.15.51, v1.15.50, v1.15.49)**
+              **散步趣助手 v1.15.60 (Run #${{ github.run_number }}) - 升級自 v1.15.58 (相容歷代版本 v1.15.57, v1.15.56, v1.15.55, v1.15.54, v1.15.53, v1.15.52, v1.15.51, v1.15.50, v1.15.49)**
               1. **【外部社群應用（如 Facebook 粉絲專頁）誤跳轉立即返回散步趣】**：
                  - 攔截誤跳轉至 Facebook App (com.facebook.katana)、Instagram 等外部獨立社群應用；
                  - 一旦偵測到前景為外部社群應用，不再視為廣告容器等待 53 秒，而是立即發送系統返回鍵退出並拉回《LINE 散步趣》，徹底解決卡在 FB 粉絲專頁一直滑動的問題。
@@ -107,13 +107,13 @@ jobs:
             files: LineWalkAutoAd.apk
             prerelease: false
 
-      - name: Publish Versioned APK to GitHub Releases (v1.15.59)
+      - name: Publish Versioned APK to GitHub Releases (v1.15.60)
         uses: softprops/action-gh-release@v2
         with:
-            tag_name: v1.15.59
-            name: "散步趣助手 v1.15.59 (FB誤跳轉立即返回散步趣、步數等領獎完成彈窗『獲得15張票券！』關閉按鈕修復)"
+            tag_name: v1.15.60
+            name: "散步趣助手 v1.15.60 (FB誤跳轉立即返回散步趣、步數等領獎完成彈窗『獲得15張票券！』關閉按鈕修復)"
             body: |
-              **散步趣助手 v1.15.59 (Run #${{ github.run_number }}) - 升級自 v1.15.58 (相容歷代版本 v1.15.57, v1.15.56, v1.15.55, v1.15.54, v1.15.53, v1.15.52, v1.15.51, v1.15.50, v1.15.49)**
+              **散步趣助手 v1.15.60 (Run #${{ github.run_number }}) - 升級自 v1.15.58 (相容歷代版本 v1.15.57, v1.15.56, v1.15.55, v1.15.54, v1.15.53, v1.15.52, v1.15.51, v1.15.50, v1.15.49)**
               1. **【外部社群應用（如 Facebook 粉絲專頁）誤跳轉立即返回散步趣】**：
                  - 攔截誤跳轉至 Facebook App (com.facebook.katana)、Instagram 等外部獨立社群應用；
                  - 一旦偵測到前景為外部社群應用，不再視為廣告容器等待 53 秒，而是立即發送系統返回鍵退出並拉回《LINE 散步趣》，徹底解決卡在 FB 粉絲專頁一直滑動的問題。

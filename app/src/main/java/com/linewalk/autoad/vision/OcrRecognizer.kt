@@ -654,7 +654,7 @@ class OcrRecognizer {
         val sh = screenBitmap.height
 
         // 1. 若看完廣告後的中央領獎彈窗 (『獲得15張票券！ [關閉]』) 正開啟中，代表不在主畫面！
-        if (findCenterRewardModalCloseButton(screenBitmap, items) != null) {
+        if (findCenterRewardModalCloseButton(screenBitmap, items) != null || isDimmedCenterModalOpen(screenBitmap)) {
             return false
         }
 

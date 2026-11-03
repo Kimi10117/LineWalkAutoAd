@@ -25,12 +25,13 @@ def test_v1_15_59_ticket_15_not_excluded_by_lottery_guard():
     assert '!hasExplicitTicketOrCoinModalTitle && items.any' in ocr_code
     assert 't.contains("5張抽")' in ocr_code
     assert 'hasPixelCloseButton' in ocr_code
+    assert 'findCenterRewardModalCloseButton(screenBitmap, items) != null || isDimmedCenterModalOpen(screenBitmap)' in ocr_code
 
 
-def test_v1_15_59_version_bump():
-    """Verify versionCode = 92 and versionName = 1.15.59."""
+def test_v1_15_60_version_bump():
+    """Verify versionCode = 93 and versionName = 1.15.60."""
     gradle_code = Path("app/build.gradle.kts").read_text(encoding="utf-8")
-    assert "versionCode = 92" in gradle_code
-    assert 'versionName = "1.15.59"' in gradle_code
+    assert "versionCode = 93" in gradle_code
+    assert 'versionName = "1.15.60"' in gradle_code
     workflow_code = Path(".github/workflows/build-apk.yml").read_text(encoding="utf-8")
-    assert "v1.15.59" in workflow_code
+    assert "v1.15.60" in workflow_code
