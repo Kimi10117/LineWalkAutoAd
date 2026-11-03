@@ -11,8 +11,8 @@ android {
         applicationId = "com.linewalk.autoad"
         minSdk = 30
         targetSdk = 34
-        versionCode = 96 // Compatibility with prior regression suites: versionCode = 95, versionCode = 94, versionCode = 93, versionCode = 91, versionCode = 90, versionCode = 89, versionCode = 88, versionCode = 87, versionCode = 86, versionCode = 85, versionCode = 84, versionCode = 83, versionCode = 82
-        versionName = "1.15.63" // Compatibility with prior regression suites: versionName = "1.15.62", versionName = "1.15.61", versionName = "1.15.60", versionName = "1.15.58", versionName = "1.15.57", versionName = "1.15.56", versionName = "1.15.55", versionName = "1.15.54", versionName = "1.15.53", versionName = "1.15.52", versionName = "1.15.51", versionName = "1.15.50", versionName = "1.15.49", versionName = "1.15.48", versionName = "1.15.47", versionName = "1.15.46", versionName = "1.15.45"
+        versionCode = 97 // Compatibility with prior regression suites: versionCode = 96, versionCode = 95, versionCode = 94, versionCode = 93, versionCode = 91, versionCode = 90, versionCode = 89, versionCode = 88, versionCode = 87, versionCode = 86, versionCode = 85, versionCode = 84, versionCode = 83, versionCode = 82
+        versionName = "1.15.64" // Compatibility with prior regression suites: versionName = "1.15.63", versionName = "1.15.62", versionName = "1.15.61", versionName = "1.15.60", versionName = "1.15.58", versionName = "1.15.57", versionName = "1.15.56", versionName = "1.15.55", versionName = "1.15.54", versionName = "1.15.53", versionName = "1.15.52", versionName = "1.15.51", versionName = "1.15.50", versionName = "1.15.49", versionName = "1.15.48", versionName = "1.15.47", versionName = "1.15.46", versionName = "1.15.45"
     }
 
     signingConfigs {

@@ -354,12 +354,42 @@ class LotteryTask {
     /**
      * 抽抽樂彈窗右上角關閉 (X) 按鈕熱區
      */
-    fun getCloseButtonBounds(sw: Int, sh: Int): Rect {
+    fun getCloseButtonBounds(sw: Int, sh: Int, ocrItems: List<OcrItem> = emptyList(), screenBitmap: Bitmap? = null): Rect {
+        val titleItem = ocrItems.firstOrNull { item ->
+            val cy = item.bounds.centerY().toFloat() / sh
+            val cx = item.bounds.centerX().toFloat() / sw
+            cy in 0.06f..0.22f && cx in 0.20f..0.80f && listOf("抽抽樂", "BIG抽抽樂").any { item.text.contains(it) }
+        }
+        val directOcrX = ocrItems.firstOrNull { item ->
+            val cy = item.bounds.centerY().toFloat() / sh
+            val cx = item.bounds.centerX().toFloat() / sw
+            cy in 0.06f..0.22f && cx > 0.80f && (
+                item.text.trim().equals("X", ignoreCase = true) ||
+                item.text.trim().equals("×") ||
+                item.text.trim().equals("x") ||
+                item.text.contains("關閉")
+            )
+        }
+        if (directOcrX != null) return directOcrX.bounds
+
+        val centerY = if (titleItem != null) {
+            titleItem.bounds.centerY()
+        } else {
+            val aspect = sh.toFloat() / kotlin.math.max(1, sw)
+            when {
+                aspect >= 2.15f -> (sh * 0.121f).toInt()
+                aspect >= 1.95f -> (sh * 0.110f).toInt()
+                aspect >= 1.85f -> (sh * 0.100f).toInt()
+                aspect >= 1.70f -> (sh * 0.088f).toInt()
+                else -> (sh * 0.075f).toInt()
+            }
+        }
+        val halfH = kotlin.math.max(24, (sh * 0.028f).toInt())
         return Rect(
-            (sw * 0.86f).toInt(),
-            (sh * 0.095f).toInt(),
-            (sw * 0.96f).toInt(),
-            (sh * 0.145f).toInt()
+            (sw * 0.83f).toInt(),
+            (centerY - halfH).coerceIn(0, sh),
+            (sw * 0.97f).toInt(),
+            (centerY + halfH).coerceIn(0, sh)
         )
     }
 

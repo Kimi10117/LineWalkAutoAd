@@ -191,14 +191,62 @@ class AutomationEngine private constructor(private val context: Context) {
     internal val bingoColumnRetryCount = mutableMapOf<Int, Int>()
     internal var bingoOpenCellRetryCount = 0
     internal var bingoDialogCloseAttempts = 0
+    internal var lotteryDialogCloseAttempts = 0
+    internal var missionDialogCloseAttempts = 0
     internal var subDialogOpenAttempts = 0
     private var currentPhaseEmptyTicks = 0
     internal var nonGameScreenTicks = 0
     internal var geoXConsecutiveClicks = 0
     private var externalAppTicks = 0
 
+    // 死鎖斷路器 (Circuit Breaker)
+    internal var sameTargetClickCount = 0
+    internal var lastTargetClickName: String? = null
+    internal var lastTargetClickRect: Rect? = null
+
     private val _uiStatus = MutableStateFlow(EngineUiStatus())
     val uiStatus: StateFlow<EngineUiStatus> = _uiStatus.asStateFlow()
+
+/**
+     * 連續點擊死鎖斷路器 (Circuit Breaker)：
+     * 當針對同一個按鈕/目標連續點擊達 3 次且畫面無響應時觸發！
+     * 若為關閉/取消類目標，發送 Android 系統返回鍵 (BACK) 強制關閉彈窗；
+     * 若為一般目標，自動重置並推進狀態以打破死鎖！
+     */
+    internal fun checkClickCircuitBreaker(
+        service: AutoAdAccessibilityService,
+        targetName: String,
+        targetRect: Rect
+    ): Boolean {
+        val isSameTarget = lastTargetClickName == targetName ||
+            (lastTargetClickRect != null &&
+             kotlin.math.abs(lastTargetClickRect!!.centerX() - targetRect.centerX()) < 40 &&
+             kotlin.math.abs(lastTargetClickRect!!.centerY() - targetRect.centerY()) < 40)
+
+        if (isSameTarget) {
+            sameTargetClickCount++
+            if (sameTargetClickCount >= 3) {
+                appendLog("[斷路器] 連續 $sameTargetClickCount 次點擊【$targetName】畫面無響應，啟動安全防死鎖斷路機制！")
+                val isCloseTarget = targetName.contains("關閉") ||
+                    targetName.contains("取消") ||
+                    targetName.contains("X") ||
+                    targetName.contains("OK")
+                if (isCloseTarget) {
+                    appendLog("[斷路器] 發送系統返回鍵 (BACK) 強制關閉卡死彈窗！")
+                    service.navigateBack()
+                }
+                sameTargetClickCount = 0
+                lastTargetClickName = null
+                lastTargetClickRect = null
+                return true
+            }
+        } else {
+            sameTargetClickCount = 1
+            lastTargetClickName = targetName
+            lastTargetClickRect = targetRect
+        }
+        return false
+    }
 
     fun evaluateForegroundPackage(
         fgPkg: String?,
@@ -751,6 +799,10 @@ class AutomationEngine private constructor(private val context: Context) {
         if (modalCloseBtn != null) {
             emptyTicksOnCurrentTab = 0
             bingoColumnRetryCount.clear()
+            if (checkClickCircuitBreaker(service, modalCloseBtn.first, modalCloseBtn.second)) {
+                delay(600)
+                return
+            }
             appendLog("[完成] 點擊領獎完成彈窗: ${modalCloseBtn.first}")
             FloatingOverlayService.clickWithOverlayPassthrough(modalCloseBtn.second) {
                 service.clickRect(modalCloseBtn.second)
@@ -801,7 +853,7 @@ class AutomationEngine private constructor(private val context: Context) {
             subDialogOpenAttempts = 0
             if (isBingoCompleted) {
                 bingoDialogCloseAttempts++
-                val closeBtn = bingoTask.findCloseButton(ocrItems, sw, sh) ?: bingoTask.getCloseButtonBounds(sw, sh)
+                val closeBtn = bingoTask.findCloseButton(ocrItems, sw, sh) ?: bingoTask.getCloseButtonBounds(sw, sh, ocrItems, screenBitmap)
                 appendLog("[賓果] 每日賓果已完成，點擊右上角 (X) 關閉視窗 (嘗試: $bingoDialogCloseAttempts)")
                 FloatingOverlayService.clickWithOverlayPassthrough(closeBtn) {
                     service.clickRect(closeBtn)
@@ -823,7 +875,8 @@ class AutomationEngine private constructor(private val context: Context) {
             nonGameScreenTicks = 0
             subDialogOpenAttempts = 0
             if (isLotteryCompleted) {
-                val closeBtn = lotteryTask.getCloseButtonBounds(sw, sh)
+                // lotteryTask.getCloseButtonBounds(sw, sh)
+            val closeBtn = lotteryTask.getCloseButtonBounds(sw, sh, ocrItems, screenBitmap)
                 appendLog("[抽抽樂] 抽抽樂已完成，點擊右上角 (X) 關閉視窗")
                 FloatingOverlayService.clickWithOverlayPassthrough(closeBtn) {
                     service.clickRect(closeBtn)
@@ -840,7 +893,7 @@ class AutomationEngine private constructor(private val context: Context) {
             nonGameScreenTicks = 0
             subDialogOpenAttempts = 0
             if (isMissionCompleted) {
-                val closeBtn = missionTask.getCloseButtonBounds(sw, sh)
+                val closeBtn = missionTask.getCloseButtonBounds(sw, sh, ocrItems, screenBitmap)
                 FloatingOverlayService.clickWithOverlayPassthrough(closeBtn) {
                     service.clickRect(closeBtn)
                 }
@@ -864,7 +917,7 @@ class AutomationEngine private constructor(private val context: Context) {
             val hasGifts = receiveGiftTask.findNextClaimGiftButton(screenBitmap, ocrItems) != null
             if (isReceiveGiftCompleted && !hasGifts) {
                 currentPhase = getNextPhase(PatrolPhase.RECEIVE_GIFT)
-                val closeBtn = receiveGiftTask.getCloseButtonBounds(sw, sh)
+                val closeBtn = receiveGiftTask.getCloseButtonBounds(sw, sh, ocrItems, screenBitmap)
                 appendLog("[禮物] 禮物已領取完畢，點擊右上角 (X) 關閉視窗")
                 FloatingOverlayService.clickWithOverlayPassthrough(closeBtn) {
                     service.clickRect(closeBtn)
@@ -1195,7 +1248,7 @@ class AutomationEngine private constructor(private val context: Context) {
         isBingoCompleted = true
         // 保持 claimedBingoColumns 鎖定，不在此清空，防止關閉後立即重新開格誤觸！
         appendLog("[完成]【每日賓果】開格已完成/冷卻且無連線獎勵可領，點擊右上角 (X) 關閉視窗")
-        val closeBtn = bingoTask.findCloseButton(ocrItems, sw, sh) ?: bingoTask.getCloseButtonBounds(sw, sh)
+        val closeBtn = bingoTask.findCloseButton(ocrItems, sw, sh) ?: bingoTask.getCloseButtonBounds(sw, sh, ocrItems, screenBitmap)
         FloatingOverlayService.clickWithOverlayPassthrough(closeBtn) {
             service.clickRect(closeBtn)
         }
@@ -1350,10 +1403,18 @@ class AutomationEngine private constructor(private val context: Context) {
             currentPhaseEmptyTicks = 0
             hasClickedLotteryAdReward = false
             isLotteryCompleted = true
-            appendLog("[完成]【抽抽樂】已無可抽項目 (50抽已滿或票券不足，免費抽已完成，且絕不點5張)，關閉視窗")
-            val closeBtn = lotteryTask.getCloseButtonBounds(sw, sh)
-            FloatingOverlayService.clickWithOverlayPassthrough(closeBtn) {
-                service.clickRect(closeBtn)
+            lotteryDialogCloseAttempts++
+            appendLog("[完成]【抽抽樂】已無可抽項目 (50抽已滿或票券不足，免費抽已完成，且絕不點5張)，關閉視窗 (嘗試:$lotteryDialogCloseAttempts/2)")
+            if (lotteryDialogCloseAttempts >= 2) {
+                appendLog("[提示]【抽抽樂】點擊關閉視窗無響應，發送系統返回鍵 (BACK) 強制關閉！")
+                service.navigateBack()
+                lotteryDialogCloseAttempts = 0
+            } else {
+                // lotteryTask.getCloseButtonBounds(sw, sh)
+            val closeBtn = lotteryTask.getCloseButtonBounds(sw, sh, ocrItems, screenBitmap)
+                FloatingOverlayService.clickWithOverlayPassthrough(closeBtn) {
+                    service.clickRect(closeBtn)
+                }
             }
             currentPhase = getNextPhase(PatrolPhase.LOTTERY)
             updateDetail("[完成] 抽抽樂已完成，準備進入下一項...", "[完成] 抽抽樂完成")
@@ -1410,7 +1471,7 @@ class AutomationEngine private constructor(private val context: Context) {
         isMissionCompleted = true
         checkedMissionTabs.clear()
         appendLog("[完成]【任務】所有現存分頁（${availableTabs.joinToString()}）皆已檢查完畢，關閉視窗並推進至下一階段！")
-        val closeBtn = missionTask.getCloseButtonBounds(sw, sh)
+        val closeBtn = missionTask.getCloseButtonBounds(sw, sh, ocrItems, screenBitmap)
         FloatingOverlayService.clickWithOverlayPassthrough(closeBtn) {
             service.clickRect(closeBtn)
         }
@@ -1431,7 +1492,7 @@ class AutomationEngine private constructor(private val context: Context) {
             currentPhaseEmptyTicks = 0
             isReceiveGiftCompleted = true
             appendLog("[禮物]【接收禮物】尚無收到任何好友禮物，點擊右上角 (X) 關閉視窗")
-            val closeBtn = receiveGiftTask.getCloseButtonBounds(sw, sh)
+            val closeBtn = receiveGiftTask.getCloseButtonBounds(sw, sh, ocrItems, screenBitmap)
             FloatingOverlayService.clickWithOverlayPassthrough(closeBtn) {
                 service.clickRect(closeBtn)
             }
@@ -1485,7 +1546,7 @@ class AutomationEngine private constructor(private val context: Context) {
         currentPhaseEmptyTicks = 0
         isReceiveGiftCompleted = true
         appendLog("[完成]【接收禮物】全部禮物領取完畢，點擊右上角 (X) 關閉視窗")
-        val closeBtn = receiveGiftTask.getCloseButtonBounds(sw, sh)
+        val closeBtn = receiveGiftTask.getCloseButtonBounds(sw, sh, ocrItems, screenBitmap)
         FloatingOverlayService.clickWithOverlayPassthrough(closeBtn) {
             service.clickRect(closeBtn)
         }
@@ -1795,18 +1856,22 @@ class AutomationEngine private constructor(private val context: Context) {
         val hasGamePageFeatures = ocrItems.any { item ->
             val t = item.text.replace(" ", "")
             t.contains("秘寶挖挖哇") || t.contains("數獨達人") || t.contains("接龍高手") ||
-            t.contains("簡單賺金幣") || t.contains("POINTSGAME", ignoreCase = true)
+            t.contains("簡單賺金幣") || t.contains("POINTSGAME", ignoreCase = true) ||
+            t.contains("輕鬆賺") || t.contains("開始遊玩")
         }
         if (activeTab == MainTab.GAME || hasGamePageFeatures) {
-            val moveTabRect = getTabRect(MainTab.MOVE, sw, sh, ocrItems, screenBitmap)
-            appendLog("[切換] 目前位於【遊戲】分頁（無日常任務圖示），先切換回【首頁(移動)】以開啟【${currentPhase.title}】...")
-            FloatingOverlayService.clickWithOverlayPassthrough(moveTabRect) {
-                service.clickRect(moveTabRect)
+            tabSwitchRetries++
+            val targetTab = if (tabSwitchRetries >= 2) MainTab.STEP else MainTab.MOVE
+            val tabRect = getTabRect(targetTab, sw, sh, ocrItems, screenBitmap)
+            appendLog("[切換] 目前位於【遊戲】分頁（無日常任務圖示），切換至【${targetTab.tabName}】以開啟【${currentPhase.title}】(嘗試:$tabSwitchRetries)...")
+            FloatingOverlayService.clickWithOverlayPassthrough(tabRect) {
+                service.clickRect(tabRect)
             }
-            updateDetail("[切換] 切換回【首頁】準備開啟${currentPhase.title}...", "[切換] 切換回首頁...")
+            updateDetail("[切換] 切換至【${targetTab.shortLabel}】準備開啟${currentPhase.title}...", "[切換] 切換分頁...")
             delay(600)
             return false
         }
+        tabSwitchRetries = 0
         return true
     }
 
@@ -1823,6 +1888,16 @@ class AutomationEngine private constructor(private val context: Context) {
                 val remainingTabs = enabledTabs.filter { it !in confirmedEmptyTabs }
 
                 if (remainingTabs.isEmpty()) {
+                    // Phase Barrier：推進下一階段前，必須確認畫面上無任何殘留領獎彈窗或提示彈窗！
+                    val modalClose = ocrRecognizer.findCenterRewardModalCloseButton(screenBitmap, ocrItems)
+                    if (modalClose != null) {
+                        appendLog("[領獎] 推進下一階段前，優先關閉殘留領獎彈窗: ${modalClose.first}")
+                        FloatingOverlayService.clickWithOverlayPassthrough(modalClose.second) {
+                            service.clickRect(modalClose.second)
+                        }
+                        updateDetail("[領獎] 關閉領獎彈窗中...", "[領獎] 關閉領獎彈窗...")
+                        return
+                    }
                     val tabListStr = enabledTabs.joinToString("➔") { it.shortLabel }
                     appendLog("[成功] 四大分頁 ($tabListStr) 常規獎勵皆已領取完畢！(共完成 ${_uiStatus.value.adsCompletedCount} 次)")
                     currentPhase = getNextPhase(PatrolPhase.MAIN_TABS)
@@ -2651,14 +2726,15 @@ class AutomationEngine private constructor(private val context: Context) {
                         currentPhase = getNextPhase(PatrolPhase.BINGO)
                         appendLog("[逾時] 每日賓果廣告載入逾時，關閉視窗並切換至下一項")
                     } else if (lotteryTask.isLotteryDialogOpen(ocrItems, sh)) {
-                        val closeBtn = lotteryTask.getCloseButtonBounds(sw, sh)
+                        // lotteryTask.getCloseButtonBounds(sw, sh)
+            val closeBtn = lotteryTask.getCloseButtonBounds(sw, sh, ocrItems, screenBitmap)
                         FloatingOverlayService.clickWithOverlayPassthrough(closeBtn) {
                             service.clickRect(closeBtn)
                         }
                         currentPhase = getNextPhase(PatrolPhase.LOTTERY)
                         appendLog("[逾時] 抽抽樂廣告載入逾時，關閉視窗並切換至下一項")
                     } else if (missionTask.isMissionDialogOpen(ocrItems, sh, screenBitmap)) {
-                        val closeBtn = missionTask.getCloseButtonBounds(sw, sh)
+                        val closeBtn = missionTask.getCloseButtonBounds(sw, sh, ocrItems, screenBitmap)
                         FloatingOverlayService.clickWithOverlayPassthrough(closeBtn) {
                             service.clickRect(closeBtn)
                         }

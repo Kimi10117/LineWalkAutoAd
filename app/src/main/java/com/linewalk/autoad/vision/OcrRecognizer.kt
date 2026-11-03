@@ -198,23 +198,51 @@ class OcrRecognizer {
             return null
         }
 
-        // 若處於抽抽樂中獎結果畫面（中獎囉、中獎、分享給好友）或抽抽樂主面板（查看獎項一覽、完成任務、即可獲得、大量金幣、5張抽1次），
-        // 絕不觸發中央領獎彈窗關閉（注意：嚴禁使用單獨 t.contains("5張")，因為步數領獎彈窗標題『獲得15張票券！』含『15張』會被誤殺！）
+        // 00A. 嚴格一票否決：若畫面為【遊戲】分頁（街機遊戲畫面、遊戲挑戰清單），絕非中央領獎彈窗！
+        // 街機台深色背景容易被誤判為黑幕遮罩，導致對著下方遊戲卡片連續空點死鎖
+        val isGameTabScreen = items.any { item ->
+            val t = item.text.replace(" ", "")
+            t.contains("秘寶挖挖哇") ||
+            t.contains("數獨達人") ||
+            t.contains("接龍高手") ||
+            t.contains("POINTSGAME", ignoreCase = true) ||
+            t.contains("簡單賺金幣") ||
+            t.contains("輕鬆賺") ||
+            t.contains("開始遊玩")
+        }
+        if (isGameTabScreen) {
+            return null
+        }
+
+        // 00B. 嚴格一票否決：若處於抽抽樂中獎結果畫面或抽抽樂主面板（紅橘箱子、完成任務即可獲得大量金幣、查看獎項等），
+        // 絕不觸發中央領獎彈窗關閉，防止誤點下方黃色「完成任務 即可獲得 大量金幣!!」廣告橫幅！
         val hasExplicitTicketOrCoinModalTitle = items.any { item ->
             val cy = item.bounds.centerY().toFloat() / sh
             val t = item.text.replace(" ", "")
-            cy in 0.20f..0.42f && (t.contains("張票券！") || t.contains("張票券!") || t.contains("獲得15張") || t.contains("獲得10張"))
+            cy in 0.20f..0.42f && (t.contains("張票券！") || t.contains("張票券!") || t.contains("獲得15張") || t.contains("獲得10張") || t.contains("枚金幣！") || t.contains("枚金幣!"))
         }
-        val isLotteryResultScreen = !hasExplicitTicketOrCoinModalTitle && items.any { item ->
+        val isLotteryPanelOrResult = !hasExplicitTicketOrCoinModalTitle && items.any { item ->
             val cy = item.bounds.centerY().toFloat() / sh
             val t = item.text.replace(" ", "")
             t.contains("中獎囉") || t.contains("中獎") || t.contains("分享給好友") ||
             t.contains("查看獎項") || t.contains("獎項一覽") ||
             t.contains("完成任務") || t.contains("即可獲得") || t.contains("大量金幣") ||
-            t.contains("5張抽") || t.contains("50張抽") ||
+            t.contains("5張抽") || t.contains("50張抽") || t.contains("回復還需") ||
+            (cy in 0.08f..0.22f && (t == "抽抽樂" || t.contains("抽抽樂"))) ||
             (cy in 0.60f..0.76f && (t.contains("x1", ignoreCase = true) || t.contains("1張")) && !t.contains("金幣") && !t.contains("票券"))
         }
-        if (isLotteryResultScreen) {
+        if (isLotteryPanelOrResult) {
+            return null
+        }
+
+        // 00C. 嚴格一票否決：每日賓果與任務視窗
+        val isOtherSubDialog = !hasExplicitTicketOrCoinModalTitle && items.any { item ->
+            val cy = item.bounds.centerY().toFloat() / sh
+            val t = item.text.replace(" ", "")
+            (cy in 0.08f..0.22f && (t.contains("每日賓果") || t.contains("今日賓果") || t.contains("任務"))) ||
+            t.contains("距離下次抽選") || t.contains("開啟賓果格") || t.contains("特別任務")
+        }
+        if (isOtherSubDialog) {
             return null
         }
 
@@ -323,11 +351,12 @@ class OcrRecognizer {
             false
         }
 
-        // 備援：確認有領獎標題文字（且具備半透明遮罩或完整領獎標題驚嘆號），或具備半透明遮罩且像素級確認底部有白底黑字 [關閉] 膠囊鈕
-        if ((hasRewardTitleOcr && (isDimmedModal || items.any {
+        // 備援：【嚴格雙重驗證】必須確認有領獎標題文字（張票券/枚金幣）且（具備半透明遮罩或像素級白底黑字膠囊鈕）！
+        // 絕對禁止在無領獎標題 OCR 的情況下僅靠像素遮罩盲猜 fallback，防止在遊戲分頁或抽抽樂主畫面空點死鎖！
+        if (hasRewardTitleOcr && (isDimmedModal || hasPixelCloseButton || items.any {
                 val s = it.text.replace(" ", "")
                 s.contains("張票券！") || s.contains("枚金幣！") || s.contains("張票券!") || s.contains("枚金幣!")
-            })) || (isDimmedModal && hasPixelCloseButton)
+            })
         ) {
             val fallbackCloseRect = Rect(
                 (sw * 0.20f).toInt(),
@@ -672,24 +701,21 @@ class OcrRecognizer {
             t.contains("連線逾時") ||
             t.contains("連線錯誤")
         }
-        if (!hasErrorText) return null
 
-        // 1. OCR 定位中下半部 (y in 0.60f..0.76f) 的「關閉 / 確認 / 確定」按鈕
+        // 1. OCR 定位中下半部 (y in 0.58f..0.76f) 的「關閉 / 確認 / 確定」按鈕
         val ocrClose = items.firstOrNull { item ->
             val cy = item.bounds.centerY().toFloat() / sh
             val cx = item.bounds.centerX().toFloat() / sw
             val t = item.text.trim()
-            cy in 0.60f..0.76f && cx in 0.20f..0.80f && (
+            cy in 0.58f..0.76f && cx in 0.20f..0.80f && (
                 t == "關閉" || t.contains("關閉") ||
                 t == "確認" || t == "確定" || t.equals("OK", ignoreCase = true)
             )
         }
-        if (ocrClose != null) {
-            return "錯誤彈窗[關閉]OCR" to ocrClose.bounds
-        }
 
-        // 2. 幾何像素綠色膠囊探測 (y in 0.63f..0.71f, x in 0.20f..0.80f, 鮮綠色 g > 140 && g > r + 35 && g > b + 35)
-        var greenPts = 0
+        // 2. 幾何像素綠色熊大卡片與綠色膠囊探測
+        // 下半部 (y in 0.63..0.71) 鮮綠色橢圓按鈕 (g > 140 && g - r > 35 && g - b > 35)
+        var greenButtonPts = 0
         val y1 = (sh * 0.63f).toInt().coerceIn(0, sh - 1)
         val y2 = (sh * 0.71f).toInt().coerceIn(y1 + 1, sh)
         val x1 = (sw * 0.20f).toInt().coerceIn(0, sw - 1)
@@ -702,12 +728,42 @@ class OcrRecognizer {
                 val g = (c shr 8) and 0xFF
                 val b = c and 0xFF
                 if (g > 140 && (g - r > 35) && (g - b > 35)) {
-                    greenPts++
+                    greenButtonPts++
                 }
             }
         }
 
-        if (greenPts >= 40) {
+        // 上半部 (y in 0.38..0.52) 綠色熊大卡片背景
+        var greenCardPts = 0
+        val cy1 = (sh * 0.38f).toInt().coerceIn(0, sh - 1)
+        val cy2 = (sh * 0.52f).toInt().coerceIn(cy1 + 1, sh)
+        for (y in cy1 until cy2 step 4) {
+            for (x in x1 until x2 step 4) {
+                val c = screenBitmap.getPixel(x, y)
+                val r = (c shr 16) and 0xFF
+                val g = (c shr 8) and 0xFF
+                val b = c and 0xFF
+                if (g > 140 && (g - r > 30) && (g - b > 30)) {
+                    greenCardPts++
+                }
+            }
+        }
+
+        val hasGreenModalPixelFeatures = greenButtonPts >= 30 && greenCardPts >= 35
+
+        if (hasErrorText) {
+            if (ocrClose != null) return "錯誤彈窗[關閉]OCR" to ocrClose.bounds
+            if (greenButtonPts >= 25) {
+                val fallbackRect = Rect(
+                    (sw * 0.15f).toInt(),
+                    (sh * 0.64f).toInt(),
+                    (sw * 0.85f).toInt(),
+                    (sh * 0.70f).toInt()
+                )
+                return "錯誤彈窗綠色[關閉]鈕" to fallbackRect
+            }
+        } else if (hasGreenModalPixelFeatures) {
+            if (ocrClose != null) return "錯誤彈窗[關閉]OCR" to ocrClose.bounds
             val fallbackRect = Rect(
                 (sw * 0.15f).toInt(),
                 (sh * 0.64f).toInt(),

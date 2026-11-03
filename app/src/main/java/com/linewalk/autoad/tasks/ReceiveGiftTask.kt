@@ -435,9 +435,26 @@ class ReceiveGiftTask {
     /**
      * 禮物彈窗右上角關閉 (X) 按鈕熱區 (校準至實機中心 x ≈ 0.890f, y ≈ 0.231f)
      */
-    fun getCloseButtonBounds(sw: Int, sh: Int): Rect {
+    fun getCloseButtonBounds(sw: Int, sh: Int, ocrItems: List<OcrItem> = emptyList(), screenBitmap: Bitmap? = null): Rect {
+        val titleItem = ocrItems.firstOrNull { item ->
+            val cy = item.bounds.centerY().toFloat() / sh
+            val cx = item.bounds.centerX().toFloat() / sw
+            cy in 0.15f..0.30f && cx in 0.20f..0.80f && listOf("獲得禮物", "禮物", "好友禮物").any { item.text.contains(it) }
+        }
+        val directOcrX = ocrItems.firstOrNull { item ->
+            val cy = item.bounds.centerY().toFloat() / sh
+            val cx = item.bounds.centerX().toFloat() / sw
+            cy in 0.15f..0.32f && cx > 0.80f && (
+                item.text.trim().equals("X", ignoreCase = true) ||
+                item.text.trim().equals("×") ||
+                item.text.trim().equals("x") ||
+                item.text.contains("關閉")
+            )
+        }
+        if (directOcrX != null) return directOcrX.bounds
+
         val centerX = (sw * 0.890f).toInt()
-        val centerY = (sh * 0.231f).toInt()
+        val centerY = titleItem?.bounds?.centerY() ?: (sh * 0.231f).toInt()
         val halfW = (sw * 0.060f).toInt()
         val halfH = (sh * 0.025f).toInt()
         return Rect(

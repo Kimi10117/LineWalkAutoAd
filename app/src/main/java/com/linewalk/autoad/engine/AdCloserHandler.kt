@@ -153,12 +153,25 @@ class AdCloserHandler(
             )
         }
 
+        val isSocialAppPkg = fgPkg != null && (
+            fgPkg.contains("facebook", ignoreCase = true) ||
+            fgPkg.contains("instagram", ignoreCase = true)
+        )
         val isSocialLandingPage = ocrItems.any { item ->
             val t = item.text.replace(" ", "")
             val cy = item.bounds.centerY().toFloat() / sh
-            (cy < 0.16f && (t.contains("SOGO") || t.contains("Facebook") || t.contains("FB") || t.contains("Reel") || t.contains("粉絲專頁") || item.text.trim() == "<" || item.text.trim() == "‹")) ||
-            (cy > 0.70f && (t.contains("讚") || t.contains("留言") || t.contains("分享") || t.contains("追蹤") || t.contains("逛逛商店") || t.contains("發送訊息")))
-        }
+            (cy < 0.20f && (
+                t.contains("SOGO") || t.contains("Facebook") || t.contains("FB") ||
+                t.contains("Reel") || t.contains("粉絲專頁") || t.contains("相片") ||
+                t.contains("貼文") || t.contains("活動") ||
+                item.text.trim() == "<" || item.text.trim() == "‹"
+            )) ||
+            (cy > 0.65f && (
+                t.contains("讚") || t.contains("留言") || t.contains("分享") ||
+                t.contains("追蹤") || t.contains("逛逛商店") || t.contains("發送訊息") ||
+                t.contains("限時動態") || t.contains("瞭解詳情")
+            ))
+        } || (isSocialAppPkg && socialLandingPageTicks >= 1)
 
         if (isExternal || hasBrowserTitle) {
             hasAdActuallyShown = true
@@ -179,6 +192,7 @@ class AdCloserHandler(
                 blacklistedPoints.add(badPt)
                 lastClickedPoint = null
             }
+            // 社群落地頁極速返回：第 1 次按 Back 鍵，若仍停留在社群則直接 bringAppToFront 拉回散步趣
             if (socialLandingPageTicks >= 2) {
                 service.bringAppToFront("com.linecorp.LGWKTW")
                 socialLandingPageTicks = 0
