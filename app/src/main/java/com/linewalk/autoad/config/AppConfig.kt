@@ -124,16 +124,18 @@ class AppConfig(context: Context) {
         )
 
         val EXTERNAL_SOCIAL_APP_PACKAGES = setOf(
-            "com.facebook.katana",
             "com.facebook.orca",
             "com.facebook.lite",
             "com.facebook.mlite",
             "com.instagram.android",
-            "com.threads.android"
+            "com.threads.android",
+            "com.twitter.android",
+            "com.x.android"
         )
 
         fun isExternalSocialAppPackage(pkg: String?): Boolean {
             if (pkg.isNullOrBlank()) return false
+            if (isAdPackage(pkg)) return false
             return pkg in EXTERNAL_SOCIAL_APP_PACKAGES
         }
 

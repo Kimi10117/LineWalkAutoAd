@@ -190,6 +190,7 @@ class AutomationEngine private constructor(private val context: Context) {
     internal val claimedBingoColumns = mutableSetOf<Int>()
     internal val bingoColumnRetryCount = mutableMapOf<Int, Int>()
     internal var bingoOpenCellRetryCount = 0
+    internal var bingoDialogCloseAttempts = 0
     internal var subDialogOpenAttempts = 0
     private var currentPhaseEmptyTicks = 0
     internal var nonGameScreenTicks = 0
@@ -257,6 +258,7 @@ class AutomationEngine private constructor(private val context: Context) {
         claimedBingoColumns.clear()
         bingoColumnRetryCount.clear()
         bingoOpenCellRetryCount = 0
+        bingoDialogCloseAttempts = 0
         subDialogOpenAttempts = 0
         isLotteryCompleted = false
         hasClickedLotteryAdReward = false
@@ -350,13 +352,25 @@ class AutomationEngine private constructor(private val context: Context) {
         var currentState = _uiStatus.value.state
         val fgPkg = service.getForegroundPackageName()
 
-        // 0. 第三方官方廣告容器優先處理 (Meta Audience Network, Google AdMob, Unity, AppLovin, Chrome Custom Tabs 等)：
+        // 0. 第三方官方廣告容器優先處理 (Meta Audience Network com.facebook.katana, Google AdMob, Unity, AppLovin, Chrome Custom Tabs 等)：
         // 當畫面處於任何合法廣告容器套件時，無條件判定為合法廣告播放，
         // 絕對不可判定為「外部應用」而發送返回鍵提早退出！
         // 若當前狀態尚未轉入 AD_WATCHING，立即無縫切換至 AD_WATCHING 並立即於本 Tick 執行廣告監控！
-        // 0A. 嚴格攔截外部社群應用程式（如誤跳轉至 Facebook App 粉絲專頁 com.facebook.katana / Instagram）：
-        // 一旦跳出至獨立 Facebook App，立即發送系統返回鍵退出並拉回《LINE 散步趣》，絕不留在 FB 內滑動或等待 48 秒！
-        if (AppConfig.isExternalSocialAppPackage(fgPkg)) {
+        if (AppConfig.isAdPackage(fgPkg)) {
+            nonGameScreenTicks = 0
+            if (currentState != EngineState.AD_WATCHING) {
+                appendLog("[廣告] 偵測到第三方廣告容器 ($fgPkg)，自動無縫切換至廣告監控模式")
+                adCloserHandler.onEnterAdMode()
+                transitionTo(
+                    newState = EngineState.AD_WATCHING,
+                    detail = "已進入廣告畫面 ($fgPkg)，安全監控中...",
+                    safeOverlayText = "[廣告] 監控中..."
+                )
+                currentState = EngineState.AD_WATCHING
+            }
+        } else if (AppConfig.isExternalSocialAppPackage(fgPkg)) {
+            // 0A. 嚴格攔截非廣告容器之外部社群應用程式（如誤跳轉至獨立 Instagram / Threads / Messenger）：
+            // 一旦跳出至外部社群 App，立即發送系統返回鍵退出並拉回《LINE 散步趣》！
             externalAppTicks++
             appendLog("[防護] 偵測到跳轉外部社群應用 ($fgPkg)，立即發送返回鍵回到散步趣 (連續 ${externalAppTicks} 次)")
             adCloserHandler.markRecentRedirect()
@@ -375,20 +389,6 @@ class AutomationEngine private constructor(private val context: Context) {
                 )
             }
             return
-        }
-
-        if (AppConfig.isAdPackage(fgPkg)) {
-            nonGameScreenTicks = 0
-            if (currentState != EngineState.AD_WATCHING) {
-                appendLog("[廣告] 偵測到第三方廣告容器 ($fgPkg)，自動無縫切換至廣告監控模式")
-                adCloserHandler.onEnterAdMode()
-                transitionTo(
-                    newState = EngineState.AD_WATCHING,
-                    detail = "已進入廣告畫面 ($fgPkg)，安全監控中...",
-                    safeOverlayText = "[廣告] 監控中..."
-                )
-                currentState = EngineState.AD_WATCHING
-            }
         }
 
         val guardDecision = evaluateForegroundPackage(
@@ -789,10 +789,16 @@ class AutomationEngine private constructor(private val context: Context) {
             nonGameScreenTicks = 0
             subDialogOpenAttempts = 0
             if (isBingoCompleted) {
-                val closeBtn = bingoTask.getCloseButtonBounds(sw, sh)
-                appendLog("[賓果] 每日賓果已完成，點擊右上角 (X) 關閉視窗")
+                bingoDialogCloseAttempts++
+                val closeBtn = bingoTask.findCloseButton(ocrItems, sw, sh) ?: bingoTask.getCloseButtonBounds(sw, sh)
+                appendLog("[賓果] 每日賓果已完成，點擊右上角 (X) 關閉視窗 (嘗試: $bingoDialogCloseAttempts)")
                 FloatingOverlayService.clickWithOverlayPassthrough(closeBtn) {
                     service.clickRect(closeBtn)
+                }
+                if (bingoDialogCloseAttempts >= 2) {
+                    appendLog("[賓果] 連續點擊關閉視窗無回應，發送安全返回鍵關閉賓果彈窗")
+                    service.safeNavigateBack(allowInGame = true)
+                    bingoDialogCloseAttempts = 0
                 }
                 delay(350)
                 return
@@ -1174,10 +1180,11 @@ class AutomationEngine private constructor(private val context: Context) {
 
         currentPhaseEmptyTicks = 0
         bingoOpenCellRetryCount = 0
+        bingoDialogCloseAttempts = 1
         isBingoCompleted = true
         // 保持 claimedBingoColumns 鎖定，不在此清空，防止關閉後立即重新開格誤觸！
         appendLog("[完成]【每日賓果】開格已完成/冷卻且無連線獎勵可領，點擊右上角 (X) 關閉視窗")
-        val closeBtn = bingoTask.getCloseButtonBounds(sw, sh)
+        val closeBtn = bingoTask.findCloseButton(ocrItems, sw, sh) ?: bingoTask.getCloseButtonBounds(sw, sh)
         FloatingOverlayService.clickWithOverlayPassthrough(closeBtn) {
             service.clickRect(closeBtn)
         }
@@ -2088,6 +2095,7 @@ class AutomationEngine private constructor(private val context: Context) {
         claimedBingoColumns.clear()
         bingoColumnRetryCount.clear()
         bingoOpenCellRetryCount = 0
+        bingoDialogCloseAttempts = 0
         subDialogOpenAttempts = 0
         isLotteryCompleted = false
         hasClickedLotteryAdReward = false
@@ -2154,6 +2162,7 @@ class AutomationEngine private constructor(private val context: Context) {
             claimedBingoColumns.clear()
             bingoColumnRetryCount.clear()
             bingoOpenCellRetryCount = 0
+            bingoDialogCloseAttempts = 0
             isLotteryCompleted = false
             hasClickedLotteryAdReward = false
             lotteryResultRewardWaitTicks = 0

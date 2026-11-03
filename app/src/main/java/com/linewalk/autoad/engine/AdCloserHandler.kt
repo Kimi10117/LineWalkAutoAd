@@ -49,6 +49,7 @@ class AdCloserHandler(
     private var adChoicesDismissCount: Int = 0
     private var redirectCount: Int = 0
     private var hasRecentRedirect: Boolean = false
+    private var socialLandingPageTicks: Int = 0
     private var wasAdLoading: Boolean = false
     private var hasAdActuallyShown: Boolean = false
     private var adLoadingTicks: Int = 0
@@ -67,6 +68,7 @@ class AdCloserHandler(
             adChoicesDismissCount = 0
             redirectCount = 0
             hasRecentRedirect = false
+            socialLandingPageTicks = 0
             wasAdLoading = false
             hasAdActuallyShown = false
             adLoadingTicks = 0
@@ -154,8 +156,8 @@ class AdCloserHandler(
         val isSocialLandingPage = ocrItems.any { item ->
             val t = item.text.replace(" ", "")
             val cy = item.bounds.centerY().toFloat() / sh
-            (cy < 0.15f && (t.contains("SOGO") || t.contains("Facebook") || t.contains("Reel") || item.text.trim() == "<")) ||
-            (cy > 0.80f && (t.contains("讚") || t.contains("留言") || t.contains("分享") || t.contains("追蹤") || t.contains("逛逛商店")))
+            (cy < 0.16f && (t.contains("SOGO") || t.contains("Facebook") || t.contains("FB") || t.contains("Reel") || t.contains("粉絲專頁") || item.text.trim() == "<" || item.text.trim() == "‹")) ||
+            (cy > 0.70f && (t.contains("讚") || t.contains("留言") || t.contains("分享") || t.contains("追蹤") || t.contains("逛逛商店") || t.contains("發送訊息")))
         }
 
         if (isExternal || hasBrowserTitle) {
@@ -172,12 +174,20 @@ class AdCloserHandler(
         if (isSocialLandingPage) {
             hasAdActuallyShown = true
             markRecentRedirect()
+            socialLandingPageTicks++
             lastClickedPoint?.let { badPt ->
                 blacklistedPoints.add(badPt)
                 lastClickedPoint = null
             }
-            service.navigateBack()
+            if (socialLandingPageTicks >= 2) {
+                service.bringAppToFront("com.linecorp.LGWKTW")
+                socialLandingPageTicks = 0
+            } else {
+                service.navigateBack()
+            }
             return AdStepResult.RedirectRecovered("FacebookLandingPage")
+        } else {
+            socialLandingPageTicks = 0
         }
 
 

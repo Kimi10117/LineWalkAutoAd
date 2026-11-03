@@ -136,11 +136,30 @@ class BingoTask {
     fun isBingoCoolingDown(ocrItems: List<OcrItem>): Boolean {
         return ocrItems.any { item ->
             val t = item.text.replace(" ", "")
-            (t.contains("距離下次") && (t.contains("抽選") || t.contains("還有") || t.contains("分"))) ||
-            t.contains("距離下次抽選還有") ||
-            (t.contains("下次抽選") && t.contains("還有")) ||
-            (t.contains("抽選還有") && (t.contains("分") || t.contains("秒")))
+            t.contains("距離下次") || t.contains("下次抽選") || t.contains("下次抽") ||
+            t.contains("抽選還有") || t.contains("抽籤還有") || t.contains("30分鐘啟動") ||
+            (t.contains("距離") && (t.contains("抽選") || t.contains("還有") || t.contains("分") || t.contains("秒"))) ||
+            (t.contains("分鐘") && t.contains("秒") && (t.contains("還有") || t.contains("距離") || t.contains("抽") || t.contains("下次"))) ||
+            (t.contains("還有") && (t.contains("分") || t.contains("秒")) && (t.contains("抽") || t.contains("選")))
         }
+    }
+
+    /**
+     * 尋找每日賓果右上角關閉 (X) 按鈕 OCR
+     */
+    fun findCloseButton(ocrItems: List<OcrItem>, sw: Int, sh: Int): Rect? {
+        val ocrX = ocrItems.firstOrNull { item ->
+            val cy = item.bounds.centerY().toFloat() / sh
+            val cx = item.bounds.centerX().toFloat() / sw
+            val t = item.text.trim()
+            cy in 0.08f..0.18f && cx > 0.80f && (
+                t.equals("X", ignoreCase = true) ||
+                t.equals("×") ||
+                t.equals("x") ||
+                t.contains("關閉")
+            )
+        }
+        return ocrX?.bounds
     }
 
     /**

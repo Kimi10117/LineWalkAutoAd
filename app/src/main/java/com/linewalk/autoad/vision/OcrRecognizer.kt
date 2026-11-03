@@ -103,29 +103,29 @@ class OcrRecognizer {
         val sh = screenBitmap.height
         if (sw < 100 || sh < 100) return false
 
-        // 1. 檢查底部導覽列 (y = 0.91..0.95, x = 0.15..0.85) 是否被半透明黑幕壓暗
-        var navLumSum = 0f
-        var navSamples = 0
-        val navYStart = (sh * 0.91f).toInt()
-        val navYEnd = (sh * 0.95f).toInt()
-        val navXStart = (sw * 0.15f).toInt()
-        val navXEnd = (sw * 0.85f).toInt()
-        var y = navYStart
-        while (y <= navYEnd) {
-            var x = navXStart
-            while (x <= navXEnd) {
+        // 1. 檢查中央兩側遊戲畫布邊緣 (x in 0.04..0.12, y in 0.45..0.55) 是否被半透明黑幕壓暗 (平均亮度 < 180f)
+        var edgeLumSum = 0f
+        var edgeSamples = 0
+        val eYStart = (sh * 0.45f).toInt()
+        val eYEnd = (sh * 0.55f).toInt()
+        val eXStart = (sw * 0.04f).toInt()
+        val eXEnd = (sw * 0.12f).toInt()
+        var y = eYStart
+        while (y <= eYEnd) {
+            var x = eXStart
+            while (x <= eXEnd) {
                 val c = screenBitmap.getPixel(x, y)
                 val r = (c shr 16) and 0xFF
                 val g = (c shr 8) and 0xFF
                 val b = c and 0xFF
-                navLumSum += (0.299f * r + 0.587f * g + 0.114f * b)
-                navSamples++
-                x += 12
+                edgeLumSum += (0.299f * r + 0.587f * g + 0.114f * b)
+                edgeSamples++
+                x += 8
             }
-            y += 6
+            y += 5
         }
-        val navMean = if (navSamples > 0) navLumSum / navSamples else 255f
-        if (navMean >= 165f) return false
+        val edgeMean = if (edgeSamples > 0) edgeLumSum / edgeSamples else 255f
+        if (edgeMean >= 180f) return false
 
         // 2. 檢查彈窗下半部『[ 關閉 ]』按鈕所在的純白底框 (y = 0.66..0.73, x = 0.25..0.75)
         var footerWhiteCount = 0
@@ -171,7 +171,7 @@ class OcrRecognizer {
         }
         val headerWhiteRatio = if (headerSamples > 0) headerWhiteCount.toFloat() / headerSamples else 0f
 
-        return footerWhiteRatio > 0.65f && headerWhiteRatio > 0.60f
+        return footerWhiteRatio > 0.55f && (headerWhiteRatio > 0.35f || edgeMean < 165f)
     }
 
     /**
