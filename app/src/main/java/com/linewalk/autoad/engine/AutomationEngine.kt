@@ -736,7 +736,18 @@ class AutomationEngine private constructor(private val context: Context) {
         }
 
         // A. 最優先檢查：是否停留在看完廣告後的『獲得15張票券！ / 獲得金幣！』中央彈窗（下方有白色 [ 關閉 ] 按鈕）！
-        val modalCloseBtn = ocrRecognizer.findCenterRewardModalCloseButton(screenBitmap, ocrItems)
+        // 嚴格防呆：若當前畫面上存在下半部看廣告按鈕（紅利 / 跳過廣告 / 取消），絕不誤判為中央領獎彈窗！
+        val isBottomRewardSheetVisible = ocrItems.any { item ->
+            val cy = item.bounds.centerY().toFloat() / sh
+            val t = item.text.replace(" ", "")
+            (cy in 0.85f..0.98f && (t == "取消" || t.contains("取消"))) ||
+            (cy in 0.70f..0.92f && (t.contains("跳過廣告") || t.contains("紅利")))
+        }
+        val modalCloseBtn = if (!isBottomRewardSheetVisible) {
+            ocrRecognizer.findCenterRewardModalCloseButton(screenBitmap, ocrItems)
+        } else {
+            null
+        }
         if (modalCloseBtn != null) {
             emptyTicksOnCurrentTab = 0
             bingoColumnRetryCount.clear()

@@ -171,7 +171,7 @@ class OcrRecognizer {
         }
         val headerWhiteRatio = if (headerSamples > 0) headerWhiteCount.toFloat() / headerSamples else 0f
 
-        return footerWhiteRatio > 0.55f && (headerWhiteRatio > 0.35f || edgeMean < 165f)
+        return edgeMean < 180f && footerWhiteRatio > 0.55f && headerWhiteRatio > 0.25f
     }
 
     /**
@@ -186,6 +186,17 @@ class OcrRecognizer {
     ): Pair<String, Rect>? {
         val sw = screenBitmap.width
         val sh = screenBitmap.height
+
+        // 00. 嚴格一票否決：若畫面為下半部領獎彈窗（具備底部「取消」按鈕或「紅利」、「跳過廣告」），絕非中央領獎完成彈窗！
+        val isBottomRewardSheet = items.any { item ->
+            val cy = item.bounds.centerY().toFloat() / sh
+            val t = item.text.replace(" ", "")
+            (cy in 0.85f..0.98f && (t == "取消" || t.contains("取消"))) ||
+            (cy in 0.70f..0.92f && (t.contains("跳過廣告") || t.contains("紅利")))
+        }
+        if (isBottomRewardSheet) {
+            return null
+        }
 
         // 若處於抽抽樂中獎結果畫面（中獎囉、中獎、分享給好友）或抽抽樂主面板（查看獎項一覽、完成任務、即可獲得、大量金幣、5張抽1次），
         // 絕不觸發中央領獎彈窗關閉（注意：嚴禁使用單獨 t.contains("5張")，因為步數領獎彈窗標題『獲得15張票券！』含『15張』會被誤殺！）
