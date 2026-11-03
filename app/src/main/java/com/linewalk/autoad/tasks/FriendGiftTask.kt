@@ -580,15 +580,16 @@ class FriendGiftTask {
             return ocrMatch.bounds
         }
         val targetX = (sw * 0.375f).toInt()
-        val targetY = (sh * 0.910f).toInt()
+        val aspect = sh.toFloat() / sw.toFloat()
+        val targetY = if (aspect >= 2.2f) (sh * 0.945f).toInt() else (sh * 0.910f).toInt()
         val halfW = (sw * 0.08f).toInt()
         val halfH = (sh * 0.020f).toInt().coerceAtLeast(24)
         return Rect(targetX - halfW, targetY - halfH, targetX + halfW, targetY + halfH)
     }
 
     /**
-     * 底部導覽列「集點」(首頁) 按鈕 (第 1 顆，位於底部 x ≈ 0.125f, y ≈ 0.910f)
-     * 優先透過 OCR 鎖定文字本體，備援座標嚴格錨定於 sh * 0.910f，精準避開底部 3 鍵導覽列 (54dp, y >= 0.93f) 與手勢條 (16dp)
+     * 底部導覽列「集點」(首頁) 按鈕 (第 1 顆，位於底部 x ≈ 0.125f)
+     * 優先透過 OCR 鎖定文字本體，備援座標依據螢幕長寬比動態錨定 (22:9 超長螢幕為 0.945f，一般長寬比為 0.910f)
      */
     fun getBottomMainTabRect(sw: Int, sh: Int, ocrItems: List<OcrItem> = emptyList()): Rect {
         val ocrMatch = ocrItems.firstOrNull { item ->
@@ -601,7 +602,8 @@ class FriendGiftTask {
             return ocrMatch.bounds
         }
         val targetX = (sw * 0.125f).toInt()
-        val targetY = (sh * 0.910f).toInt()
+        val aspect = sh.toFloat() / sw.toFloat()
+        val targetY = if (aspect >= 2.2f) (sh * 0.945f).toInt() else (sh * 0.910f).toInt()
         val halfW = (sw * 0.08f).toInt()
         val halfH = (sh * 0.020f).toInt().coerceAtLeast(24)
         return Rect(targetX - halfW, targetY - halfH, targetX + halfW, targetY + halfH)

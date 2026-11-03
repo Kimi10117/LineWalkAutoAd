@@ -102,7 +102,7 @@ class MainActivity : AppCompatActivity() {
             startActivity(intent)
             Toast.makeText(
                 this,
-                "請點選畫面最右上角的「⋮」選單 ➔ 點擊「允許受限制的設定」",
+                "請點選畫面最右上角的「⋮」選單 -> 點擊「允許受限制的設定」",
                 Toast.LENGTH_LONG
             ).show()
         }

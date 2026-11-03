@@ -108,7 +108,7 @@
                     android:layout_height="wrap_content"
                     android:layout_marginTop="4dp"
                     android:lineSpacingExtra="2dp"
-                    android:text="1. 點下方 [開啟無障礙服務] 並點擊「散步趣助手」\n2. 點下方橘色按鈕跳轉至應用程式資訊\n3. 點右上角「⋮」(三個直點) ➔ 選擇「允許受限制的設定」"
+                    android:text="1. 點下方 [開啟無障礙服務] 並點擊「散步趣助手」\n2. 點下方橘色按鈕跳轉至應用程式資訊\n3. 點右上角「⋮」(三個直點) -> 選擇「允許受限制的設定」"
                     android:textColor="#78350F"
                     android:textSize="12sp" />
 
@@ -177,7 +177,7 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="二、自動巡邏順序設定 (移動 ➔ 時間 ➔ 遊戲 ➔ 步數)"
+                android:text="二、自動巡邏順序設定 (移動 -> 時間 -> 遊戲 -> 步數)"
                 android:textColor="@color/text_primary"
                 android:textSize="15sp"
                 android:textStyle="bold" />

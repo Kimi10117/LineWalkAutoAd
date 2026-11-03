@@ -51,6 +51,7 @@ data class EngineUiStatus(
     val isRunning: Boolean = false,
     val state: EngineState = EngineState.IDLE,
     val currentRound: Int = 1,
+    val currentTab: MainTab = MainTab.MOVE,
     val statusDetail: String = "點擊懸浮窗 [開始] 啟動自動看廣告",
     val overlaySafeDetail: String = "點擊開始啟動自動巡邏",
     val adsCompletedCount: Int = 0,
@@ -125,7 +126,7 @@ class AutomationEngine private constructor(private val context: Context) {
 
     /**
      * 嚴格分頁巡邏優先順序：
-     * 1. 移動 (首頁) ➔ 2. 時間 (放置) ➔ 3. 遊戲 ➔ 4. 步數
+     * 1. 移動 (首頁) -> 2. 時間 (放置) -> 3. 遊戲 -> 4. 步數
      */
     private val tabPriorityOrder = listOf(MainTab.MOVE, MainTab.TIME, MainTab.GAME, MainTab.STEP)
 
@@ -164,6 +165,9 @@ class AutomationEngine private constructor(private val context: Context) {
     private var tabSwitchRetries = 0
     private var emptyTicksOnCurrentTab = 0
     val confirmedEmptyTabs = mutableSetOf<MainTab>()
+    internal var tabStagnationTicks: Int = 0
+    private var lastObservedTab: MainTab? = null
+    internal var nonMainScreenIdleTicks: Int = 0
 
     var currentPhase: PatrolPhase = PatrolPhase.MAIN_TABS
         internal set
@@ -301,6 +305,9 @@ class AutomationEngine private constructor(private val context: Context) {
         rewardClaimRetryTicks = 0
         nonGameScreenTicks = 0
         emptyTicksOnCurrentTab = 0
+        tabStagnationTicks = 0
+        lastObservedTab = null
+        nonMainScreenIdleTicks = 0
         confirmedEmptyTabs.clear()
         isBingoCompleted = false
         claimedBingoColumns.clear()
@@ -335,7 +342,7 @@ class AutomationEngine private constructor(private val context: Context) {
         }
 
         val phaseDesc = when (currentPhase) {
-            PatrolPhase.MAIN_TABS -> "移動 ➔ 時間 ➔ 遊戲 ➔ 步數"
+            PatrolPhase.MAIN_TABS -> "移動 -> 時間 -> 遊戲 -> 步數"
             PatrolPhase.BINGO -> "每日賓果"
             PatrolPhase.LOTTERY -> "抽抽樂"
             PatrolPhase.MISSION -> "任務"
@@ -753,9 +760,9 @@ class AutomationEngine private constructor(private val context: Context) {
 
         // 0-1. 檢查是否正在向廣告伺服器載入廣告（畫面中央『載入中...』與白色 [取消] 鈕），直接進入廣告監控流程！
         if (ocrRecognizer.isAdLoadingScreen(ocrItems, screenBitmap)) {
-            appendLog("⏳ 畫面處於廣告載入中狀態，自動轉入廣告監控流程！")
+            appendLog("[載入] 畫面處於廣告載入中狀態，自動轉入廣告監控流程！")
             adCloserHandler.onEnterAdMode()
-            transitionTo(EngineState.AD_WATCHING, "廣告正在載入中，請稍候...", "⏳ 廣告載入中...")
+            transitionTo(EngineState.AD_WATCHING, "廣告正在載入中，請稍候...", "[載入] 廣告載入中...")
             return
         }
 
@@ -985,6 +992,7 @@ class AutomationEngine private constructor(private val context: Context) {
         val onMainScreen = ocrRecognizer.isLineWalkMainScreenVisible(screenBitmap, ocrItems, templateMatcher)
         if (onMainScreen) {
             nonGameScreenTicks = 0
+            nonMainScreenIdleTicks = 0
             handleMainScreenPatrol(service, screenBitmap, ocrItems, sw, sh)
             return
         }
@@ -1107,7 +1115,7 @@ class AutomationEngine private constructor(private val context: Context) {
             nonGameScreenTicks = 0
             popupRetryTicks = 0
             geoXConsecutiveClicks = 0
-            transitionTo(EngineState.TRIGGER_AD_POPUP, "偵測到下半部領獎彈窗，準備點擊看廣告/領取...", "⏳ 處理彈窗中...")
+            transitionTo(EngineState.TRIGGER_AD_POPUP, "偵測到下半部領獎彈窗，準備點擊看廣告/領取...", "[彈窗] 處理彈窗中...")
             return
         }
 
@@ -1154,9 +1162,52 @@ class AutomationEngine private constructor(private val context: Context) {
             nonGameScreenTicks = 0
         }
 
+        nonMainScreenIdleTicks++
+        tabStagnationTicks++
+
+        // Tier 1: 週期性心跳日誌，防止 100 秒無聲空轉
+        if (nonMainScreenIdleTicks % NON_MAIN_IDLE_HEARTBEAT_TICKS == 1) {
+            val screenType = if (hasMainScreenMarkers) "具備主畫面特徵" else if (isGameScreen) "遊戲內畫面" else "未知畫面"
+            appendLog("[巡邏] 非主畫面輪詢中 ($screenType，當前【${currentTab.tabName}】，已等待 $nonMainScreenIdleTicks 個 Tick)...")
+        }
+
+        // Tier 2: 降級主畫面重測機制 (Degraded Retest Fallback)
+        // 若畫面具備明確四大分頁或導覽列特徵，且連續 6 個 Tick 無任何彈窗可點，
+        // 判定為半透明遮罩誤判，降級放行執行主畫面常規巡邏！
+        if (hasMainScreenMarkers && nonMainScreenIdleTicks in NON_MAIN_IDLE_FALLBACK_TICKS until NON_MAIN_IDLE_ADVANCE_TICKS) {
+            if (nonMainScreenIdleTicks % 3 == 0) {
+                appendLog("[自癒] 畫面具備主畫面特徵且無彈窗可關閉 (已輪詢 $nonMainScreenIdleTicks 次)，啟動降級主畫面常規巡邏！")
+                handleMainScreenPatrol(service, screenBitmap, ocrItems, sw, sh)
+                return
+            }
+        }
+
+        // Tier 3: 主動切換至下一分頁推進 (Active Tab Advancement Guardian)
+        // 輪詢達 15 個 Tick (~7.5 秒) 仍無操作且無進展時觸發換頁推進
+        if (currentPhase == PatrolPhase.MAIN_TABS && nonMainScreenIdleTicks >= NON_MAIN_IDLE_ADVANCE_TICKS) {
+            triggerTabSelfHealingAdvancement(
+                service = service,
+                screenBitmap = screenBitmap,
+                ocrItems = ocrItems,
+                sw = sw,
+                sh = sh,
+                reason = "非主畫面輪詢達 $nonMainScreenIdleTicks 個 Tick (~7.5 秒) 無進展"
+            )
+            return
+        }
+
+        // Tier 4: 未知畫面嚴重逾時安全返回機制
+        if (nonMainScreenIdleTicks >= NON_MAIN_IDLE_SAFETY_BACK_TICKS) {
+            appendLog("[自癒] 輪詢達 $nonMainScreenIdleTicks 個 Tick 嚴重逾時，發送安全返回鍵嘗試拉回散步趣...")
+            service.safeNavigateBack(allowInGame = true)
+            nonMainScreenIdleTicks = 0
+            delay(500)
+            return
+        }
+
         updateDetail(
-            "[巡邏] 正在搜尋可領取目標或關閉按鈕... (已完成 ${_uiStatus.value.adsCompletedCount} 次)",
-            "[巡邏] 搜尋畫面目標中..."
+            "[巡邏] 正在搜尋可領取目標或關閉按鈕... (當前【${currentTab.tabName}】，已完成 ${_uiStatus.value.adsCompletedCount} 次)",
+            "[巡邏] 搜尋[${currentTab.shortLabel}]目標中..."
         )
     }
 
@@ -1348,7 +1399,7 @@ class AutomationEngine private constructor(private val context: Context) {
             lotteryResultRewardWaitTicks = 0
         }
 
-        // 1. 依使用者規則尋找：【優先50抽】➔【次選免費抽】➔【嚴禁點5張】
+        // 1. 依使用者規則尋找：【優先50抽】->【次選免費抽】->【嚴禁點5張】
         val drawTarget = lotteryTask.findTargetDrawButton(screenBitmap, ocrItems, templateMatcher)
         if (drawTarget != null) {
             // 若為 50 抽且已達每輪上限 (>= 2 次)，代表票券不足或已抽完，轉向檢查免費看廣告抽一次！
@@ -1761,11 +1812,11 @@ class AutomationEngine private constructor(private val context: Context) {
     }
 
     private fun getTabRect(tab: MainTab, sw: Int, sh: Int, ocrItems: List<OcrItem>, screenBitmap: android.graphics.Bitmap? = null): Rect {
-        // 1. 動態掃描 cy < sh * 0.30f 之頂部四大分頁文字
+        // 1. 動態掃描 cy in 0.07f..0.16f 之頂部四大分頁文字 (文字長度限制 <= 4，杜絕主畫面橫幅或廣告文案干擾)
         val matchedTabs = ocrItems.filter { item ->
             val cy = item.bounds.centerY().toFloat() / sh
             val t = item.text.replace(" ", "")
-            cy in 0.05f..0.30f && (
+            cy in 0.07f..0.16f && t.length <= 4 && (
                 t.contains("首頁") || t.contains("移動") ||
                 t.contains("步數") || t.contains("時間") || t.contains("遊戲")
             )
@@ -1788,7 +1839,7 @@ class AutomationEngine private constructor(private val context: Context) {
         val halfW = (sw * 0.10f).toInt()
         val halfH = (sh * 0.018f).toInt().coerceAtLeast(24)
 
-        // 若該目標分頁直接具有精準 OCR 文字，優先對齊其水平中心
+        // 若該目標分頁直接具有精準 OCR 文字，優先對齊其水平中心 (限定 cy in 0.07f..0.16f 且字數 t.length <= 4)
         val tabKeywords = when (tab) {
             MainTab.MOVE -> listOf("首頁", "移動")
             MainTab.STEP -> listOf("步數")
@@ -1796,8 +1847,9 @@ class AutomationEngine private constructor(private val context: Context) {
             MainTab.GAME -> listOf("遊戲")
         }
         val directOcr = matchedTabs.firstOrNull { item ->
+            val cy = item.bounds.centerY().toFloat() / sh
             val t = item.text.replace(" ", "")
-            tabKeywords.any { kw -> t.contains(kw) }
+            cy in 0.07f..0.16f && t.length <= 4 && tabKeywords.any { kw -> t.contains(kw) }
         }
 
         return if (directOcr != null) {
@@ -1875,6 +1927,55 @@ class AutomationEngine private constructor(private val context: Context) {
         return true
     }
 
+    /**
+     * 巡邏防死鎖自癒推進守護：
+     * 當在同一分頁停滯或非主畫面無進展達逾時閥值時，
+     * 標記當前分頁為已檢查，並主動切換至下一可用分頁推進流程。
+     */
+    internal suspend fun triggerTabSelfHealingAdvancement(
+        service: AutoAdAccessibilityService,
+        screenBitmap: android.graphics.Bitmap,
+        ocrItems: List<OcrItem>,
+        sw: Int,
+        sh: Int,
+        reason: String
+    ): Boolean {
+        if (currentPhase != PatrolPhase.MAIN_TABS) return false
+
+        confirmedEmptyTabs.add(currentTab)
+        tabStagnationTicks = 0
+        nonMainScreenIdleTicks = 0
+
+        val enabledTabs = tabPriorityOrder.filter { it.isEnabled(config) }.ifEmpty { tabPriorityOrder }
+        val nextRemainingTabs = enabledTabs.filter { it !in confirmedEmptyTabs }
+
+        appendLog("[自癒] $reason，啟動防死鎖自癒守護！標記【${currentTab.tabName}】完成並主動推進流程")
+
+        if (nextRemainingTabs.isEmpty()) {
+            val tabListStr = enabledTabs.joinToString("->") { it.shortLabel }
+            appendLog("[自癒] 四大分頁 ($tabListStr) 巡邏推進完畢，進入下一階段任務！")
+            currentPhase = getNextPhase(PatrolPhase.MAIN_TABS)
+            return true
+        }
+
+        val nextTab = nextRemainingTabs.first()
+        val remainOrderStr = nextRemainingTabs.joinToString("->") { it.shortLabel }
+        val tabRect = getTabRect(nextTab, sw, sh, ocrItems, screenBitmap)
+        appendLog("[自癒] 主動切換至下一分頁【${nextTab.tabName}】(待檢查: $remainOrderStr)")
+        currentTab = nextTab
+        needsInitialTabSync = true
+        tabSwitchRetries = 0
+        FloatingOverlayService.clickWithOverlayPassthrough(tabRect) {
+            service.clickRect(tabRect)
+        }
+        updateDetail(
+            "[自癒] 防死鎖推進：正在切換至【${nextTab.tabName}】...",
+            "[自癒] 切換至[${nextTab.shortLabel}]..."
+        )
+        delay(600)
+        return true
+    }
+
     private suspend fun handleMainScreenPatrol(
         service: AutoAdAccessibilityService,
         screenBitmap: android.graphics.Bitmap,
@@ -1898,13 +1999,33 @@ class AutomationEngine private constructor(private val context: Context) {
                         updateDetail("[領獎] 關閉領獎彈窗中...", "[領獎] 關閉領獎彈窗...")
                         return
                     }
-                    val tabListStr = enabledTabs.joinToString("➔") { it.shortLabel }
+                    val tabListStr = enabledTabs.joinToString("->") { it.shortLabel }
                     appendLog("[成功] 四大分頁 ($tabListStr) 常規獎勵皆已領取完畢！(共完成 ${_uiStatus.value.adsCompletedCount} 次)")
                     currentPhase = getNextPhase(PatrolPhase.MAIN_TABS)
                     return
                 }
 
-                // 依優先順序（1.移動 ➔ 2.時間 ➔ 3.遊戲 ➔ 4.步數）決定當前應檢查的分頁：
+                // 檢查是否已成功換頁，分頁變更時重置停滯計數
+                if (lastObservedTab != currentTab) {
+                    lastObservedTab = currentTab
+                    tabStagnationTicks = 0
+                }
+
+                // 巡邏同一分頁停滯自癒守護
+                tabStagnationTicks++
+                if (tabStagnationTicks >= TAB_STAGNATION_THRESHOLD) {
+                    triggerTabSelfHealingAdvancement(
+                        service = service,
+                        screenBitmap = screenBitmap,
+                        ocrItems = ocrItems,
+                        sw = sw,
+                        sh = sh,
+                        reason = "停留【${currentTab.tabName}】達 $tabStagnationTicks 個 Tick (~7.5 秒) 無操作推進"
+                    )
+                    return
+                }
+
+                // 依優先順序（1.移動 -> 2.時間 -> 3.遊戲 -> 4.步數）決定當前應檢查的分頁：
                 // 若當前停留在尚有獎勵待領取的分頁（且已完成初始分頁同步），優先留在此分頁全部領取完畢，絕不提前跳轉！
                 val desiredTab = if (currentTab in remainingTabs && !needsInitialTabSync) currentTab else remainingTabs.first()
 
@@ -1961,6 +2082,8 @@ class AutomationEngine private constructor(private val context: Context) {
 
                 if (target != null) {
                     emptyTicksOnCurrentTab = 0
+                    tabStagnationTicks = 0
+                    nonMainScreenIdleTicks = 0
                     confirmedEmptyTabs.remove(currentTab)
                     val newTaskCount = _uiStatus.value.tasksTriggeredCount + 1
                     _uiStatus.value = _uiStatus.value.copy(tasksTriggeredCount = newTaskCount)
@@ -1972,7 +2095,7 @@ class AutomationEngine private constructor(private val context: Context) {
                     transitionTo(
                         EngineState.TRIGGER_AD_POPUP,
                         "已點擊 ${target.targetLabel}，等待『跳過廣告 / 紅利獲得』彈窗...",
-                        "⏳ 等待彈窗出現..."
+                        "[彈窗] 等待彈窗出現..."
                     )
                     delay(550)
                     return
@@ -1994,14 +2117,14 @@ class AutomationEngine private constructor(private val context: Context) {
 
                 val nextRemainingTabs = enabledTabs.filter { it !in confirmedEmptyTabs }
                 if (nextRemainingTabs.isEmpty()) {
-                    val tabListStr = enabledTabs.joinToString("➔") { it.shortLabel }
+                    val tabListStr = enabledTabs.joinToString("->") { it.shortLabel }
                     appendLog("[成功] 四大分頁 ($tabListStr) 常規獎勵皆已領取完畢！")
                     currentPhase = getNextPhase(PatrolPhase.MAIN_TABS)
                     return
                 }
 
                 val nextTab = nextRemainingTabs.first()
-                val remainOrderStr = nextRemainingTabs.joinToString("➔") { it.shortLabel }
+                val remainOrderStr = nextRemainingTabs.joinToString("->") { it.shortLabel }
                 val tabRect = getTabRect(nextTab, sw, sh, ocrItems, screenBitmap)
                 appendLog("[切換]【${currentTab.tabName}】已領完，依序切換至【${nextTab.tabName}】(待檢查:$remainOrderStr)")
                 needsInitialTabSync = true
@@ -2206,7 +2329,7 @@ class AutomationEngine private constructor(private val context: Context) {
             getNextPhase(PatrolPhase.MAIN_TABS)
         }
 
-        appendLog("[循環] 🚀 第 $currentRound 輪自動巡邏已重置啟動！首發階段：【${currentPhase.title}】")
+        appendLog("[循環] 第 $currentRound 輪自動巡邏已重置啟動！首發階段：【${currentPhase.title}】")
         transitionTo(
             newState = EngineState.IN_GAME_SCAN,
             detail = "第 $currentRound 輪巡邏開始，首發階段：【${currentPhase.title}】...",
@@ -2312,7 +2435,7 @@ class AutomationEngine private constructor(private val context: Context) {
         sw: Int,
         sh: Int
     ) {
-        appendLog("↩️【${currentTab.tabName}】獎勵皆在冷卻中，點擊 [取消] 關閉彈窗並切換至下一分頁/任務")
+        appendLog("[返回]【${currentTab.tabName}】獎勵皆在冷卻中，點擊 [取消] 關閉彈窗並切換至下一分頁/任務")
         FloatingOverlayService.clickWithOverlayPassthrough(cancelBtn) {
             service.clickRect(cancelBtn)
         }
@@ -2322,12 +2445,12 @@ class AutomationEngine private constructor(private val context: Context) {
         val enabledTabs = tabPriorityOrder.filter { it.isEnabled(config) }.ifEmpty { tabPriorityOrder }
         val nextRemainingTabs = enabledTabs.filter { it !in confirmedEmptyTabs }
         if (nextRemainingTabs.isEmpty()) {
-            val tabListStr = enabledTabs.joinToString("➔") { it.shortLabel }
+            val tabListStr = enabledTabs.joinToString("->") { it.shortLabel }
             appendLog("[成功] 四大分頁 ($tabListStr) 常規獎勵皆已檢查完畢！準備檢查日常任務...")
             currentPhase = getNextPhase(PatrolPhase.MAIN_TABS)
         } else {
             val nextTab = nextRemainingTabs.first()
-            val remainOrderStr = nextRemainingTabs.joinToString("➔") { it.shortLabel }
+            val remainOrderStr = nextRemainingTabs.joinToString("->") { it.shortLabel }
             appendLog("[切換]【${currentTab.tabName}】冷卻中，依序切換至【${nextTab.tabName}】(待檢查: $remainOrderStr)")
             currentTab = nextTab
             needsInitialTabSync = true
@@ -2348,9 +2471,9 @@ class AutomationEngine private constructor(private val context: Context) {
 
         // 若點擊目標後已直接進入廣告載入中畫面，立即轉入廣告監控流程！
         if (ocrRecognizer.isAdLoadingScreen(ocrItems, screenBitmap)) {
-            appendLog("⏳ 點擊後進入廣告載入中狀態，自動轉入廣告監控流程！")
+            appendLog("[載入] 點擊後進入廣告載入中狀態，自動轉入廣告監控流程！")
             adCloserHandler.onEnterAdMode()
-            transitionTo(EngineState.AD_WATCHING, "廣告正在載入中，請稍候...", "⏳ 廣告載入中...")
+            transitionTo(EngineState.AD_WATCHING, "廣告正在載入中，請稍候...", "[載入] 廣告載入中...")
             return
         }
 
@@ -2574,7 +2697,7 @@ class AutomationEngine private constructor(private val context: Context) {
                 maxTextLength = 6
             )
             if (normalOrSkip != null) {
-                appendLog("ℹ️ 點擊彈窗一般按鈕: [${normalOrSkip.text}]")
+                appendLog("[一般] 點擊彈窗一般按鈕: [${normalOrSkip.text}]")
                 FloatingOverlayService.clickWithOverlayPassthrough(normalOrSkip.bounds) {
                     service.clickRect(normalOrSkip.bounds)
                 }
@@ -2589,10 +2712,10 @@ class AutomationEngine private constructor(private val context: Context) {
         }
 
         if (popupRetryTicks >= 2) {
-            appendLog("↩️ 未偵測到看廣告彈窗，返回主畫面繼續巡邏")
+            appendLog("[返回] 未偵測到看廣告彈窗，返回主畫面繼續巡邏")
             transitionTo(EngineState.IN_GAME_SCAN, "重新掃描遊戲畫面...", "[巡邏] 巡邏畫面目標中...")
         } else {
-            updateDetail("⏳ 等待看廣告彈窗出現 ($popupRetryTicks/2)...", "⏳ 等待彈窗 ($popupRetryTicks/2)...")
+            updateDetail("[等待] 等待看廣告彈窗出現 ($popupRetryTicks/2)...", "[等待] 等待彈窗 ($popupRetryTicks/2)...")
         }
     }
 
@@ -3076,14 +3199,16 @@ class AutomationEngine private constructor(private val context: Context) {
 
         _uiStatus.value = _uiStatus.value.copy(
             state = newState,
+            currentTab = this.currentTab,
             statusDetail = detail,
             overlaySafeDetail = safeOverlayText
         )
-        appendLog("➡️ [${newState.title}] $detail")
+        appendLog("[狀態] [${newState.title}] $detail")
     }
 
     private fun updateDetail(detail: String, safeOverlayText: String) {
         _uiStatus.value = _uiStatus.value.copy(
+            currentTab = this.currentTab,
             statusDetail = detail,
             overlaySafeDetail = safeOverlayText
         )
@@ -3183,6 +3308,12 @@ class AutomationEngine private constructor(private val context: Context) {
     }
 
     companion object {
+        const val TAB_STAGNATION_THRESHOLD = 15          // 同一分頁停滯無操作閥值 (15 Tick ~ 7.5s)
+        const val NON_MAIN_IDLE_HEARTBEAT_TICKS = 6      // 非主畫面輪詢心跳日誌週期 (6 Tick ~ 3s)
+        const val NON_MAIN_IDLE_FALLBACK_TICKS = 6       // 降級主畫面重測門檻 (6 Tick ~ 3s)
+        const val NON_MAIN_IDLE_ADVANCE_TICKS = 15       // 非主畫面空轉強制換頁門檻 (15 Tick ~ 7.5s)
+        const val NON_MAIN_IDLE_SAFETY_BACK_TICKS = 20   // 未知畫面安全返回門檻 (20 Tick ~ 10s)
+
         @Volatile
         private var INSTANCE: AutomationEngine? = null
 

@@ -344,9 +344,9 @@ class AdCloserHandler(
 
         // 2C. 若處於《LINE 散步趣》介面：
         // 嚴格安全防護：
-        // 1) 廣告確實已經播放過 (hasAdActuallyShown == true) 且已過至少 3 秒 ➔ 正常完成廣告並回到散步趣介面
+        // 1) 廣告確實已經播放過 (hasAdActuallyShown == true) 且已過至少 3 秒 -> 正常完成廣告並回到散步趣介面
         // 2) 若廣告點擊後完全未啟動 (hasAdActuallyShown == false)，在未滿 4 秒前保持靜候，嚴禁在第 1 秒誤判回到遊戲！
-        // 3) 若超過 4 秒畫面仍完全是遊戲畫面且從未出現過廣告特徵 ➔ 判定為廣告未啟動/無庫存，安全退出且不累計完成次數
+        // 3) 若超過 4 秒畫面仍完全是遊戲畫面且從未出現過廣告特徵 -> 判定為廣告未啟動/無庫存，安全退出且不累計完成次數
         if (isGameVisible) {
             if (hasAdActuallyShown && elapsedSec >= 3) {
                 return AdStepResult.ReturnedToGame(null, "已回到散步趣介面")
@@ -929,30 +929,32 @@ class AdCloserHandler(
             )
         }
 
-        // 0. 螢幕左上角熱區 (專門應對 Meta 影音/輪播廣告，y in 4.8%..9.5%，若左上角為 Google Play 標籤則嚴格排除！)
-        if (!hasGooglePlayNear) {
-            targets.add("螢幕左上角熱區" to Rect(
-                (sw * 0.035f).toInt(),
-                (sh * 0.048f).toInt(),
-                (sw * 0.140f).toInt(),
-                (sh * 0.095f).toInt()
-            ))
-        }
+        // 歷史備援說明：先前版本曾包含 if (!hasGooglePlayNear) 盲點 "螢幕左上角熱區"，但在 Meta 廣告中該處為廣告主專頁頭像 (例如「3M 好物嚴選」)，引發點擊喚起三星瀏覽器 (com.sec.android.app.sbrowser) 的嚴重退步。
+        // 現已徹底重構備援盲點序列：完全移除 "螢幕左上角熱區"（即使 !hasGooglePlayNear 為 true 亦嚴禁啟用左上角），杜絕任何喚起外部瀏覽器的危險盲點！
+        // 改為以安全關閉優先序列：右上角 (0.91w, 0.045h) -> 右下角 (0.91w, 0.92h) -> 右上角更偏角 (0.95w, 0.08h)
 
-        // 1. 螢幕右上角關閉熱區 (標準全螢幕廣告，y in 5.5%..11%)
+        // 1. 螢幕右上角關閉熱區 (中心錨定 0.91w, 0.045h，標準頂部略過/關閉位置)
         targets.add("螢幕右上角熱區" to Rect(
-            (sw * 0.85f).toInt(),
-            (sh * 0.055f).toInt(),
-            (sw * 0.97f).toInt(),
-            (sh * 0.110f).toInt()
+            (sw * 0.86f).toInt(),
+            max((sh * 0.015f).toInt(), 15),
+            (sw * 0.96f).toInt(),
+            (sh * 0.075f).toInt()
         ))
 
-        // 2. 內容右上角關閉熱區 (專門應對 16:9 / 4:3 劇院黑邊廣告)
+        // 2. 螢幕右下角關閉熱區 (中心錨定 0.91w, 0.92h，應對將略過/關閉放置於右下角之全螢幕影音廣告)
+        targets.add("螢幕右下角熱區" to Rect(
+            (sw * 0.86f).toInt(),
+            (sh * 0.89f).toInt(),
+            (sw * 0.96f).toInt(),
+            (sh * 0.95f).toInt()
+        ))
+
+        // 3. 螢幕右上角更偏角熱區 (中心錨定 0.95w, 0.08h，應對 16:9 / 4:3 劇院黑邊或更靠外緣之 (X) 按鈕)
         targets.add("內容右上角熱區" to Rect(
-            (sw * 0.88f).toInt(),
-            (sh * 0.165f).toInt(),
-            (sw * 0.97f).toInt(),
-            (sh * 0.230f).toInt()
+            (sw * 0.91f).toInt(),
+            (sh * 0.055f).toInt(),
+            (sw * 0.99f).toInt(),
+            (sh * 0.105f).toInt()
         ))
 
         val target = targets[fallbackCornerCycle % targets.size]

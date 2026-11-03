@@ -198,9 +198,15 @@ class OcrRecognizer {
             return null
         }
 
-        // 00A. 嚴格一票否決：若畫面為【遊戲】分頁（街機遊戲畫面、遊戲挑戰清單），絕非中央領獎彈窗！
+        val hasExplicitTicketOrCoinModalTitle = items.any { item ->
+            val cy = item.bounds.centerY().toFloat() / sh
+            val t = item.text.replace(" ", "")
+            cy in 0.20f..0.42f && (t.contains("張票券！") || t.contains("張票券!") || t.contains("獲得15張") || t.contains("獲得10張") || t.contains("枚金幣！") || t.contains("枚金幣!"))
+        }
+
+        // 00A. 嚴格一票否決：若畫面為【遊戲】分頁（街機遊戲畫面、遊戲挑戰清單）且無明確領獎標題，絕非中央領獎彈窗！
         // 街機台深色背景容易被誤判為黑幕遮罩，導致對著下方遊戲卡片連續空點死鎖
-        val isGameTabScreen = items.any { item ->
+        val isGameTabScreen = !hasExplicitTicketOrCoinModalTitle && items.any { item ->
             val t = item.text.replace(" ", "")
             t.contains("秘寶挖挖哇") ||
             t.contains("數獨達人") ||
@@ -216,11 +222,6 @@ class OcrRecognizer {
 
         // 00B. 嚴格一票否決：若處於抽抽樂中獎結果畫面或抽抽樂主面板（紅橘箱子、完成任務即可獲得大量金幣、查看獎項等），
         // 絕不觸發中央領獎彈窗關閉，防止誤點下方黃色「完成任務 即可獲得 大量金幣!!」廣告橫幅！
-        val hasExplicitTicketOrCoinModalTitle = items.any { item ->
-            val cy = item.bounds.centerY().toFloat() / sh
-            val t = item.text.replace(" ", "")
-            cy in 0.20f..0.42f && (t.contains("張票券！") || t.contains("張票券!") || t.contains("獲得15張") || t.contains("獲得10張") || t.contains("枚金幣！") || t.contains("枚金幣!"))
-        }
         val isLotteryPanelOrResult = !hasExplicitTicketOrCoinModalTitle && items.any { item ->
             val cy = item.bounds.centerY().toFloat() / sh
             val t = item.text.replace(" ", "")
@@ -799,7 +800,22 @@ class OcrRecognizer {
         val sh = screenBitmap.height
 
         // 1. 若看完廣告後的中央領獎彈窗 (『獲得15張票券！ [關閉]』) 正開啟中，代表不在主畫面！
-        if (findCenterRewardModalCloseButton(screenBitmap, items) != null || isDimmedCenterModalOpen(screenBitmap)) {
+        // 遊戲分頁一票否決：街機背景易誤觸 isDimmedCenterModalOpen 假陽性，當為遊戲分頁時徹底屏蔽純像素遮罩判定，唯有真正偵測到領獎彈窗關閉按鈕時方判定不在主畫面
+        val isGameTabScreen = items.any { item ->
+            val t = item.text.replace(" ", "")
+            t.contains("秘寶挖挖哇") ||
+            t.contains("數獨達人") ||
+            t.contains("接龍高手") ||
+            t.contains("POINTSGAME", ignoreCase = true) ||
+            t.contains("LINEPOINTS", ignoreCase = true) ||
+            t.contains("簡單賺金幣") ||
+            t.contains("輕鬆賺") ||
+            t.contains("開始遊玩") ||
+            t.contains("玩LINE")
+        }
+        if ((!isGameTabScreen && (findCenterRewardModalCloseButton(screenBitmap, items) != null || isDimmedCenterModalOpen(screenBitmap))) ||
+            (isGameTabScreen && findCenterRewardModalCloseButton(screenBitmap, items) != null)
+        ) {
             return false
         }
 

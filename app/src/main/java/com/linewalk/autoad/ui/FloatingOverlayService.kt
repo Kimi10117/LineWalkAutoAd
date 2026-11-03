@@ -262,11 +262,18 @@ class FloatingOverlayService : Service() {
             detail.contains("冷卻") || safeDetail.contains("冷卻") -> {
                 "[巡邏中] 冷卻等待中"
             }
-            detail.contains("首頁") || detail.contains("移動") -> "[巡邏中] 首頁"
-            detail.contains("步數") -> "[巡邏中] 步數"
-            detail.contains("時間") || detail.contains("放置") -> "[巡邏中] 時間"
-            detail.contains("遊戲") -> "[巡邏中] 遊戲"
-            status.state == com.linewalk.autoad.engine.EngineState.IN_GAME_SCAN -> "[巡邏中] 首頁"
+            detail.contains("首頁") || detail.contains("移動") || safeDetail.contains("首頁") || safeDetail.contains("移動") -> "[巡邏中] 首頁"
+            detail.contains("步數") || safeDetail.contains("步數") -> "[巡邏中] 步數"
+            detail.contains("時間") || detail.contains("放置") || safeDetail.contains("時間") || safeDetail.contains("放置") -> "[巡邏中] 時間"
+            detail.contains("遊戲") || safeDetail.contains("遊戲") -> "[巡邏中] 遊戲"
+            status.state == com.linewalk.autoad.engine.EngineState.IN_GAME_SCAN -> {
+                when (status.currentTab) {
+                    com.linewalk.autoad.engine.MainTab.MOVE -> "[巡邏中] 首頁"
+                    com.linewalk.autoad.engine.MainTab.STEP -> "[巡邏中] 步數"
+                    com.linewalk.autoad.engine.MainTab.TIME -> "[巡邏中] 時間"
+                    com.linewalk.autoad.engine.MainTab.GAME -> "[巡邏中] 遊戲"
+                }
+            }
             else -> "${status.state.shortTitle} (${status.adsCompletedCount})"
         }
     }

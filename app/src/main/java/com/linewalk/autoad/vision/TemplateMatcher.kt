@@ -824,7 +824,7 @@ class TemplateMatcher {
     /**
      * 偵測全螢幕影音廣告 (如 Meta Audience Network, AppLovin 等) 右上角的『快轉/略過按鈕』(▶| 或 >>)。
      * 此類按鈕為深色圓形底圖內嵌高亮白色圖示，非純文字 OCR 所能辨識，亦無幾何 X 交叉特徵。
-     * 本偵測器精準計算右上角區域 (x in 84%..96.5%, y in 4.5%..11.5%) 之圓環底色與內部圖示高對比度，
+     * 本偵測器精準計算右上角區域 (x in 72%..96.5%, y in 1.5%..11.5%) 之圓環底色與內部圖示高對比度，
      * 能在廣告播放滿 4~5 秒略過鈕浮現時立即秒速點擊跳過廣告！
      */
     suspend fun detectCornerFastForwardSkip(
@@ -833,9 +833,9 @@ class TemplateMatcher {
     ): TemplateMatchResult? = withContext(Dispatchers.Default) {
         val sw = screenBitmap.width
         val sh = screenBitmap.height
-        val topLimitY = max((sh * 0.045f).toInt(), 45)
+        val topLimitY = max((sh * 0.015f).toInt(), 20)
         val bottomLimitY = (sh * 0.115f).toInt()
-        val leftLimitX = (sw * 0.84f).toInt()
+        val leftLimitX = (sw * 0.72f).toInt()
         val rightLimitX = (sw * 0.965f).toInt()
 
         val rInner = max(4, (sw * 0.024f).toInt())
@@ -859,28 +859,50 @@ class TemplateMatcher {
         var bestScore = 0f
         var bestCandidate: TemplateMatchResult? = null
 
-        var cy = rOuter
-        while (cy < zh - rOuter) {
-            var cx = rOuter
-            while (cx < zw - rOuter) {
+        var cy = rInner
+        while (cy <= zh - rInner) {
+            var cx = rInner
+            while (cx <= zw - rInner) {
                 val absX = leftLimitX + cx
                 val absY = topLimitY + cy
 
                 if (blacklistedCoord?.invoke(absX, absY) != true) {
+                    val ringSamples = FloatArray(12)
                     var ringSum = 0f
                     var ringMax = 0f
+                    var ringMin = 255f
                     for (i in 0 until 12) {
                         val angle = i * (Math.PI / 6.0)
                         val px = (cx + rOuter * kotlin.math.cos(angle)).toInt().coerceIn(0, zw - 1)
                         val py = (cy + rOuter * kotlin.math.sin(angle)).toInt().coerceIn(0, zh - 1)
                         val l = lum(px, py)
+                        ringSamples[i] = l
                         ringSum += l
                         if (l > ringMax) ringMax = l
+                        if (l < ringMin) ringMin = l
                     }
                     val ringMean = ringSum / 12f
+                    val ringDiff = ringMax - ringMin
 
-                    if (ringMean < 115f && ringMax < 135f) {
+                    // 圓形對稱性與均勻度檢驗：抑制橫向長條狀促銷橫幅
+                    var maxSymDiff = 0f
+                    for (i in 0 until 6) {
+                        val d = abs(ringSamples[i] - ringSamples[i + 6])
+                        if (d > maxSymDiff) maxSymDiff = d
+                    }
+                    val horizMean = (ringSamples[0] + ringSamples[6]) / 2f
+                    val vertMean = (ringSamples[3] + ringSamples[9]) / 2f
+                    val hvDiff = abs(horizMean - vertMean)
+
+                    val isSymmetric = ringDiff < 35f && maxSymDiff < 30f && hvDiff < 20f
+
+                    if (isSymmetric) {
+                        val centerLum = lum(cx, cy)
                         var innerMax = 0f
+                        var innerMin = 255f
+                        var darkInnerCount = 0
+                        var totalInner = 0
+
                         var dy = -rInner
                         while (dy <= rInner) {
                             var dx = -rInner
@@ -889,23 +911,47 @@ class TemplateMatcher {
                                     val px = (cx + dx).coerceIn(0, zw - 1)
                                     val py = (cy + dy).coerceIn(0, zh - 1)
                                     val l = lum(px, py)
+                                    totalInner++
+                                    if (l < 235f) darkInnerCount++
                                     if (l > innerMax) innerMax = l
+                                    if (l < innerMin) innerMin = l
                                 }
                                 dx += 2
                             }
                             dy += 2
                         }
 
-                        val contrast = innerMax - ringMean
-                        if (innerMax > 175f && contrast > 85f) {
-                            if (contrast > bestScore) {
-                                bestScore = contrast
-                                val boxRadius = rOuter + 4
-                                bestCandidate = TemplateMatchResult(
-                                    score = (contrast / 180f).coerceIn(0.85f, 0.99f),
-                                    bounds = Rect(absX - boxRadius, absY - boxRadius, absX + boxRadius, absY + boxRadius),
-                                    label = "右上角略過鈕(▶|)"
-                                )
+                        // 模式 A：深色圓形底圖內嵌高亮白色圖示 (如黑色半透明圓鈕)
+                        if (ringMean < 115f && ringMax < 135f && (centerLum - ringMean > 35f || centerLum > 150f)) {
+                            val contrast = innerMax - ringMean
+                            if (innerMax > 175f && contrast > 85f) {
+                                if (contrast > bestScore) {
+                                    bestScore = contrast
+                                    val boxRadius = rOuter + 4
+                                    bestCandidate = TemplateMatchResult(
+                                        score = (contrast / 180f).coerceIn(0.85f, 0.99f),
+                                        bounds = Rect(absX - boxRadius, absY - boxRadius, absX + boxRadius, absY + boxRadius),
+                                        label = "右上角略過鈕(▶|)"
+                                    )
+                                }
+                            }
+                        }
+
+                        // 模式 B：淺色狀態列或白色頂部區域上的深色/高反差略過按鈕 (如 Galaxy Z Flip5 22:9 頂部狀態列)
+                        if (ringMean > 200f && (ringMean - centerLum > 35f || centerLum < 200f)) {
+                            val contrast = ringMean - innerMin
+                            if (innerMin < 160f && contrast > 85f) {
+                                val fillRatio = darkInnerCount.toFloat() / max(1, totalInner).toFloat()
+                                val qualityScore = contrast * (0.5f + 0.5f * fillRatio)
+                                if (qualityScore > bestScore) {
+                                    bestScore = qualityScore
+                                    val boxRadius = rOuter + 4
+                                    bestCandidate = TemplateMatchResult(
+                                        score = (contrast / 180f).coerceIn(0.85f, 0.99f),
+                                        bounds = Rect(absX - boxRadius, absY - boxRadius, absX + boxRadius, absY + boxRadius),
+                                        label = "右上角略過鈕(▶|)"
+                                    )
+                                }
                             }
                         }
                     }
