@@ -389,7 +389,7 @@ class LotteryTask {
             t.contains("完成任務") ||
             t.contains("即可獲得") ||
             t.contains("大量金幣") ||
-            t.contains("5張") ||
+            (t.contains("5張") && !t.contains("15張") && !t.contains("25張")) ||
             t.contains("50張") ||
             t.contains("免費抽")
         }
@@ -401,7 +401,7 @@ class LotteryTask {
             val t = item.text.replace(" ", "")
             if (t.contains("完成任務") || t.contains("即可獲得") || t.contains("大量金幣") ||
                 t.contains("最多") || t.contains("查看獎項") || t.contains("獎項一覽") ||
-                t.contains("回復") || t.contains("還需") || t.contains("5張") ||
+                t.contains("回復") || t.contains("還需") || (t.contains("5張") && !t.contains("15張") && !t.contains("25張")) ||
                 t.contains("50張") || t.contains("抽1次")
             ) {
                 return@any false

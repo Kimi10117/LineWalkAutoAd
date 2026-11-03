@@ -188,14 +188,19 @@ class OcrRecognizer {
         val sh = screenBitmap.height
 
         // 若處於抽抽樂中獎結果畫面（中獎囉、中獎、分享給好友）或抽抽樂主面板（查看獎項一覽、完成任務、即可獲得、大量金幣、5張抽1次），
-        // 絕不觸發中央領獎彈窗關閉（防止主面板『最多5000枚金幣』觸發備援座標點中下方『大量金幣!!』推廣橫幅）！
-        val isLotteryResultScreen = items.any { item ->
+        // 絕不觸發中央領獎彈窗關閉（注意：嚴禁使用單獨 t.contains("5張")，因為步數領獎彈窗標題『獲得15張票券！』含『15張』會被誤殺！）
+        val hasExplicitTicketOrCoinModalTitle = items.any { item ->
+            val cy = item.bounds.centerY().toFloat() / sh
+            val t = item.text.replace(" ", "")
+            cy in 0.20f..0.42f && (t.contains("張票券！") || t.contains("張票券!") || t.contains("獲得15張") || t.contains("獲得10張"))
+        }
+        val isLotteryResultScreen = !hasExplicitTicketOrCoinModalTitle && items.any { item ->
             val cy = item.bounds.centerY().toFloat() / sh
             val t = item.text.replace(" ", "")
             t.contains("中獎囉") || t.contains("中獎") || t.contains("分享給好友") ||
             t.contains("查看獎項") || t.contains("獎項一覽") ||
             t.contains("完成任務") || t.contains("即可獲得") || t.contains("大量金幣") ||
-            t.contains("5張") || t.contains("50張") ||
+            t.contains("5張抽") || t.contains("50張抽") ||
             (cy in 0.60f..0.76f && (t.contains("x1", ignoreCase = true) || t.contains("1張")) && !t.contains("金幣") && !t.contains("票券"))
         }
         if (isLotteryResultScreen) {
@@ -266,11 +271,52 @@ class OcrRecognizer {
             return "OCR[${closeOcr.text}]" to closeOcr.bounds
         }
 
-        // 備援：必須確認有領獎標題文字，且具備半透明遮罩或完整領獎標題驚嘆號，方能派發中央關閉點擊
-        if (hasRewardTitleOcr && (isDimmedModal || items.any {
+        // 像素級驗證中央領獎彈窗底部的白底黑字 [ 關閉 ] 膠囊按鈕 (y in 0.675..0.710)：
+        // 當懸浮視窗遮擋上半部『獲得15張票券！』標題且 OCR 漏抓『關閉』二字時，仍可精準識別並點擊關閉！
+        val hasPixelCloseButton = if (isDimmedModal && sw >= 100 && sh >= 100) {
+            var darkCenterPts = 0
+            val y1 = (sh * 0.675f).toInt().coerceIn(0, sh - 1)
+            val y2 = (sh * 0.710f).toInt().coerceIn(y1 + 1, sh)
+            val cx1 = (sw * 0.44f).toInt().coerceIn(0, sw - 1)
+            val cx2 = (sw * 0.56f).toInt().coerceIn(cx1 + 1, sw)
+            for (y in y1 until y2 step 2) {
+                for (x in cx1 until cx2 step 2) {
+                    val c = screenBitmap.getPixel(x, y)
+                    val r = (c shr 16) and 0xFF
+                    val g = (c shr 8) and 0xFF
+                    val b = c and 0xFF
+                    if (r < 85 && g < 85 && b < 85) darkCenterPts++
+                }
+            }
+            var whiteWingPts = 0
+            var wingTotal = 0
+            val wxL1 = (sw * 0.25f).toInt().coerceIn(0, sw - 1)
+            val wxL2 = (sw * 0.40f).toInt().coerceIn(wxL1 + 1, sw)
+            val wxR1 = (sw * 0.60f).toInt().coerceIn(0, sw - 1)
+            val wxR2 = (sw * 0.75f).toInt().coerceIn(wxR1 + 1, sw)
+            for (y in y1 until y2 step 3) {
+                for (x in wxL1 until wxL2 step 4) {
+                    val c = screenBitmap.getPixel(x, y)
+                    if (((c shr 16) and 0xFF) > 230 && ((c shr 8) and 0xFF) > 230 && (c and 0xFF) > 230) whiteWingPts++
+                    wingTotal++
+                }
+                for (x in wxR1 until wxR2 step 4) {
+                    val c = screenBitmap.getPixel(x, y)
+                    if (((c shr 16) and 0xFF) > 230 && ((c shr 8) and 0xFF) > 230 && (c and 0xFF) > 230) whiteWingPts++
+                    wingTotal++
+                }
+            }
+            val wingWhiteRatio = if (wingTotal > 0) whiteWingPts.toFloat() / wingTotal else 0f
+            darkCenterPts >= 15 && wingWhiteRatio >= 0.85f
+        } else {
+            false
+        }
+
+        // 備援：確認有領獎標題文字（且具備半透明遮罩或完整領獎標題驚嘆號），或具備半透明遮罩且像素級確認底部有白底黑字 [關閉] 膠囊鈕
+        if ((hasRewardTitleOcr && (isDimmedModal || items.any {
                 val s = it.text.replace(" ", "")
                 s.contains("張票券！") || s.contains("枚金幣！") || s.contains("張票券!") || s.contains("枚金幣!")
-            })
+            })) || (isDimmedModal && hasPixelCloseButton)
         ) {
             val fallbackCloseRect = Rect(
                 (sw * 0.35f).toInt(),

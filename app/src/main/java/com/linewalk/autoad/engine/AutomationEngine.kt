@@ -354,6 +354,29 @@ class AutomationEngine private constructor(private val context: Context) {
         // 當畫面處於任何合法廣告容器套件時，無條件判定為合法廣告播放，
         // 絕對不可判定為「外部應用」而發送返回鍵提早退出！
         // 若當前狀態尚未轉入 AD_WATCHING，立即無縫切換至 AD_WATCHING 並立即於本 Tick 執行廣告監控！
+        // 0A. 嚴格攔截外部社群應用程式（如誤跳轉至 Facebook App 粉絲專頁 com.facebook.katana / Instagram）：
+        // 一旦跳出至獨立 Facebook App，立即發送系統返回鍵退出並拉回《LINE 散步趣》，絕不留在 FB 內滑動或等待 48 秒！
+        if (AppConfig.isExternalSocialAppPackage(fgPkg)) {
+            externalAppTicks++
+            appendLog("[防護] 偵測到跳轉外部社群應用 ($fgPkg)，立即發送返回鍵回到散步趣 (連續 ${externalAppTicks} 次)")
+            adCloserHandler.markRecentRedirect()
+            service.navigateBackFromExternalSocialApp(minIntervalMs = 600L)
+            if (externalAppTicks >= 2) {
+                val targetPkg = config.targetGamePackages.firstOrNull { it != "jp.naver.line.android" } ?: "com.linecorp.LGWKTW"
+                service.bringAppToFront(targetPkg)
+                externalAppTicks = 0
+            }
+            if (currentState != EngineState.AD_WATCHING) {
+                adCloserHandler.onEnterAdMode(preserveRedirectState = true)
+                transitionTo(
+                    newState = EngineState.AD_WATCHING,
+                    detail = "已從外部社群應用 ($fgPkg) 返回散步趣，繼續監控中...",
+                    safeOverlayText = "[防護] 返回散步趣中..."
+                )
+            }
+            return
+        }
+
         if (AppConfig.isAdPackage(fgPkg)) {
             nonGameScreenTicks = 0
             if (currentState != EngineState.AD_WATCHING) {

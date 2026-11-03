@@ -123,6 +123,20 @@ class AppConfig(context: Context) {
             "com.huawei.browser"               // 華為瀏覽器
         )
 
+        val EXTERNAL_SOCIAL_APP_PACKAGES = setOf(
+            "com.facebook.katana",
+            "com.facebook.orca",
+            "com.facebook.lite",
+            "com.facebook.mlite",
+            "com.instagram.android",
+            "com.threads.android"
+        )
+
+        fun isExternalSocialAppPackage(pkg: String?): Boolean {
+            if (pkg.isNullOrBlank()) return false
+            return pkg in EXTERNAL_SOCIAL_APP_PACKAGES
+        }
+
         fun isRedirectPackage(pkg: String?): Boolean {
             if (pkg.isNullOrBlank()) return false
             if (isAdPackage(pkg)) return false

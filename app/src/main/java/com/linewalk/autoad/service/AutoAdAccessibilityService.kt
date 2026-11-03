@@ -285,6 +285,21 @@ class AutoAdAccessibilityService : AccessibilityService() {
         return performGlobalAction(GLOBAL_ACTION_BACK)
     }
 
+    /**
+     * 當廣告或點擊誤跳轉至外部社群應用程式（如 Facebook 粉絲專頁 com.facebook.katana、Instagram 等）時，
+     * 立即派發系統返回鍵退出外部社群 App 回到散步趣。
+     */
+    fun navigateBackFromExternalSocialApp(minIntervalMs: Long = 600L): Boolean {
+        val now = System.currentTimeMillis()
+        if (now - lastBackActionTimeMs < minIntervalMs) {
+            return false
+        }
+        lastBackActionTimeMs = now
+        val fg = getForegroundPackageName()
+        Log.i(TAG, "派發外部社群應用返回鍵 (GLOBAL_ACTION_BACK), 前景: $fg")
+        return performGlobalAction(GLOBAL_ACTION_BACK)
+    }
+
     fun navigateBack(allowInGame: Boolean = false): Boolean {
         return safeNavigateBack(allowInGame = allowInGame)
     }
