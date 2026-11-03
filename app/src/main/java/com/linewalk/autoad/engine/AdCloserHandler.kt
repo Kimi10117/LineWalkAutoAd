@@ -127,6 +127,14 @@ class AdCloserHandler(
         currentScreenHeight = sh
         val elapsedSec = getElapsedSeconds()
 
+        // 0. 最優先檢查：是否跳出「無法載入廣告 / 請稍後再試。」錯誤彈窗
+        val adErrorClose = ocrRecognizer.findAdLoadErrorCloseButton(screenBitmap, ocrItems)
+        if (adErrorClose != null) {
+            hasAdActuallyShown = false
+            recordAndClick(service, adErrorClose.second, allowBlacklist = false)
+            return AdStepResult.ReturnedToGame(adErrorClose.second, "廣告載入失敗彈窗")
+        }
+
         // 1A. 防迷路檢查：若誤觸跳轉到 Google Play 商店或外部瀏覽器/Chrome Custom Tabs，立即按 BACK 並標記跳轉恢復
         val fgPkg = service.getForegroundPackageName()
         val isAd = fgPkg != null && AppConfig.isAdPackage(fgPkg)
@@ -143,6 +151,13 @@ class AdCloserHandler(
             )
         }
 
+        val isSocialLandingPage = ocrItems.any { item ->
+            val t = item.text.replace(" ", "")
+            val cy = item.bounds.centerY().toFloat() / sh
+            (cy < 0.15f && (t.contains("SOGO") || t.contains("Facebook") || t.contains("Reel") || item.text.trim() == "<")) ||
+            (cy > 0.80f && (t.contains("讚") || t.contains("留言") || t.contains("分享") || t.contains("追蹤") || t.contains("逛逛商店")))
+        }
+
         if (isExternal || hasBrowserTitle) {
             hasAdActuallyShown = true
             markRecentRedirect()
@@ -153,6 +168,18 @@ class AdCloserHandler(
             service.navigateBack()
             return AdStepResult.RedirectRecovered(fgPkg ?: "InAppBrowser")
         }
+
+        if (isSocialLandingPage) {
+            hasAdActuallyShown = true
+            markRecentRedirect()
+            lastClickedPoint?.let { badPt ->
+                blacklistedPoints.add(badPt)
+                lastClickedPoint = null
+            }
+            service.navigateBack()
+            return AdStepResult.RedirectRecovered("FacebookLandingPage")
+        }
+
 
         // 1A-2. 檢查是否誤入「選單」(設定) 畫面，安全返回散步趣遊戲介面
         val isMenuScreen = ocrItems.any { item ->

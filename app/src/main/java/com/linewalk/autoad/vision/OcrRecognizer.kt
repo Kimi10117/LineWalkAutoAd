@@ -319,10 +319,10 @@ class OcrRecognizer {
             })) || (isDimmedModal && hasPixelCloseButton)
         ) {
             val fallbackCloseRect = Rect(
-                (sw * 0.35f).toInt(),
-                (sh * 0.668f).toInt(),
-                (sw * 0.65f).toInt(),
-                (sh * 0.706f).toInt()
+                (sw * 0.20f).toInt(),
+                (sh * 0.672f).toInt(),
+                (sw * 0.80f).toInt(),
+                (sh * 0.720f).toInt()
             )
             return "領獎彈窗[關閉]鈕" to fallbackCloseRect
         }
@@ -636,11 +636,89 @@ class OcrRecognizer {
     /**
      * 判斷目前畫面是否為《LINE 散步趣》的主畫面（涵蓋『首頁』『步數』『時間』『遊戲』四大分頁，且未開啟彈窗）。
      */
+    /**
+     * 檢查是否跳出「無法載入廣告 / 請稍後再試。」錯誤提示彈窗：
+     * 當看廣告失敗或網路連線不穩定時，LINE 散步趣會彈出熊大持手機問號圖示與綠色 [關閉] 按鈕。
+     * 若未及時點擊 [關閉]，彈窗將遮擋遊戲畫面，導致巡邏誤以為當前分頁已無目標可領而擅自跳過！
+     * 回傳該彈窗 [關閉] 按鈕的 Rect。
+     */
+    fun findAdLoadErrorCloseButton(
+        screenBitmap: Bitmap,
+        items: List<OcrItem>
+    ): Pair<String, Rect>? {
+        val sw = screenBitmap.width
+        val sh = screenBitmap.height
+
+        val hasErrorText = items.any { item ->
+            val t = item.text.replace(" ", "")
+            t.contains("無法載入廣告") ||
+            t.contains("無法載入") ||
+            t.contains("請稍後再試") ||
+            t.contains("稍後再試") ||
+            t.contains("稍後在試") ||
+            t.contains("載入失敗") ||
+            t.contains("廣告載入失敗") ||
+            t.contains("連線逾時") ||
+            t.contains("連線錯誤")
+        }
+        if (!hasErrorText) return null
+
+        // 1. OCR 定位中下半部 (y in 0.60f..0.76f) 的「關閉 / 確認 / 確定」按鈕
+        val ocrClose = items.firstOrNull { item ->
+            val cy = item.bounds.centerY().toFloat() / sh
+            val cx = item.bounds.centerX().toFloat() / sw
+            val t = item.text.trim()
+            cy in 0.60f..0.76f && cx in 0.20f..0.80f && (
+                t == "關閉" || t.contains("關閉") ||
+                t == "確認" || t == "確定" || t.equals("OK", ignoreCase = true)
+            )
+        }
+        if (ocrClose != null) {
+            return "錯誤彈窗[關閉]OCR" to ocrClose.bounds
+        }
+
+        // 2. 幾何像素綠色膠囊探測 (y in 0.63f..0.71f, x in 0.20f..0.80f, 鮮綠色 g > 140 && g > r + 35 && g > b + 35)
+        var greenPts = 0
+        val y1 = (sh * 0.63f).toInt().coerceIn(0, sh - 1)
+        val y2 = (sh * 0.71f).toInt().coerceIn(y1 + 1, sh)
+        val x1 = (sw * 0.20f).toInt().coerceIn(0, sw - 1)
+        val x2 = (sw * 0.80f).toInt().coerceIn(x1 + 1, sw)
+
+        for (y in y1 until y2 step 2) {
+            for (x in x1 until x2 step 2) {
+                val c = screenBitmap.getPixel(x, y)
+                val r = (c shr 16) and 0xFF
+                val g = (c shr 8) and 0xFF
+                val b = c and 0xFF
+                if (g > 140 && (g - r > 35) && (g - b > 35)) {
+                    greenPts++
+                }
+            }
+        }
+
+        if (greenPts >= 40) {
+            val fallbackRect = Rect(
+                (sw * 0.15f).toInt(),
+                (sh * 0.64f).toInt(),
+                (sw * 0.85f).toInt(),
+                (sh * 0.70f).toInt()
+            )
+            return "錯誤彈窗綠色[關閉]鈕" to fallbackRect
+        }
+
+        return null
+    }
+
     fun isLineWalkMainScreenVisible(
         screenBitmap: Bitmap,
         items: List<OcrItem>,
         templateMatcher: TemplateMatcher
     ): Boolean {
+        // 00. 若彈出「無法載入廣告 / 請稍後再試。」錯誤提示彈窗，代表非主畫面！
+        if (findAdLoadErrorCloseButton(screenBitmap, items) != null) {
+            return false
+        }
+
         // 0. 若畫面正在向廣告伺服器載入廣告（中央顯示『載入中...』與白色 [取消] 鈕），代表正在等候廣告播放，絕非主畫面！
         if (isAdLoadingScreen(items, screenBitmap)) {
             return false

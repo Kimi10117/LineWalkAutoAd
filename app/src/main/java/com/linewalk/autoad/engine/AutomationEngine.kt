@@ -646,6 +646,22 @@ class AutomationEngine private constructor(private val context: Context) {
         val sw = screenBitmap.width
         val sh = screenBitmap.height
 
+        // 0. 最優先檢查：是否跳出「無法載入廣告 / 請稍後再試。」錯誤提示彈窗！
+        // 若出現，立即點擊 [關閉] 按鈕，並重置當前分頁空跑計數，絕不擅自跳過當前分頁！
+        val adErrorClose = ocrRecognizer.findAdLoadErrorCloseButton(screenBitmap, ocrItems)
+        if (adErrorClose != null) {
+            nonGameScreenTicks = 0
+            appendLog("[錯誤] 偵測到「無法載入廣告」彈窗，自動點擊 [關閉] 按鈕並重試當前分頁！")
+            FloatingOverlayService.clickWithOverlayPassthrough(adErrorClose.second) {
+                service.clickRect(adErrorClose.second)
+            }
+            emptyTicksOnCurrentTab = 0
+            confirmedEmptyTabs.remove(currentTab)
+            updateDetail("[重試] 已關閉廣告錯誤彈窗，重試當前分頁...", "[重試] 關閉錯誤重試中...")
+            delay(500)
+            return
+        }
+
         // 0A. 防外部瀏覽器/商店殘留：若目前前景停留在外部跳轉網頁或 Chrome Custom Tabs，立即按 BACK 並切換至廣告監控
         val fgPkg = service.getForegroundPackageName()
         val isExternal = fgPkg != null && AppConfig.isRedirectPackage(fgPkg)
@@ -1081,8 +1097,20 @@ class AutomationEngine private constructor(private val context: Context) {
         sw: Int,
         sh: Int
     ) {
-        // 1. 【使用者指示第 1 步】：必須先點擊完橘色「立即開啟賓果格」直到全部開完或達 5 次上限！
-        val openCellBtn = if (bingoOpenCellRetryCount < 5) {
+        // 0. 優先檢查是否覆蓋領獎完成中央彈窗（獲得15張票券！ / 獲得金幣！），立即關閉！
+        val centerModalClose = ocrRecognizer.findCenterRewardModalCloseButton(screenBitmap, ocrItems)
+        if (centerModalClose != null) {
+            appendLog("[賓果] 偵測到領獎確認彈窗，點擊關閉: ${centerModalClose.first}")
+            FloatingOverlayService.clickWithOverlayPassthrough(centerModalClose.second) {
+                service.clickRect(centerModalClose.second)
+            }
+            delay(400)
+            return
+        }
+
+        // 1. 【使用者指示第 1 步】：檢查是否處於冷卻中（距離下次抽選還有）；若冷卻中或已達 5 次上限，絕不再點開格！
+        val isCoolingDown = bingoTask.isBingoCoolingDown(ocrItems)
+        val openCellBtn = if (!isCoolingDown && bingoOpenCellRetryCount < 5) {
             bingoTask.findOpenCellButton(screenBitmap, ocrItems, templateMatcher)
         } else {
             null
@@ -1100,7 +1128,9 @@ class AutomationEngine private constructor(private val context: Context) {
             return
         }
 
-        if (bingoOpenCellRetryCount >= 5) {
+        if (isCoolingDown) {
+            appendLog("[賓果]「每日賓果」頂部顯示冷卻中 (距離下次抽選)，跳過開格直接檢查連線獎勵！")
+        } else if (bingoOpenCellRetryCount >= 5) {
             appendLog("[賓果]「立即開啟賓果格」已達點擊上限 (5/5，處於冷卻或已無格可開)，跳過開格直接檢查連線獎勵！")
         }
 
@@ -1132,9 +1162,8 @@ class AutomationEngine private constructor(private val context: Context) {
             }
         }
 
-        // 4. 【使用者指示第 3 步】：若點按已達 5 次且無任何 Get 可按 -> 立即點擊 (X) 關閉視窗，無須等待！
-        // 若為常規狀態（如今日上限未點滿 5 次），連續 4 次確認無目標後關閉視窗 (currentPhaseEmptyTicks < 4)
-        if (bingoOpenCellRetryCount < 5) {
+        // 4. 【使用者指示第 3 步】：若處於冷卻中或點按已達 5 次且無任何 Get 可按 -> 立即點擊 (X) 關閉視窗，無須等待！
+        if (!isCoolingDown && bingoOpenCellRetryCount < 5) {
             currentPhaseEmptyTicks++
             if (currentPhaseEmptyTicks < 4) {
                 updateDetail("[賓果] 檢查可開格與 Get 獎勵中 ($currentPhaseEmptyTicks/4)...", "[賓果] 檢查中...")
@@ -2622,9 +2651,18 @@ class AutomationEngine private constructor(private val context: Context) {
                     transitionTo(EngineState.IN_GAME_SCAN, "廣告載入逾時，返回巡邏...", "[巡邏] 巡邏畫面目標中...")
                     return
                 }
+                if (res.label == "廣告載入失敗彈窗") {
+                    appendLog("[錯誤] 廣告載入失敗，已自動關閉彈窗並原地重試當前分頁！")
+                    emptyTicksOnCurrentTab = 0
+                    confirmedEmptyTabs.remove(currentTab)
+                    transitionTo(EngineState.IN_GAME_SCAN, "已關閉廣告錯誤彈窗，重試當前分頁...", "[巡邏] 重試分頁中...")
+                    return
+                }
                 if (res.label == "廣告未成功啟動") {
-                    appendLog("[提示] 廣告未成功啟動或無廣告庫存，返回遊戲巡邏")
-                    transitionTo(EngineState.IN_GAME_SCAN, "廣告未成功啟動，返回巡邏...", "[巡邏] 巡邏畫面目標中...")
+                    appendLog("[提示] 廣告未成功啟動或無廣告庫存，重試當前分頁")
+                    emptyTicksOnCurrentTab = 0
+                    confirmedEmptyTabs.remove(currentTab)
+                    transitionTo(EngineState.IN_GAME_SCAN, "廣告未成功啟動，返回重試...", "[巡邏] 巡邏畫面目標中...")
                     return
                 }
                 if (res.label == "已點擊彈窗 [取消]") {

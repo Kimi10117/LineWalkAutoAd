@@ -431,7 +431,19 @@ class LotteryTask {
         val sh = screenBitmap.height
         val leftGray = templateMatcher.isPopupButtonDisabledGray(screenBitmap, (sh * 0.48f).toInt(), (sw * 0.26f).toInt())
         val rightFreeGray = templateMatcher.isPopupButtonDisabledGray(screenBitmap, (sh * 0.53f).toInt(), (sw * 0.75f).toInt())
-        return leftGray && rightFreeGray
+        val hasLeftCooldown = ocrItems.any { item ->
+            val cy = item.bounds.centerY()
+            val cx = item.bounds.centerX()
+            cx < (sw * 0.55f).toInt() && cy in (sh * 0.40f).toInt()..(sh * 0.56f).toInt() &&
+            (item.text.contains("回復還需") || item.text.contains("還需") || Regex("""\d{1,2}:\d{2}""").containsMatchIn(item.text))
+        }
+        val hasRightCooldown = ocrItems.any { item ->
+            val cy = item.bounds.centerY()
+            val cx = item.bounds.centerX()
+            cx > (sw * 0.48f).toInt() && cy in (sh * 0.45f).toInt()..(sh * 0.62f).toInt() &&
+            (item.text.contains("回復還需") || item.text.contains("還需") || Regex("""\d{1,2}:\d{2}""").containsMatchIn(item.text))
+        }
+        return (leftGray || hasLeftCooldown) && (rightFreeGray || hasRightCooldown)
     }
 
     fun findLotteryRewardAdButton(screenBitmap: Bitmap, ocrItems: List<OcrItem>): Rect? {
