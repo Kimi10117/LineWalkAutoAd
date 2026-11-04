@@ -122,7 +122,9 @@ jobs:
               8. **【全量經驗測試套件 636 項全綠驗證】**：
                  - 執行 python -m pytest tests_empirical/，633 passed, 3 skipped, 0 failed，100% 綠燈通過。
             files: LineWalkAutoAd.apk
-            prerelease: false      - name: Publish Versioned APK to GitHub Releases (v1.15.65)
+            prerelease: false
+
+      - name: Publish Versioned APK to GitHub Releases (v1.15.65)
         uses: softprops/action-gh-release@v2
         with:
             tag_name: v1.15.65
