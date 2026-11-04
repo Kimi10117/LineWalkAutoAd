@@ -1951,6 +1951,17 @@ class AutomationEngine private constructor(private val context: Context) {
         return true
     }
 
+    internal suspend fun forceAdvanceToNextTab(
+        service: AutoAdAccessibilityService,
+        sw: Int,
+        sh: Int,
+        ocrItems: List<OcrItem>,
+        screenBitmap: android.graphics.Bitmap,
+        reason: String
+    ): Boolean {
+        return triggerTabSelfHealingAdvancement(service, screenBitmap, ocrItems, sw, sh, reason)
+    }
+
     /**
      * 巡邏防死鎖自癒推進守護：
      * 當在同一分頁停滯或非主畫面無進展達逾時閥值時，
