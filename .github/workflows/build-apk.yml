@@ -87,7 +87,7 @@ jobs:
       - name: Update Tag and Publish APK to GitHub Releases
         run: |
           git tag -f latest-apk
-          git tag -f v1.15.65
+          git tag -f v1.15.66
           git push -f origin latest-apk || true
           git push -f origin v1.15.66 || true
 
