@@ -377,7 +377,19 @@ class OcrRecognizer {
      * 透過像素級特徵（底部中央獨立純白 [取消] 膠囊鈕 RGB > 230，而兩側 x=6%/94% 與彈窗上緣 x=8%,y=68% 皆被半透明黑幕壓暗 < 190）精準識別！
      */
     fun isAdLoadingScreen(items: List<OcrItem>, screenBitmap: Bitmap? = null): Boolean {
-        // 絕對一票否決：若畫面含有抽獎/領獎/中獎/日常任務等遊戲彈窗文字，絕非廣告載入畫面！
+        val hasLoadingText = items.any { item ->
+            val t = item.text.replace(" ", "")
+            t.contains("載入中") ||
+            t.contains("廣告載入") ||
+            t.contains("載入時間過長") ||
+            t.contains("重新啟動應用程式") ||
+            t.contains("若仍無法獲得解決") ||
+            t.contains("読み込み中") ||
+            (t.contains("Loading", ignoreCase = true) && items.any { it.text.contains("取消") || it.text.contains("Cancel") })
+        }
+        if (hasLoadingText) return true
+
+        // 絕對一票否決：若無明確載入文字，且畫面含有抽獎/領獎/中獎/日常任務等遊戲彈窗文字，絕非廣告載入畫面！
         val isGameModalOrResult = items.any { item ->
             val t = item.text.replace(" ", "")
             t.contains("中獎") ||
@@ -390,17 +402,6 @@ class OcrRecognizer {
             t.contains("領取獎勵")
         }
         if (isGameModalOrResult) return false
-
-        val hasLoadingText = items.any { item ->
-            val t = item.text.replace(" ", "")
-            t.contains("載入中") ||
-            t.contains("廣告載入") ||
-            t.contains("載入時間過長") ||
-            t.contains("重新啟動應用程式") ||
-            t.contains("読み込み中") ||
-            (t.contains("Loading", ignoreCase = true) && items.any { it.text.contains("取消") || it.text.contains("Cancel") })
-        }
-        if (hasLoadingText) return true
 
         if (screenBitmap != null) {
             val w = screenBitmap.width
@@ -584,8 +585,7 @@ class OcrRecognizer {
         val hasActiveBadgeBtn = templateMatcher?.let { tm ->
             val badgeBtn = tm.findPopupBonusBadgeAdButton(screenBitmap)
             badgeBtn != null &&
-                !isAreaInCooldown(items, badgeBtn.bounds.top - btnCheckMargin, badgeBtn.bounds.bottom + (sh * 0.06f).toInt()) &&
-                !tm.isPopupButtonDisabledGray(screenBitmap, badgeBtn.bounds.centerY())
+                !isAreaInCooldown(items, badgeBtn.bounds.top - btnCheckMargin, badgeBtn.bounds.bottom + (sh * 0.06f).toInt())
         } ?: false
 
         // 檢查畫面中是否有可領取文字 (如 \d+ 獲得、看廣告)
@@ -700,7 +700,9 @@ class OcrRecognizer {
             t.contains("載入失敗") ||
             t.contains("廣告載入失敗") ||
             t.contains("連線逾時") ||
-            t.contains("連線錯誤")
+            t.contains("連線錯誤") ||
+            t.contains("無法播放") ||
+            t.contains("廣告播放失敗")
         }
 
         // 1. OCR 定位中下半部 (y in 0.58f..0.76f) 的「關閉 / 確認 / 確定」按鈕
@@ -715,12 +717,17 @@ class OcrRecognizer {
         }
 
         // 2. 幾何像素綠色熊大卡片與綠色膠囊探測
-        // 下半部 (y in 0.63..0.71) 鮮綠色橢圓按鈕 (g > 140 && g - r > 35 && g - b > 35)
+        // 下半部 (y in 0.58..0.76 全機型螢幕自適應) 鮮綠色橢圓按鈕 (g > 140 && g - r > 35 && g - b > 35)
         var greenButtonPts = 0
-        val y1 = (sh * 0.63f).toInt().coerceIn(0, sh - 1)
-        val y2 = (sh * 0.71f).toInt().coerceIn(y1 + 1, sh)
-        val x1 = (sw * 0.20f).toInt().coerceIn(0, sw - 1)
-        val x2 = (sw * 0.80f).toInt().coerceIn(x1 + 1, sw)
+        var greenButtonMinX = sw
+        var greenButtonMaxX = 0
+        var greenButtonMinY = sh
+        var greenButtonMaxY = 0
+
+        val y1 = (sh * 0.58f).toInt().coerceIn(0, sh - 1)
+        val y2 = (sh * 0.76f).toInt().coerceIn(y1 + 1, sh)
+        val x1 = (sw * 0.15f).toInt().coerceIn(0, sw - 1)
+        val x2 = (sw * 0.85f).toInt().coerceIn(x1 + 1, sw)
 
         for (y in y1 until y2 step 2) {
             for (x in x1 until x2 step 2) {
@@ -730,6 +737,10 @@ class OcrRecognizer {
                 val b = c and 0xFF
                 if (g > 140 && (g - r > 35) && (g - b > 35)) {
                     greenButtonPts++
+                    if (x < greenButtonMinX) greenButtonMinX = x
+                    if (x > greenButtonMaxX) greenButtonMaxX = x
+                    if (y < greenButtonMinY) greenButtonMinY = y
+                    if (y > greenButtonMaxY) greenButtonMaxY = y
                 }
             }
         }
@@ -750,28 +761,25 @@ class OcrRecognizer {
             }
         }
 
-        val hasGreenModalPixelFeatures = greenButtonPts >= 30 && greenCardPts >= 35
+        val hasGreenModalPixelFeatures = greenButtonPts >= 25 && greenCardPts >= 35
 
-        if (hasErrorText) {
-            if (ocrClose != null) return "錯誤彈窗[關閉]OCR" to ocrClose.bounds
-            if (greenButtonPts >= 25) {
-                val fallbackRect = Rect(
-                    (sw * 0.15f).toInt(),
-                    (sh * 0.64f).toInt(),
-                    (sw * 0.85f).toInt(),
-                    (sh * 0.70f).toInt()
-                )
-                return "錯誤彈窗綠色[關閉]鈕" to fallbackRect
-            }
-        } else if (hasGreenModalPixelFeatures) {
-            if (ocrClose != null) return "錯誤彈窗[關閉]OCR" to ocrClose.bounds
-            val fallbackRect = Rect(
+        val dynamicButtonRect = if (greenButtonPts >= 25 && greenButtonMaxX > greenButtonMinX && greenButtonMaxY > greenButtonMinY) {
+            Rect(greenButtonMinX, greenButtonMinY, greenButtonMaxX, greenButtonMaxY)
+        } else {
+            Rect(
                 (sw * 0.15f).toInt(),
                 (sh * 0.64f).toInt(),
                 (sw * 0.85f).toInt(),
                 (sh * 0.70f).toInt()
             )
-            return "錯誤彈窗綠色[關閉]鈕" to fallbackRect
+        }
+
+        if (hasErrorText) {
+            if (ocrClose != null) return "錯誤彈窗[關閉]OCR" to ocrClose.bounds
+            return "錯誤彈窗綠色[關閉]鈕" to dynamicButtonRect
+        } else if (hasGreenModalPixelFeatures) {
+            if (ocrClose != null) return "錯誤彈窗[關閉]OCR" to ocrClose.bounds
+            return "錯誤彈窗綠色[關閉]鈕" to dynamicButtonRect
         }
 
         return null

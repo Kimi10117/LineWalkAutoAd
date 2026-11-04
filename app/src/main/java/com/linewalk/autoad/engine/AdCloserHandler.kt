@@ -327,8 +327,7 @@ class AdCloserHandler(
 
             val badgeBtn = templateMatcher.findPopupBonusBadgeAdButton(screenBitmap)
             val hasActiveBadgeClaim = badgeBtn != null &&
-                !ocrRecognizer.isAreaInCooldown(ocrItems, badgeBtn.bounds.top - btnCheckMargin, badgeBtn.bounds.bottom + (sh * 0.06f).toInt()) &&
-                !templateMatcher.isPopupButtonDisabledGray(screenBitmap, badgeBtn.bounds.centerY())
+                !ocrRecognizer.isAreaInCooldown(ocrItems, badgeBtn.bounds.top - btnCheckMargin, badgeBtn.bounds.bottom + (sh * 0.06f).toInt())
 
             if (hasActivePinkClaim || hasActiveBadgeClaim) {
                 if (elapsedSec >= 3) {

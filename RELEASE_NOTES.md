@@ -1,6 +1,72 @@
 # LINE 散步趣自動看廣告助手 (LineWalkAutoAd) 發布說明
 
 ## 版本資訊
+- 版本名稱：v1.15.66
+- 版本代碼：versionCode 99, versionName "1.15.66"
+- 發布類型：正式版本 (Release)
+
+---
+
+## 概述
+LineWalkAutoAd v1.15.66 為徹底根除實機死循環與跨機型螢幕自適應之關鍵正式版本。本版本深度檢測並徹底解決 Samsung Galaxy Z Flip5 (SM-F731N, 22:9 超長螢幕) 於日誌回報之「無法載入廣告」連續 45 次死循環、時間放置蘋果收成「白底黑框紅利按鈕」因紅色素檢驗誤判反灰漏點、以及廣告錯誤彈窗按鈕在不同長寬比螢幕點偏等致命缺陷。全專案經經驗測試套件全數通過驗證，達成零死鎖、零誤殺與全機型螢幕自適應。
+
+---
+
+## 核心問題與根因分析
+
+### 1. 廣告無庫存 (Ad Starvation) 引發「無法載入廣告」45次無限死循環
+- **問題現象**：實機診斷日誌自 14:16:12 連續 45 次輸出「[錯誤] 偵測到「無法載入廣告」彈窗，自動點擊 [關閉] 按鈕並重試當前分頁！」，助手在同一分頁無限循環重複碰壁，巡邏完全卡死。
+- **根因分析**：在伺服器暫無廣告庫存或限流時，點擊領取會立即彈出「無法載入廣告 請稍後再試。」彈窗。舊版程式碼在偵測到錯誤彈窗時，直接點擊關閉並重置計數 (`emptyTicksOnCurrentTab = 0`, `confirmedEmptyTabs.remove(currentTab)`)，且未接入點擊斷路器，亦未對載入失敗次數設置上限；關閉彈窗後立刻在原分頁重試，導致伺服器秒彈錯誤，陷入永久死循環。
+
+### 2. 白底黑框「紅利 [▶] x1 獲得」按鈕因紅色素過低遭反灰誤殺 (Zero False-Negative)
+- **問題現象**：時間分頁蘋果成熟點擊「獲得票券」後彈出下半部領獎視窗，畫面上具備鮮紅「紅利」標籤之黑框白底按鈕，但助手卡在彈窗前不再點擊，懸浮窗停滯。
+- **根因分析**：`TemplateMatcher.kt` 之 `isPopupButtonDisabledGray` 採用全粉紅按鈕檢驗邏輯 (`redRatio < 0.15f || disabledRatio > 0.65f`)。然而時間分頁蘋果收成按鈕本體為白底黑框，內部紅色素比例極低 (約 1%)，導致 `isPopupButtonDisabledGray` 將其誤判為「反灰不可點」。`findPopupBonusBadgeAdButton`、`AutomationEngine`、`OcrRecognizer` 與 `AdCloserHandler` 多重誤殺該按鈕，使其完全無法被觸發點擊。
+
+### 3. 22:9 超長螢幕錯誤彈窗關閉按鈕採樣點偏
+- **問題現象**：在 Samsung Galaxy Z Flip5 (SM-F731N, 22:9 超長螢幕) 上，廣告錯誤彈窗綠色 [關閉] 按鈕有時未能精確命中。
+- **根因分析**：舊版按鈕外框採樣 Y 軸區間 (0.62f..0.72f) 偏窄，在超長螢幕下未能完全覆蓋按鈕外框；且依賴固定比例 fallback Rect，缺乏基於輪框像素之動態外框計算。
+
+### 4. 廣告載入黑幕被主畫面文字一票否決
+- **問題現象**：廣告向伺服器緩衝時，畫面黑幕未被及時識別為載入中，提早觸發了超時或誤判。
+- **根因分析**：`isAdLoadingScreen` 將 `isGameModalOrResult` 優先級置於文字載入檢驗之前，導致半透明黑幕透出背景「獲得金幣」等字樣時被一票否決。
+
+---
+
+## 具體修復方案
+
+### 1. 分頁廣告無庫存守護 (Ad Starvation Guard) 與斷路器聯防
+- **檔案**：`app/src/main/java/com/linewalk/autoad/engine/AutomationEngine.kt`
+- **實作細節**：
+  - 導入分頁廣告錯誤計數器 `adLoadErrorCountPerTab: MutableMap<MainTab, Int>`；
+  - 接入 `checkClickCircuitBreaker`：若同一個錯誤彈窗連續點擊達 3 次無效，發送系統返回鍵破除死鎖並強制換頁；
+  - 實作無庫存守護：同一分頁廣告載入失敗累計達 2 次時，判定該分頁當前無庫存，點擊關閉後自動發送安全返回，並直接呼叫 `forceAdvanceToNextTab` 推進至下一分頁，維持全自動巡邏不中斷；
+  - 徹底移除 `emptyTicksOnCurrentTab = 0` 與 `confirmedEmptyTabs.remove(currentTab)`。
+
+### 2. 白底黑框紅利按鈕誤殺全面解禁
+- **檔案**：`app/src/main/java/com/linewalk/autoad/vision/TemplateMatcher.kt`, `app/src/main/java/com/linewalk/autoad/engine/AutomationEngine.kt`, `app/src/main/java/com/linewalk/autoad/vision/OcrRecognizer.kt`, `app/src/main/java/com/linewalk/autoad/engine/AdCloserHandler.kt`
+- **實作細節**：
+  - 在 `findPopupBonusBadgeAdButton` 中移除對全粉紅按鈕專用之 `isPopupButtonDisabledGray` 的錯誤調用；
+  - 白底黑框按鈕只要具備鮮艷粉紅「紅利」標籤（`matchedRows >= 3`），即代表獎勵有效可領取；
+  - 按鈕 Rect 適配全螢幕寬度：X 座標擴展至 `0.15f..0.85f`，高度依比例自適應居中；
+  - 同步清理 `AutomationEngine`、`OcrRecognizer` 與 `AdCloserHandler` 中對 `badgeBtn` 的 `isPopupButtonDisabledGray` 二次誤殺。
+
+### 3. 全機型螢幕動態邊界自適應
+- **檔案**：`app/src/main/java/com/linewalk/autoad/vision/OcrRecognizer.kt`
+- **實作細節**：
+  - 將綠色按鈕採樣 Y 軸區間拓展為 `0.58f..0.76f`，X 軸 `0.15f..0.85f`，完美覆蓋 16:9 至 22:9 所有螢幕比例；
+  - 動態統計綠色像素輪框邊界（`greenButtonMinX`, `greenButtonMaxX`, `greenButtonMinY`, `greenButtonMaxY`），動態輸出精確按鈕 Rect，徹底消除點偏；
+  - 擴大錯誤提示關鍵字：新增「無法播放」、「廣告播放失敗」、「連線逾時」。
+
+### 4. 廣告載入黑幕優先級重構
+- **檔案**：`app/src/main/java/com/linewalk/autoad/vision/OcrRecognizer.kt`
+- **實作細節**：
+  - 將 `hasLoadingText`（「載入中」、「廣告載入」、「載入時間過長」、「重新啟動應用程式」等）提升為最優先判定，不再受背景透出文字一票否決。
+
+---
+
+## 歷史版本回顧
+
+### 版本資訊
 - 版本名稱：v1.15.65
 - 版本代碼：versionCode 98, versionName "1.15.65"
 - 發布類型：正式版本 (Release)

@@ -203,6 +203,9 @@ class AutomationEngine private constructor(private val context: Context) {
     internal var geoXConsecutiveClicks = 0
     private var externalAppTicks = 0
 
+    // 廣告載入錯誤與無庫存計數守護
+    internal var adLoadErrorCountPerTab: MutableMap<MainTab, Int> = mutableMapOf()
+
     // 死鎖斷路器 (Circuit Breaker)
     internal var sameTargetClickCount = 0
     internal var lastTargetClickName: String? = null
@@ -309,6 +312,7 @@ class AutomationEngine private constructor(private val context: Context) {
         lastObservedTab = null
         nonMainScreenIdleTicks = 0
         confirmedEmptyTabs.clear()
+        adLoadErrorCountPerTab.clear()
         isBingoCompleted = false
         claimedBingoColumns.clear()
         bingoColumnRetryCount.clear()
@@ -702,18 +706,38 @@ class AutomationEngine private constructor(private val context: Context) {
         val sh = screenBitmap.height
 
         // 0. 最優先檢查：是否跳出「無法載入廣告 / 請稍後再試。」錯誤提示彈窗！
-        // 若出現，立即點擊 [關閉] 按鈕，並重置當前分頁空跑計數，絕不擅自跳過當前分頁！
         val adErrorClose = ocrRecognizer.findAdLoadErrorCloseButton(screenBitmap, ocrItems)
         if (adErrorClose != null) {
-            nonGameScreenTicks = 0
-            appendLog("[錯誤] 偵測到「無法載入廣告」彈窗，自動點擊 [關閉] 按鈕並重試當前分頁！")
+            // 斷路器檢查：若同一個錯誤彈窗連續點擊達 3 次無效，直接發送系統返回鍵 (BACK) 破除死鎖並強制換頁！
+            if (checkClickCircuitBreaker(service, adErrorClose.first, adErrorClose.second)) {
+                appendLog("[斷路器] 「無法載入廣告」彈窗連續點擊未響應，發送系統返回鍵並強制換頁！")
+                adLoadErrorCountPerTab[currentTab] = 0
+                forceAdvanceToNextTab(service, sw, sh, ocrItems, screenBitmap, "錯誤彈窗連續未響應，斷路器強制換頁")
+                return
+            }
+
+            // 分頁廣告無庫存 (Ad Starvation) 守護：同分頁累計 2 次載入失敗，直接推進下一分頁！
+            val errorCount = (adLoadErrorCountPerTab[currentTab] ?: 0) + 1
+            adLoadErrorCountPerTab[currentTab] = errorCount
+
+            if (errorCount >= 2) {
+                appendLog("[無庫存] 分頁【${currentTab.tabName}】廣告無庫存或連續載入失敗 (累計 $errorCount 次)，關閉彈窗並切換至下一分頁！")
+                FloatingOverlayService.clickWithOverlayPassthrough(adErrorClose.second) {
+                    service.clickRect(adErrorClose.second)
+                }
+                delay(300)
+                service.navigateBack()
+                adLoadErrorCountPerTab[currentTab] = 0
+                forceAdvanceToNextTab(service, sw, sh, ocrItems, screenBitmap, "分頁【${currentTab.tabName}】廣告無庫存")
+                return
+            }
+
+            appendLog("[錯誤] 偵測到「無法載入廣告」彈窗，自動點擊 [關閉] 按鈕 (嘗試 $errorCount/2)...")
             FloatingOverlayService.clickWithOverlayPassthrough(adErrorClose.second) {
                 service.clickRect(adErrorClose.second)
             }
-            emptyTicksOnCurrentTab = 0
-            confirmedEmptyTabs.remove(currentTab)
             updateDetail("[重試] 已關閉廣告錯誤彈窗，重試當前分頁...", "[重試] 關閉錯誤重試中...")
-            delay(500)
+            delay(600)
             return
         }
 
@@ -2292,6 +2316,7 @@ class AutomationEngine private constructor(private val context: Context) {
         _uiStatus.value = _uiStatus.value.copy(currentRound = currentRound)
 
         confirmedEmptyTabs.clear()
+        adLoadErrorCountPerTab.clear()
         emptyTicksOnCurrentTab = 0
         needsInitialTabSync = true
         tabSwitchRetries = 0
@@ -3131,8 +3156,7 @@ class AutomationEngine private constructor(private val context: Context) {
         // 3. 偵測彈窗左側的珊瑚粉紅『紅利』小標籤 (特別針對『時間』分頁的白底黑框『紅利 [▶] x 1 獲得』按鈕！)
         val badgePopupBtn = templateMatcher.findPopupBonusBadgeAdButton(screenBitmap)
         if (badgePopupBtn != null &&
-            !ocrRecognizer.isAreaInCooldown(ocrItems, badgePopupBtn.bounds.top - btnMarginY, badgePopupBtn.bounds.bottom + (sh * 0.06f).toInt()) &&
-            !templateMatcher.isPopupButtonDisabledGray(screenBitmap, badgePopupBtn.bounds.centerY())
+            !ocrRecognizer.isAreaInCooldown(ocrItems, badgePopupBtn.bounds.top - btnMarginY, badgePopupBtn.bounds.bottom + (sh * 0.06f).toInt())
         ) {
             val nearbyBonusOcr = ocrItems.firstOrNull {
                 kotlin.math.abs(it.bounds.centerY() - badgePopupBtn.bounds.centerY()) < (sh * 0.06f).toInt() &&

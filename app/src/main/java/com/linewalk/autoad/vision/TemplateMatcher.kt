@@ -265,8 +265,8 @@ class TemplateMatcher {
     fun findPopupBonusBadgeAdButton(screenBitmap: Bitmap): TemplateMatchResult? {
         val w = screenBitmap.width
         val h = screenBitmap.height
-        val startY = (h * 0.64f).toInt().coerceIn(0, h - 1)
-        val endY = (h * 0.86f).toInt().coerceIn(startY + 1, h - 1)
+        val startY = (h * 0.62f).toInt().coerceIn(0, h - 1)
+        val endY = (h * 0.88f).toInt().coerceIn(startY + 1, h - 1)
         val startX = (w * 0.07f).toInt()
         val endX = (w * 0.30f).toInt()
 
@@ -298,19 +298,18 @@ class TemplateMatcher {
 
         if (matchedRows >= 3 && maxPinkY > 0) {
             val targetCenterY = (maxPinkY + (h * 0.032f).toInt()).coerceAtMost((h * 0.90f).toInt())
-            if (!isPopupButtonDisabledGray(screenBitmap, targetCenterY)) {
-                val rect = Rect(
-                    (w * 0.25f).toInt(),
-                    targetCenterY - 22,
-                    (w * 0.75f).toInt(),
-                    targetCenterY + 22
-                )
-                return TemplateMatchResult(
-                    score = 0.96f,
-                    bounds = rect,
-                    label = "紅利[x1獲得]看廣告鈕"
-                )
-            }
+            val halfBtnHeight = maxOf(22, (h * 0.024f).toInt())
+            val rect = Rect(
+                (w * 0.15f).toInt(),
+                targetCenterY - halfBtnHeight,
+                (w * 0.85f).toInt(),
+                targetCenterY + halfBtnHeight
+            )
+            return TemplateMatchResult(
+                score = 0.96f,
+                bounds = rect,
+                label = "紅利[x1獲得]看廣告鈕"
+            )
         }
         return null
     }
