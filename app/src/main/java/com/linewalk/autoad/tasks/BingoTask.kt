@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.Rect
 import com.linewalk.autoad.config.AppConfig
 import com.linewalk.autoad.vision.OcrItem
+import com.linewalk.autoad.vision.ScreenViewportCalibrator
 import com.linewalk.autoad.vision.TemplateMatcher
 
 /**
@@ -343,44 +344,23 @@ class BingoTask {
     }
 
     /**
-     * 賓果彈窗右上角關閉 (X) 按鈕熱區
+     * 賓果彈窗右上角關閉 (X) 按鈕熱區（支援像素級白底面板頂部邊界與 (X) 筆畫中心尋跡，自適應 22:9/21:9/16:9 與三大金剛鍵）
      */
-    fun getCloseButtonBounds(sw: Int, sh: Int, ocrItems: List<OcrItem> = emptyList(), screenBitmap: Bitmap? = null): Rect {
-        val titleItem = ocrItems.firstOrNull { item ->
-            val cy = item.bounds.centerY().toFloat() / sh
-            val cx = item.bounds.centerX().toFloat() / sw
-            cy in 0.06f..0.22f && cx in 0.20f..0.80f && listOf("每日賓果", "今日賓果", "賓果", "BINGO").any { item.text.contains(it) }
-        }
-        val directOcrX = ocrItems.firstOrNull { item ->
-            val cy = item.bounds.centerY().toFloat() / sh
-            val cx = item.bounds.centerX().toFloat() / sw
-            cy in 0.06f..0.22f && cx > 0.80f && (
-                item.text.trim().equals("X", ignoreCase = true) ||
-                item.text.trim().equals("×") ||
-                item.text.trim().equals("x") ||
-                item.text.contains("關閉")
-            )
-        }
-        if (directOcrX != null) return directOcrX.bounds
-
-        val centerY = if (titleItem != null) {
-            titleItem.bounds.centerY()
-        } else {
-            val aspect = sh.toFloat() / kotlin.math.max(1, sw)
-            when {
-                aspect >= 2.15f -> (sh * 0.121f).toInt()
-                aspect >= 1.95f -> (sh * 0.110f).toInt()
-                aspect >= 1.85f -> (sh * 0.100f).toInt()
-                aspect >= 1.70f -> (sh * 0.088f).toInt()
-                else -> (sh * 0.075f).toInt()
-            }
-        }
-        val halfH = kotlin.math.max(24, (sh * 0.028f).toInt())
-        return Rect(
-            (sw * 0.83f).toInt(),
-            (centerY - halfH).coerceIn(0, sh),
-            (sw * 0.97f).toInt(),
-            (centerY + halfH).coerceIn(0, sh)
+    fun getCloseButtonBounds(
+        sw: Int,
+        sh: Int,
+        ocrItems: List<OcrItem> = emptyList(),
+        screenBitmap: Bitmap? = null,
+        attempt: Int = 1
+    ): Rect {
+        return ScreenViewportCalibrator.findSubDialogCloseButtonBounds(
+            sw = sw,
+            sh = sh,
+            ocrItems = ocrItems,
+            screenBitmap = screenBitmap,
+            exactHeaderTitles = listOf("每日賓果"),
+            defaultYRatio22to9 = 0.121f,
+            attempt = attempt
         )
     }
 

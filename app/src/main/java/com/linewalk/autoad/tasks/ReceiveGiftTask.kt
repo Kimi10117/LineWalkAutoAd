@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.Rect
 import com.linewalk.autoad.config.AppConfig
 import com.linewalk.autoad.vision.OcrItem
+import com.linewalk.autoad.vision.ScreenViewportCalibrator
 
 /**
  * 領取禮物按鈕目標類型：
@@ -433,35 +434,23 @@ class ReceiveGiftTask {
     }
 
     /**
-     * 禮物彈窗右上角關閉 (X) 按鈕熱區 (校準至實機中心 x ≈ 0.890f, y ≈ 0.231f)
+     * 禮物彈窗右上角關閉 (X) 按鈕熱區 (校準至實機中心 x ≈ 0.890f, y ≈ 0.231f，並支援白底面板像素尋跡與全比例自適應)
      */
-    fun getCloseButtonBounds(sw: Int, sh: Int, ocrItems: List<OcrItem> = emptyList(), screenBitmap: Bitmap? = null): Rect {
-        val titleItem = ocrItems.firstOrNull { item ->
-            val cy = item.bounds.centerY().toFloat() / sh
-            val cx = item.bounds.centerX().toFloat() / sw
-            cy in 0.15f..0.30f && cx in 0.20f..0.80f && listOf("獲得禮物", "禮物", "好友禮物").any { item.text.contains(it) }
-        }
-        val directOcrX = ocrItems.firstOrNull { item ->
-            val cy = item.bounds.centerY().toFloat() / sh
-            val cx = item.bounds.centerX().toFloat() / sw
-            cy in 0.15f..0.32f && cx > 0.80f && (
-                item.text.trim().equals("X", ignoreCase = true) ||
-                item.text.trim().equals("×") ||
-                item.text.trim().equals("x") ||
-                item.text.contains("關閉")
-            )
-        }
-        if (directOcrX != null) return directOcrX.bounds
-
-        val centerX = (sw * 0.890f).toInt()
-        val centerY = titleItem?.bounds?.centerY() ?: (sh * 0.231f).toInt()
-        val halfW = (sw * 0.060f).toInt()
-        val halfH = (sh * 0.025f).toInt()
-        return Rect(
-            centerX - halfW,
-            centerY - halfH,
-            centerX + halfW,
-            centerY + halfH
+    fun getCloseButtonBounds(
+        sw: Int,
+        sh: Int,
+        ocrItems: List<OcrItem> = emptyList(),
+        screenBitmap: Bitmap? = null,
+        attempt: Int = 1
+    ): Rect {
+        return ScreenViewportCalibrator.findSubDialogCloseButtonBounds(
+            sw = sw,
+            sh = sh,
+            ocrItems = ocrItems,
+            screenBitmap = screenBitmap,
+            exactHeaderTitles = listOf("禮物", "禮物盒"),
+            defaultYRatio22to9 = 0.231f,
+            attempt = attempt
         )
     }
 }

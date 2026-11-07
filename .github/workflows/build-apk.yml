@@ -87,46 +87,52 @@ jobs:
       - name: Update Tag and Publish APK to GitHub Releases
         run: |
           git tag -f latest-apk
-          git tag -f v1.15.68
+          git tag -f v1.15.69
           git push -f origin latest-apk || true
-          git push -f origin v1.15.68 || true
+          git push -f origin v1.15.69 || true
 
       - name: Publish APK to GitHub Releases (latest-apk)
         uses: softprops/action-gh-release@v2
         with:
             tag_name: latest-apk
-            name: "散步趣助手 v1.15.68 (修復賓果糖果彈窗卡住、抽抽樂/任務開啟卡步數分頁與Trip.com廣告關閉 - Run #${{ github.run_number }})"
+            name: "散步趣助手 v1.15.69 (全螢幕比例與三大金剛鍵自適應、Google Play/左上角X廣告關閉、TXT日誌匯出 - Run #${{ github.run_number }})"
             body: |
-              **散步趣助手 v1.15.68 (Run #${{ github.run_number }}) - 修復每日賓果「1 跳過廣告糖果到手！」彈窗未關閉與綠旗 Get 重複點擊、修復開啟抽抽樂/任務/賓果時誤判為遊戲分頁狂點步數、以及修復 Trip.com Sponsored 左上角 X 與右上角略過鈕連點問題 (相容歷代版本 v1.15.67, v1.15.66, v1.15.65, v1.15.64, v1.15.63, v1.15.62, v1.15.61, v1.15.60, v1.15.58, v1.15.57, v1.15.56, v1.15.55, v1.15.54, v1.15.53, v1.15.52, v1.15.51, v1.15.50, v1.15.49, v1.15.48, v1.15.47, v1.15.46, v1.15.45)**
-              1. **【修復每日賓果「1 跳過廣告糖果到手！」彈窗未關閉與綠旗黑字 Get 重複點擊】**：
-                 - 擴充 `OcrRecognizer.findCenterRewardModalCloseButton` 支援「糖果到手」、「跳過廣告糖果」、「到手！」等賓果與日常獎勵彈窗標題，並解除當前景出現中央白底 `[關閉]` 按鈕時被底層「每日賓果 / 距離下次抽選」一票否決的限制；
-                 - 在 `AutomationEngine` 處理賓果視窗前加入前景領獎彈窗優先檢查，確保先點掉中央 `[關閉]` 按鈕再操作或關閉賓果視窗；
-                 - 在 `BingoTask.findNextClaimableReward` 強制要求 OCR 匹配 `Get` 時必須同時具備珊瑚粉紅膠囊像素特徵 (`redPoints.size >= 8`)，徹底排除已領取後的「綠色小旗子 + 黑字 Get」。
-              2. **【修復開啟抽抽樂 / 任務 / 每日賓果時一直點首頁與步數分頁卡死問題】**：
-                 - 重構 `AutomationEngine.ensureOnTabWithDailyIcons`：只要畫面上已出現「賓果 / 抽抽樂 / 糖果 / 任務」日常圖示或位於【首頁 / 步數 / 時間】看板，立即放行並直接點擊目標圖示；
-                 - 從遊戲分頁判定中徹底移除會在【首頁 / 步數 / 時間】下方輪播橫幅出現的 `POINTSGAME`、`LINEPOINTS`、`輕鬆賺`、`開始遊玩`，解決因下方橫幅導致誤以為在【遊戲】分頁而無限點擊【步數】分頁的死循環。
-              3. **【修復 Trip.com Sponsored 左上角 X 關閉與根治廣告右上角略過鈕連點 6 次】**：
-                 - 在 `AdCloserHandler` 中根據 `Sponsored` 標題列高度動態對齊左上角 `X` 點擊座標，並在 `isInvalidOrBlacklisted` 放行左側獨立關閉欄 (`x in 0.030w..0.118w`)，同時相容 `3M` (`y≈0.029h`) 與 `Trip.com` (`y≈0.067h`) 兩種版型，並嚴格封鎖 `x >= 0.118w` 的品牌圓形頭像與下方網址列；
-                 - 在 `TemplateMatcher.detectCornerFastForwardSkip` 將頂部掃描邊界調高至 `y >= 4.2%` 嚴格避開系統狀態列圖示，移除會誤判白底廣告右上角靜音喇叭與網址文字的「模式 B」，並限制單支廣告最多嘗試 2 次。
+              **散步趣助手 v1.15.69 (Run #${{ github.run_number }}) - 全機型螢幕比例(摺疊機 22:9/21:9、16:9、全螢幕手勢、傳統三大金剛鍵)自適應防誤點、修復左上角 [▶| Google Play] 與 CACO 左上角圓形 (X) 廣告關閉、根除實機日誌 5 大死循環、新增含版本號 TXT 日誌直接匯出至檔案 App 並移除取樣按鈕 (相容歷代版本 v1.15.68, v1.15.67, v1.15.66, v1.15.65, v1.15.64, v1.15.63, v1.15.62, v1.15.61, v1.15.60, v1.15.58, v1.15.57, v1.15.56, v1.15.55, v1.15.54, v1.15.53, v1.15.52, v1.15.51, v1.15.50, v1.15.49, v1.15.48, v1.15.47, v1.15.46, v1.15.45)**
+              1. **【全機型螢幕比例 (22:9 / 21:9 / 16:9 / 三大金剛鍵) 自適應防誤點架構】**：
+                 - 新增 `ScreenViewportCalibrator`：自動偵測底部傳統三大金剛導覽列 (`hasThreeButtonNavBar`) 並建立底部防誤觸禁區；
+                 - 針對每日賓果、抽抽樂、任務、收禮等子視窗右上角 `(X)`，採用像素級「白底圓角面板頂部邊界 (`sheetTopY`) + 右上角深灰色 `(X)` 筆畫中心」動態定位，並支援多點微調輪詢與強制脫困，徹底消除因內文 (`"BIG抽抽樂"`、`"1 BINGO"`) 干擾造成的連點 11~70 次失誤。
+              2. **【修復左上角 [▶| Google Play] 膠囊廣告與 CACO 左上角圓形 (X) 廣告無法關閉問題】**：
+                 - 在 `AdCloserHandler` 新增 `findTopLeftGooglePlaySkipPill`：播放滿 4 秒且無倒數計時時，精準點擊左上角 (`cy in 2.5%..18.0% sh, cx in 2.0%..42.0% sw`) 的 `[▶| Google Play]` 略過膠囊按鈕；
+                 - 開放所有無倒數計時廣告在播放滿 5 秒後啟用左上角幾何 `(X)` 偵測 (`enableLeftCornerScan`)，並將 `TemplateMatcher.detectCornerGeometricX` 左上角掃描寬度擴展至 `19.5% sw`。
+              3. **【深度修復 1_15_68bug.txt 診斷日誌中的 5 大異常】**：
+                 - 根除 `FacebookLandingPage` 因泛用詞造成的 69 秒無限死循環洗版；
+                 - 攔截 `Node[txt=Skip 開啟商店]` 與 `OCR[BOOK NOW ×]` 造成的外部商店/瀏覽器誤跳轉；
+                 - 修復抽抽樂中獎結果畫面重複點擊 `[x1 獲得]` 10 次問題，並將記憶體日誌容量上限擴充至 20,000 筆。
+              4. **【日誌直接匯出為含版本號之 .txt 檔案至「檔案」App & 移除「取樣」功能】**：
+                 - 點擊主畫面 `[匯出日誌 (.txt)]` 直接將完整無截斷日誌寫入系統 `Downloads` 資料夾，檔名自動加上版本號（`散步趣助手_v1.15.69_診斷日誌_yyyyMMdd_HHmmss.txt`）；
+                 - 移除懸浮窗與主畫面的舊版手動「取樣」按鈕與區塊，介面全面精簡自動化。
             files: LineWalkAutoAd.apk
             prerelease: false
 
-      - name: Publish Versioned APK to GitHub Releases (v1.15.68)
+      - name: Publish Versioned APK to GitHub Releases (v1.15.69)
         uses: softprops/action-gh-release@v2
         with:
-            tag_name: v1.15.68
-            name: "散步趣助手 v1.15.68 (修復賓果糖果彈窗卡住、抽抽樂/任務開啟卡步數分頁與Trip.com廣告關閉)"
+            tag_name: v1.15.69
+            name: "散步趣助手 v1.15.69 (全螢幕比例與三大金剛鍵自適應、Google Play/左上角X廣告關閉、TXT日誌匯出)"
             body: |
-              **散步趣助手 v1.15.68 (Run #${{ github.run_number }}) - 修復每日賓果「1 跳過廣告糖果到手！」彈窗未關閉與綠旗 Get 重複點擊、修復開啟抽抽樂/任務/賓果時誤判為遊戲分頁狂點步數、以及修復 Trip.com Sponsored 左上角 X 與右上角略過鈕連點問題 (相容歷代版本 v1.15.67, v1.15.66, v1.15.65, v1.15.64, v1.15.63, v1.15.62, v1.15.61, v1.15.60, v1.15.58, v1.15.57, v1.15.56, v1.15.55, v1.15.54, v1.15.53, v1.15.52, v1.15.51, v1.15.50, v1.15.49, v1.15.48, v1.15.47, v1.15.46, v1.15.45)**
-              1. **【修復每日賓果「1 跳過廣告糖果到手！」彈窗未關閉與綠旗黑字 Get 重複點擊】**：
-                 - 擴充 `OcrRecognizer.findCenterRewardModalCloseButton` 支援「糖果到手」、「跳過廣告糖果」、「到手！」等賓果與日常獎勵彈窗標題，並解除當前景出現中央白底 `[關閉]` 按鈕時被底層「每日賓果 / 距離下次抽選」一票否決的限制；
-                 - 在 `AutomationEngine` 處理賓果視窗前加入前景領獎彈窗優先檢查，確保先點掉中央 `[關閉]` 按鈕再操作或關閉賓果視窗；
-                 - 在 `BingoTask.findNextClaimableReward` 強制要求 OCR 匹配 `Get` 時必須同時具備珊瑚粉紅膠囊像素特徵 (`redPoints.size >= 8`)，徹底排除已領取後的「綠色小旗子 + 黑字 Get」。
-              2. **【修復開啟抽抽樂 / 任務 / 每日賓果時一直點首頁與步數分頁卡死問題】**：
-                 - 重構 `AutomationEngine.ensureOnTabWithDailyIcons`：只要畫面上已出現「賓果 / 抽抽樂 / 糖果 / 任務」日常圖示或位於【首頁 / 步數 / 時間】看板，立即放行並直接點擊目標圖示；
-                 - 從遊戲分頁判定中徹底移除會在【首頁 / 步數 / 時間】下方輪播橫幅出現的 `POINTSGAME`、`LINEPOINTS`、`輕鬆賺`、`開始遊玩`，解決因下方橫幅導致誤以為在【遊戲】分頁而無限點擊【步數】分頁的死循環。
-              3. **【修復 Trip.com Sponsored 左上角 X 關閉與根治廣告右上角略過鈕連點 6 次】**：
-                 - 在 `AdCloserHandler` 中根據 `Sponsored` 標題列高度動態對齊左上角 `X` 點擊座標，並在 `isInvalidOrBlacklisted` 放行左側獨立關閉欄 (`x in 0.030w..0.118w`)，同時相容 `3M` (`y≈0.029h`) 與 `Trip.com` (`y≈0.067h`) 兩種版型，並嚴格封鎖 `x >= 0.118w` 的品牌圓形頭像與下方網址列；
-                 - 在 `TemplateMatcher.detectCornerFastForwardSkip` 將頂部掃描邊界調高至 `y >= 4.2%` 嚴格避開系統狀態列圖示，移除會誤判白底廣告右上角靜音喇叭與網址文字的「模式 B」，並限制單支廣告最多嘗試 2 次。
+              **散步趣助手 v1.15.69 (Run #${{ github.run_number }}) - 全機型螢幕比例(摺疊機 22:9/21:9、16:9、全螢幕手勢、傳統三大金剛鍵)自適應防誤點、修復左上角 [▶| Google Play] 與 CACO 左上角圓形 (X) 廣告關閉、根除實機日誌 5 大死循環、新增含版本號 TXT 日誌直接匯出至檔案 App 並移除取樣按鈕 (相容歷代版本 v1.15.68, v1.15.67, v1.15.66, v1.15.65, v1.15.64, v1.15.63, v1.15.62, v1.15.61, v1.15.60, v1.15.58, v1.15.57, v1.15.56, v1.15.55, v1.15.54, v1.15.53, v1.15.52, v1.15.51, v1.15.50, v1.15.49, v1.15.48, v1.15.47, v1.15.46, v1.15.45)**
+              1. **【全機型螢幕比例 (22:9 / 21:9 / 16:9 / 三大金剛鍵) 自適應防誤點架構】**：
+                 - 新增 `ScreenViewportCalibrator`：自動偵測底部傳統三大金剛導覽列 (`hasThreeButtonNavBar`) 並建立底部防誤觸禁區；
+                 - 針對每日賓果、抽抽樂、任務、收禮等子視窗右上角 `(X)`，採用像素級「白底圓角面板頂部邊界 (`sheetTopY`) + 右上角深灰色 `(X)` 筆畫中心」動態定位，並支援多點微調輪詢與強制脫困，徹底消除因內文 (`"BIG抽抽樂"`、`"1 BINGO"`) 干擾造成的連點 11~70 次失誤。
+              2. **【修復左上角 [▶| Google Play] 膠囊廣告與 CACO 左上角圓形 (X) 廣告無法關閉問題】**：
+                 - 在 `AdCloserHandler` 新增 `findTopLeftGooglePlaySkipPill`：播放滿 4 秒且無倒數計時時，精準點擊左上角 (`cy in 2.5%..18.0% sh, cx in 2.0%..42.0% sw`) 的 `[▶| Google Play]` 略過膠囊按鈕；
+                 - 開放所有無倒數計時廣告在播放滿 5 秒後啟用左上角幾何 `(X)` 偵測 (`enableLeftCornerScan`)，並將 `TemplateMatcher.detectCornerGeometricX` 左上角掃描寬度擴展至 `19.5% sw`。
+              3. **【深度修復 1_15_68bug.txt 診斷日誌中的 5 大異常】**：
+                 - 根除 `FacebookLandingPage` 因泛用詞造成的 69 秒無限死循環洗版；
+                 - 攔截 `Node[txt=Skip 開啟商店]` 與 `OCR[BOOK NOW ×]` 造成的外部商店/瀏覽器誤跳轉；
+                 - 修復抽抽樂中獎結果畫面重複點擊 `[x1 獲得]` 10 次問題，並將記憶體日誌容量上限擴充至 20,000 筆。
+              4. **【日誌直接匯出為含版本號之 .txt 檔案至「檔案」App & 移除「取樣」功能】**：
+                 - 點擊主畫面 `[匯出日誌 (.txt)]` 直接將完整無截斷日誌寫入系統 `Downloads` 資料夾，檔名自動加上版本號（`散步趣助手_v1.15.69_診斷日誌_yyyyMMdd_HHmmss.txt`）；
+                 - 移除懸浮窗與主畫面的舊版手動「取樣」按鈕與區塊，介面全面精簡自動化。
             files: LineWalkAutoAd.apk
             prerelease: false

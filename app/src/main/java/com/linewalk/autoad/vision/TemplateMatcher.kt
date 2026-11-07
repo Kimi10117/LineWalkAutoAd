@@ -674,10 +674,10 @@ class TemplateMatcher {
         searchZones.add(Rect((sw * 0.75f).toInt(), rightUpperTopLimitY, (sw * 0.98f).toInt(), rightUpperBottomLimitY))
 
         if (includeLeftZone) {
-            // 左上角 (Meta Sponsored 頂部橫幅與輪播/插頁廣告關閉鈕位置，涵蓋 x in 2.0%..14% 與 y in 1.4%..12%)
+            // 左上角 (Meta Sponsored 頂部橫幅、CACO 輪播/插頁廣告與全比例 16:9~22:9 左上角關閉鈕位置，涵蓋 x in 2.0%..19.5% 與 y in 1.4%..16.0%)
             val leftTopLimitY = max((sh * 0.014f).toInt(), 18)
-            val leftBottomLimitY = (sh * 0.12f).toInt()
-            searchZones.add(Rect((sw * 0.020f).toInt(), leftTopLimitY, (sw * 0.14f).toInt(), leftBottomLimitY))
+            val leftBottomLimitY = (sh * 0.160f).toInt()
+            searchZones.add(Rect((sw * 0.020f).toInt(), leftTopLimitY, (sw * 0.195f).toInt(), leftBottomLimitY))
         }
 
         var bestCandidate: TemplateMatchResult? = null

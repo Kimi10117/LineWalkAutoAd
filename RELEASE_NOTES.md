@@ -1,18 +1,47 @@
 # LINE 散步趣自動看廣告助手 (LineWalkAutoAd) 發布說明
 
 ## 版本資訊
-- 版本名稱：v1.15.68
-- 版本代碼：versionCode 101, versionName "1.15.68"
+- 版本名稱：v1.15.69
+- 版本代碼：versionCode 102, versionName "1.15.69"
 - 發布類型：正式版本 (Release)
 
 ---
 
 ## 概述
-LineWalkAutoAd v1.15.68 針對實機診斷日誌與 4 張實機截圖進行精準修復：解決每日賓果領取連線獎勵後卡在「1 跳過廣告糖果到手！[關閉]」中央彈窗及重複點擊已領取之「綠旗黑字 Get」問題；解決開啟【抽抽樂】、【任務】或【每日賓果】時因首頁與步數下方「LINE POINTS GAME / 輕鬆賺」橫幅誤判為遊戲分頁而無限點擊【步數】分頁卡死的問題；並修復 `Trip.com Sponsored` (Meta 廣告) 左上角 `X` 關閉座標與根治廣告「右上角略過鈕(▶|)」連點 6 次問題。
+LineWalkAutoAd v1.15.69 為全機型螢幕比例自適應與深度穩定性升級版本：新增 `ScreenViewportCalibrator` 全面適配摺疊機 `22:9` / `21:9`、`16:9`、全螢幕手勢與傳統三大金剛導覽列；修復左上角 `[▶| Google Play]` 膠囊廣告與 `CACO DOUBLE 11. SALE` 左上角圓形 `(X)` 廣告無法關閉問題；徹底根除實機日誌 `1_15_68bug.txt` 中的 5 大死循環（`FacebookLandingPage` 69 秒洗版、`Skip 開啟商店` 與 `BOOK NOW ×` 誤跳轉、每日賓果與抽抽樂右上角 `(X)` 連點 11~70 次失誤、抽抽樂中獎結果畫面重複點 10 次）；並將日誌改為直接匯出含版本號之 `.txt` 檔案至手機「檔案 (Downloads)」App，同時移除舊版「取樣」按鈕。
 
 ---
 
-## 具體更新與修復內容 (v1.15.68)
+## 具體更新與修復內容 (v1.15.69)
+
+### 1. 全機型螢幕比例 (摺疊機 22:9 / 21:9、16:9、全螢幕手勢、傳統三大金剛鍵) 自適應防誤點架構
+- **檔案**：`ScreenViewportCalibrator.kt`, `BingoTask.kt`, `LotteryTask.kt`, `MissionTask.kt`, `ReceiveGiftTask.kt`, `FriendGiftTask.kt`, `AdCloserHandler.kt`
+- **實作細節**：
+  - 自動偵測底部傳統三大金剛導覽列 (`hasThreeButtonNavBar`) 並建立安全禁區，防止誤觸系統返回/首頁/多工鍵；
+  - 子視窗（每日賓果、抽抽樂、任務、收禮）右上角 `(X)` 採用像素級「白底圓角面板頂部邊界 (`sheetTopY`) + 右上角深灰色 `(X)` 筆畫中心」動態定位，並支援多點微調輪詢與強制脫困。
+
+### 2. 修復附圖左上角 `[▶| Google Play]` 膠囊與 `CACO` 左上角圓形 `(X)` 廣告無法關閉問題
+- **檔案**：`AdCloserHandler.kt`, `TemplateMatcher.kt`, `NodeInspector.kt`
+- **實作細節**：
+  - 新增 `findTopLeftGooglePlaySkipPill`：播放滿 4 秒且無倒數計時時，精準點擊左上角 (`cy in 2.5%..18.0% sh, cx in 2.0%..42.0% sw`) 的 `[▶| Google Play]` 略過膠囊按鈕；
+  - 開放所有無倒數計時廣告在播放滿 5 秒後啟用左上角幾何 `(X)` 偵測 (`enableLeftCornerScan`)，並將 `TemplateMatcher.detectCornerGeometricX` 左上角掃描寬度擴展至 `19.5% sw`。
+
+### 3. 深度修復實機診斷日誌 (`1_15_68bug.txt`) 5 大異常
+- **檔案**：`AdCloserHandler.kt`, `OcrRecognizer.kt`, `NodeInspector.kt`, `AutomationEngine.kt`
+- **實作細節**：
+  - 根除 `FacebookLandingPage` 因泛用詞造成的 69 秒無限死循環洗版；
+  - 攔截 `Node[txt=Skip 開啟商店]` 與 `OCR[BOOK NOW ×]` 造成的外部商店/瀏覽器誤跳轉；
+  - 修復抽抽樂中獎結果畫面重複點擊 `[x1 獲得]` 10 次問題，並將記憶體日誌容量上限擴充至 20,000 筆。
+
+### 4. 日誌直接匯出為含版本號之 `.txt` 檔案至「檔案」App & 移除「取樣」功能
+- **檔案**：`MainActivity.kt`, `FloatingOverlayService.kt`, `activity_main.xml`, `strings.xml`
+- **實作細節**：
+  - 點擊主畫面 `[匯出日誌 (.txt)]` 直接將完整無截斷日誌寫入系統 `Downloads` 資料夾，檔名自動加上版本號（`散步趣助手_v1.15.69_診斷日誌_yyyyMMdd_HHmmss.txt`）；
+  - 移除懸浮窗與主畫面的舊版手動「取樣」按鈕與區塊。
+
+---
+
+## 歷史版本紀錄 (v1.15.68)
 
 ### 1. 修復每日賓果「1 跳過廣告糖果到手！」彈窗未關閉與綠旗黑字 Get 重複點擊
 - **檔案**：`OcrRecognizer.kt`, `BingoTask.kt`, `AutomationEngine.kt`

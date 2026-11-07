@@ -78,17 +78,23 @@ class NodeInspector {
                         val idMatch = AD_CLOSE_VIEW_IDS.any { viewId.contains(it) } ||
                             viewId.contains("skip") || viewId.contains("close")
                         val exactSymbolMatch = text in EXACT_CLOSE_SYMBOLS || desc in EXACT_CLOSE_SYMBOLS
-                        val keywordMatch = AD_CLOSE_TEXT_KEYWORDS.any {
+                        val isTopLeftGooglePlayPill = isFullScreenAd &&
+                            cy in (screenHeight * 0.025f).toInt()..(screenHeight * 0.18f).toInt() &&
+                            cx < (screenWidth * 0.42f).toInt() &&
+                            rect.width() <= (screenWidth * 0.42f).toInt() &&
+                            rect.height() <= (screenHeight * 0.08f).toInt() &&
+                            (text.contains("Google Play", ignoreCase = true) || desc.contains("Google Play", ignoreCase = true))
+                        val keywordMatch = (text.length <= 14 && desc.length <= 20 && AD_CLOSE_TEXT_KEYWORDS.any {
                             text.equals(it, ignoreCase = true) ||
                                 desc.equals(it, ignoreCase = true) ||
                                 text.contains(it, ignoreCase = true) ||
                                 desc.contains(it, ignoreCase = true)
-                        }
+                        }) || isTopLeftGooglePlayPill
                         val isCountingDown = COUNTDOWN_HINTS.any {
                             text.contains(it) || desc.contains(it)
                         }
                         val isExcluded = EXCLUDE_TEXTS.any {
-                            text.contains(it) || desc.contains(it)
+                            text.contains(it, ignoreCase = true) || desc.contains(it, ignoreCase = true)
                         } || viewId.contains("adjoe")
 
                         if (!isCountingDown && !isExcluded && (idMatch || exactSymbolMatch || keywordMatch)) {
@@ -244,7 +250,9 @@ class NodeInspector {
 
         private val EXCLUDE_TEXTS = listOf(
             "同意並繼續", "隱私權", "條款", "不看廣告",
-            "開始遊玩", "遊玩", "輕鬆賺", "輕鬆", "adjoe", "Sponsored", "line points game"
+            "開始遊玩", "遊玩", "輕鬆賺", "輕鬆", "adjoe", "Sponsored", "line points game",
+            "開啟商店", "前往商店", "安裝", "下載", "立即下載", "免費下載",
+            "去逛逛", "立即購買", "立即預訂", "BOOK", "SHOP", "INSTALL", "DOWNLOAD"
         )
     }
 }

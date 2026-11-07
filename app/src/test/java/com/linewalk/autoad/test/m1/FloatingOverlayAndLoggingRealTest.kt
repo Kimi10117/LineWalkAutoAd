@@ -183,4 +183,68 @@ class FloatingOverlayAndLoggingRealTest {
         assertFalse("Export logs must NOT contain truncation warning when below threshold", exportLogs.contains("已截取最近"))
         assertTrue("Export logs must contain line #0", exportLogs.contains("測試事件 #0"))
     }
+
+    @Test
+    fun testBuildExportTxtFileName_includesVersionAndTxtExtension() {
+        val fixedDate = Date(1776848400000L)
+        val fileName = com.linewalk.autoad.ui.MainActivity.buildExportTxtFileName("1.15.69", fixedDate)
+        assertTrue("File name must start with app prefix and version", fileName.startsWith("散步趣助手_v1.15.69_診斷日誌_"))
+        assertTrue("File name must end with .txt", fileName.endsWith(".txt"))
+    }
+
+    @Test
+    fun testScreenViewportCalibrator_adaptsAcrossFoldableAnd16By9AndThreeButtonNav() {
+        // 1. 22:9 Foldable (1080x2640)
+        val closeFold = com.linewalk.autoad.vision.ScreenViewportCalibrator.findSubDialogCloseButtonBounds(
+            sw = 1080,
+            sh = 2640,
+            screenBitmap = null,
+            ocrItems = emptyList(),
+            exactHeaderTitles = listOf("每日賓果"),
+            attempt = 1
+        )
+        assertTrue("Foldable X center must be in top-right zone", closeFold.centerX() in 940..1045)
+        assertTrue("Foldable Y center must be near sheet header (~12% sh)", closeFold.centerY() in 280..380)
+
+        // 2. 16:9 Traditional screen (1080x1920)
+        val close16by9 = com.linewalk.autoad.vision.ScreenViewportCalibrator.findSubDialogCloseButtonBounds(
+            sw = 1080,
+            sh = 1920,
+            screenBitmap = null,
+            ocrItems = emptyList(),
+            exactHeaderTitles = listOf("抽抽樂"),
+            attempt = 1
+        )
+        assertTrue("16:9 X center must be in top-right zone", close16by9.centerX() in 940..1045)
+        assertTrue("16:9 Y center must be scaled properly for 1920 height", close16by9.centerY() in 190..280)
+
+        // 3. Multi-attempt jitter shifts coordinates to escape dead spots
+        val closeAttempt2 = com.linewalk.autoad.vision.ScreenViewportCalibrator.findSubDialogCloseButtonBounds(
+            sw = 1080,
+            sh = 2640,
+            screenBitmap = null,
+            ocrItems = emptyList(),
+            exactHeaderTitles = listOf("每日賓果"),
+            attempt = 2
+        )
+        assertTrue("Attempt 2 must apply micro-calibration offset", closeAttempt2.centerY() != closeFold.centerY())
+
+        // 4. Three-button navigation bar protection
+        val viewportWith3Btn = com.linewalk.autoad.vision.ScreenViewportCalibrator.ViewportMetrics(
+            sw = 1080,
+            sh = 1920,
+            aspectRatio = 1920f / 1080f,
+            hasThreeButtonNavBar = true,
+            systemNavBarTopY = (1920 * 0.922f).toInt(),
+            effectiveBottomY = (1920 * 0.922f).toInt()
+        )
+        assertTrue(
+            "Click at y=1850 on 3-button nav bar screen must be blocked",
+            com.linewalk.autoad.vision.ScreenViewportCalibrator.isInsideThreeButtonNavBarZone(540, 1850, viewportWith3Btn)
+        )
+        assertFalse(
+            "Click at y=1680 (in-app tab bar) must NOT be blocked",
+            com.linewalk.autoad.vision.ScreenViewportCalibrator.isInsideThreeButtonNavBarZone(540, 1680, viewportWith3Btn)
+        )
+    }
 }

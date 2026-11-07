@@ -177,6 +177,7 @@ class AutomationEngine private constructor(private val context: Context) {
         internal set
     private var hasClickedLotteryAdReward = false
     private var lotteryResultRewardWaitTicks = 0
+    private var lotteryResultCloseAttempts = 0
     private var lotteryFiftyDrawAttempts = 0
     private var lotteryFreeDrawAttempts = 0
     private var lotteryFiveDrawAttempts = 0
@@ -323,6 +324,7 @@ class AutomationEngine private constructor(private val context: Context) {
         isLotteryCompleted = false
         hasClickedLotteryAdReward = false
         lotteryResultRewardWaitTicks = 0
+        lotteryResultCloseAttempts = 0
         lotteryFiftyDrawAttempts = 0
         lotteryFreeDrawAttempts = 0
         lotteryFiveDrawAttempts = 0
@@ -897,15 +899,27 @@ class AutomationEngine private constructor(private val context: Context) {
             }
             if (isBingoCompleted) {
                 bingoDialogCloseAttempts++
-                val closeBtn = bingoTask.findCloseButton(ocrItems, sw, sh) ?: bingoTask.getCloseButtonBounds(sw, sh, ocrItems, screenBitmap)
-                appendLog("[賓果] 每日賓果已完成，點擊右上角 (X) 關閉視窗 (嘗試: $bingoDialogCloseAttempts)")
-                FloatingOverlayService.clickWithOverlayPassthrough(closeBtn) {
-                    service.clickRect(closeBtn)
-                }
-                if (bingoDialogCloseAttempts >= 2) {
-                    appendLog("[賓果] 連續點擊關閉視窗無回應，發送安全返回鍵關閉賓果彈窗")
-                    service.safeNavigateBack(allowInGame = true)
+                if (bingoDialogCloseAttempts >= 6) {
+                    appendLog("[賓果] 每日賓果視窗連續嘗試關閉達 $bingoDialogCloseAttempts 次，點擊底部【集點】強制重置回主畫面並推進下一階段！")
                     bingoDialogCloseAttempts = 0
+                    currentPhase = getNextPhase(PatrolPhase.BINGO)
+                    val mainTabBtn = friendGiftTask.getBottomMainTabRect(sw, sh, ocrItems, screenBitmap)
+                    FloatingOverlayService.clickWithOverlayPassthrough(mainTabBtn) {
+                        service.clickRect(mainTabBtn)
+                    }
+                    delay(400)
+                    return
+                }
+                val closeBtn = if (bingoDialogCloseAttempts == 5) {
+                    // 第 5 次嘗試點擊白底面板上方半透明黑幕遮罩區 (x=50%, y=5.5%)
+                    Rect((sw * 0.40f).toInt(), (sh * 0.045f).toInt(), (sw * 0.60f).toInt(), (sh * 0.068f).toInt())
+                } else {
+                    bingoTask.findCloseButton(ocrItems, sw, sh)
+                        ?: bingoTask.getCloseButtonBounds(sw, sh, ocrItems, screenBitmap, attempt = bingoDialogCloseAttempts)
+                }
+                appendLog("[賓果] 每日賓果已完成，點擊右上角 (X) 關閉視窗 (嘗試: $bingoDialogCloseAttempts/5)")
+                FloatingOverlayService.clickWithOverlayPassthrough(closeBtn) {
+                    service.clickRect(closeBtn, allowTopSafeZone = true)
                 }
                 delay(350)
                 return
@@ -919,11 +933,27 @@ class AutomationEngine private constructor(private val context: Context) {
             nonGameScreenTicks = 0
             subDialogOpenAttempts = 0
             if (isLotteryCompleted) {
+                lotteryDialogCloseAttempts++
+                if (lotteryDialogCloseAttempts >= 6) {
+                    appendLog("[抽抽樂] 抽抽樂視窗連續嘗試關閉達 $lotteryDialogCloseAttempts 次，點擊底部【集點】強制重置回主畫面並推進下一階段！")
+                    lotteryDialogCloseAttempts = 0
+                    currentPhase = getNextPhase(PatrolPhase.LOTTERY)
+                    val mainTabBtn = friendGiftTask.getBottomMainTabRect(sw, sh, ocrItems, screenBitmap)
+                    FloatingOverlayService.clickWithOverlayPassthrough(mainTabBtn) {
+                        service.clickRect(mainTabBtn)
+                    }
+                    delay(400)
+                    return
+                }
                 // lotteryTask.getCloseButtonBounds(sw, sh)
-            val closeBtn = lotteryTask.getCloseButtonBounds(sw, sh, ocrItems, screenBitmap)
-                appendLog("[抽抽樂] 抽抽樂已完成，點擊右上角 (X) 關閉視窗")
+                val closeBtn = if (lotteryDialogCloseAttempts == 5) {
+                    Rect((sw * 0.40f).toInt(), (sh * 0.045f).toInt(), (sw * 0.60f).toInt(), (sh * 0.068f).toInt())
+                } else {
+                    lotteryTask.getCloseButtonBounds(sw, sh, ocrItems, screenBitmap, attempt = lotteryDialogCloseAttempts)
+                }
+                appendLog("[抽抽樂] 抽抽樂已完成，點擊右上角 (X) 關閉視窗 (嘗試: $lotteryDialogCloseAttempts/5)")
                 FloatingOverlayService.clickWithOverlayPassthrough(closeBtn) {
-                    service.clickRect(closeBtn)
+                    service.clickRect(closeBtn, allowTopSafeZone = true)
                 }
                 delay(350)
                 return
@@ -937,9 +967,25 @@ class AutomationEngine private constructor(private val context: Context) {
             nonGameScreenTicks = 0
             subDialogOpenAttempts = 0
             if (isMissionCompleted) {
-                val closeBtn = missionTask.getCloseButtonBounds(sw, sh, ocrItems, screenBitmap)
+                missionDialogCloseAttempts++
+                if (missionDialogCloseAttempts >= 6) {
+                    appendLog("[任務] 任務視窗連續嘗試關閉達 $missionDialogCloseAttempts 次，點擊底部【集點】強制重置回主畫面並推進下一階段！")
+                    missionDialogCloseAttempts = 0
+                    currentPhase = getNextPhase(PatrolPhase.MISSION)
+                    val mainTabBtn = friendGiftTask.getBottomMainTabRect(sw, sh, ocrItems, screenBitmap)
+                    FloatingOverlayService.clickWithOverlayPassthrough(mainTabBtn) {
+                        service.clickRect(mainTabBtn)
+                    }
+                    delay(400)
+                    return
+                }
+                val closeBtn = if (missionDialogCloseAttempts == 5) {
+                    Rect((sw * 0.40f).toInt(), (sh * 0.045f).toInt(), (sw * 0.60f).toInt(), (sh * 0.068f).toInt())
+                } else {
+                    missionTask.getCloseButtonBounds(sw, sh, ocrItems, screenBitmap, attempt = missionDialogCloseAttempts)
+                }
                 FloatingOverlayService.clickWithOverlayPassthrough(closeBtn) {
-                    service.clickRect(closeBtn)
+                    service.clickRect(closeBtn, allowTopSafeZone = true)
                 }
                 delay(350)
                 return
@@ -1421,25 +1467,31 @@ class AutomationEngine private constructor(private val context: Context) {
 
 
         // 0B. 若處於抽獎結果彈窗且「已點過廣告獲票」，點擊彈窗底部的「關閉」按鈕回到抽獎主面板
+        // 重要防護：保持 hasClickedLotteryAdReward = true 直到真正離開結果畫面 (!hasLotteryResultContext)，
+        // 徹底防止因廣告異常返回或關閉延遲而重複點擊同一張 [x1 獲得] 10 次以上！
         if (hasLotteryResultContext && hasClickedLotteryAdReward) {
-            val resultCloseBtn = lotteryTask.findLotteryResultCloseButton(screenBitmap, ocrItems)
-            if (resultCloseBtn != null) {
-                hasClickedLotteryAdReward = false
-                lotteryResultRewardWaitTicks = 0
-                currentPhaseEmptyTicks = 0
-                appendLog("[抽獎]【抽抽樂結果】已完成看廣告獲票，點擊彈窗底部的 [關閉] 按鈕")
-                FloatingOverlayService.clickWithOverlayPassthrough(resultCloseBtn) {
-                    service.clickRect(resultCloseBtn)
-                }
-                delay(400)
-                return
+            lotteryResultCloseAttempts++
+            val resultCloseBtn = if (lotteryResultCloseAttempts >= 4) {
+                lotteryTask.getCloseButtonBounds(sw, sh, ocrItems, screenBitmap, attempt = lotteryResultCloseAttempts - 3)
+            } else {
+                lotteryTask.findLotteryResultCloseButton(screenBitmap, ocrItems)
+                    ?: lotteryTask.getCloseButtonBounds(sw, sh, ocrItems, screenBitmap, attempt = 1)
             }
+            lotteryResultRewardWaitTicks = 0
+            currentPhaseEmptyTicks = 0
+            appendLog("[抽獎]【抽抽樂結果】已完成看廣告獲票，點擊結果視窗 [關閉] 按鈕 (嘗試: $lotteryResultCloseAttempts)")
+            FloatingOverlayService.clickWithOverlayPassthrough(resultCloseBtn) {
+                service.clickRect(resultCloseBtn, allowTopSafeZone = true)
+            }
+            delay(400)
+            return
         }
 
         // 若不在結果彈窗中，重設相關暫存狀態
         if (!hasLotteryResultContext) {
             hasClickedLotteryAdReward = false
             lotteryResultRewardWaitTicks = 0
+            lotteryResultCloseAttempts = 0
         }
 
         // 1. 依使用者規則尋找：【第一優先：50抽】->【第二順位：免費抽】->【第三順位：5張抽1次】
@@ -1509,18 +1561,12 @@ class AutomationEngine private constructor(private val context: Context) {
             currentPhaseEmptyTicks = 0
             hasClickedLotteryAdReward = false
             isLotteryCompleted = true
-            lotteryDialogCloseAttempts++
-            appendLog("[完成]【抽抽樂】已無可抽項目 (50抽/免費抽/5抽皆已處理完畢)，關閉視窗 (嘗試:$lotteryDialogCloseAttempts/2)")
-            if (lotteryDialogCloseAttempts >= 2) {
-                appendLog("[提示]【抽抽樂】點擊關閉視窗無響應，發送系統返回鍵 (BACK) 強制關閉！")
-                service.navigateBack()
-                lotteryDialogCloseAttempts = 0
-            } else {
-                // lotteryTask.getCloseButtonBounds(sw, sh)
-            val closeBtn = lotteryTask.getCloseButtonBounds(sw, sh, ocrItems, screenBitmap)
-                FloatingOverlayService.clickWithOverlayPassthrough(closeBtn) {
-                    service.clickRect(closeBtn)
-                }
+            lotteryDialogCloseAttempts = 1
+            appendLog("[完成]【抽抽樂】已無可抽項目 (50抽/免費抽/5抽皆已處理完畢)，點擊右上角 (X) 關閉視窗")
+            // lotteryTask.getCloseButtonBounds(sw, sh)
+            val closeBtn = lotteryTask.getCloseButtonBounds(sw, sh, ocrItems, screenBitmap, attempt = 1)
+            FloatingOverlayService.clickWithOverlayPassthrough(closeBtn) {
+                service.clickRect(closeBtn, allowTopSafeZone = true)
             }
             currentPhase = getNextPhase(PatrolPhase.LOTTERY)
             updateDetail("[完成] 抽抽樂已完成，準備進入下一項...", "[完成] 抽抽樂完成")
@@ -2397,6 +2443,7 @@ class AutomationEngine private constructor(private val context: Context) {
         isLotteryCompleted = false
         hasClickedLotteryAdReward = false
         lotteryResultRewardWaitTicks = 0
+        lotteryResultCloseAttempts = 0
         lotteryFiftyDrawAttempts = 0
         lotteryFreeDrawAttempts = 0
         lotteryFiveDrawAttempts = 0
@@ -3317,7 +3364,7 @@ class AutomationEngine private constructor(private val context: Context) {
         val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(date)
         val line = "[$timestamp] $message"
         synchronized(_fullSessionLogs) {
-            if (_fullSessionLogs.size >= 5000) {
+            if (_fullSessionLogs.size >= 20000) {
                 _fullSessionLogs.removeAt(0)
             }
             _fullSessionLogs.add(line)

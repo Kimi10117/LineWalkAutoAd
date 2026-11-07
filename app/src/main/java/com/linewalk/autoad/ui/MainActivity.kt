@@ -3,11 +3,14 @@ package com.linewalk.autoad.ui
 import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
+import android.provider.MediaStore
 import android.provider.Settings
 import android.view.View
 import android.widget.Toast
@@ -22,6 +25,10 @@ import com.linewalk.autoad.engine.AutomationEngine
 import com.linewalk.autoad.service.AutoAdAccessibilityService
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /**
  * 主設定與狀態監控畫面 (MainActivity)：
@@ -178,28 +185,56 @@ class MainActivity : AppCompatActivity() {
 
         binding.btnExportLogs.setOnClickListener {
             val fullLogs = engine.getFullLogsFormatted()
-            val exportLogs = engine.getExportLogsFormatted(maxLines = 1500)
-            val safePayload = if (exportLogs.length > 200_000) {
-                val notice = "[注意：日誌量極大，已自動安全截斷以防止系統當機。完整日誌請使用「複製日誌」]\n\n"
-                notice + exportLogs.takeLast(180_000)
-            } else {
-                exportLogs
-            }
-
-            val sendIntent = Intent(Intent.ACTION_SEND).apply {
-                type = "text/plain"
-                putExtra(Intent.EXTRA_SUBJECT, getString(R.string.subject_export_logs))
-                putExtra(Intent.EXTRA_TEXT, safePayload)
-            }
-            val chooser = Intent.createChooser(sendIntent, getString(R.string.chooser_export_logs))
+            val fileName = buildExportTxtFileName(com.linewalk.autoad.BuildConfig.VERSION_NAME)
             try {
-                startActivity(chooser)
+                var savedToDownloads = false
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    val values = ContentValues().apply {
+                        put(MediaStore.Downloads.DISPLAY_NAME, fileName)
+                        put(MediaStore.Downloads.MIME_TYPE, "text/plain; charset=utf-8")
+                        put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                        put(MediaStore.Downloads.IS_PENDING, 1)
+                    }
+                    val uri = contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                    if (uri != null) {
+                        contentResolver.openOutputStream(uri)?.use { out ->
+                            out.write(fullLogs.toByteArray(Charsets.UTF_8))
+                            out.flush()
+                        }
+                        values.clear()
+                        values.put(MediaStore.Downloads.IS_PENDING, 0)
+                        contentResolver.update(uri, values, null, null)
+                        savedToDownloads = true
+                    }
+                } else {
+                    val dir = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: filesDir
+                    val outFile = File(dir, fileName)
+                    outFile.writeText(fullLogs, Charsets.UTF_8)
+                    savedToDownloads = true
+                }
+
+                if (savedToDownloads) {
+                    Toast.makeText(
+                        this,
+                        "已將完整日誌匯出為 TXT 檔並儲存至「檔案 -> 下載 (Downloads)」：\n$fileName",
+                        Toast.LENGTH_LONG
+                    ).show()
+                } else {
+                    val sendIntent = Intent(Intent.ACTION_SEND).apply {
+                        type = "text/plain"
+                        putExtra(Intent.EXTRA_SUBJECT, fileName)
+                        putExtra(Intent.EXTRA_TEXT, fullLogs.takeLast(180_000))
+                    }
+                    val chooser = Intent.createChooser(sendIntent, getString(R.string.chooser_export_logs))
+                    startActivity(chooser)
+                }
             } catch (e: ActivityNotFoundException) {
                 // Fallback: auto-copy to clipboard and notify user
-                val copied = copyLogsToClipboard(fullLogs, showSuccessToast = false)
+                copyLogsToClipboard(fullLogs, showSuccessToast = false)
                 Toast.makeText(this, R.string.toast_export_fallback_copied, Toast.LENGTH_LONG).show()
             } catch (e: Exception) {
-                Toast.makeText(this, "匯出日誌失敗：${e.message}", Toast.LENGTH_SHORT).show()
+                copyLogsToClipboard(fullLogs, showSuccessToast = false)
+                Toast.makeText(this, "匯出 TXT 檔案失敗，已自動複製完整日誌至剪貼簿：${e.message}", Toast.LENGTH_LONG).show()
             }
         }
     }
@@ -265,6 +300,21 @@ class MainActivity : AppCompatActivity() {
         } catch (e: Exception) {
             Toast.makeText(this, "複製日誌失敗：${e.message ?: "未知錯誤"}", Toast.LENGTH_SHORT).show()
             false
+        }
+    }
+
+    companion object {
+        /**
+         * 產生包含應用程式版本號與時間戳記之日誌 TXT 檔名，方便使用者在「檔案」App 中清楚辨識版本。
+         * 格式範例：散步趣助手_v1.15.69_診斷日誌_20261108_002500.txt
+         */
+        fun buildExportTxtFileName(
+            versionName: String = com.linewalk.autoad.BuildConfig.VERSION_NAME,
+            date: Date = Date()
+        ): String {
+            val cleanVer = versionName.removePrefix("v").trim()
+            val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(date)
+            return "散步趣助手_v${cleanVer}_診斷日誌_${timestamp}.txt"
         }
     }
 }

@@ -72,12 +72,16 @@ class OcrRecognizer {
             )
         }
 
+        val singleCharSymbols = setOf("✕", "×", "X", "x", "✖", "╳")
         for (kw in keywords) {
+            val isSingleCharKw = kw in singleCharSymbols
             val match = items.firstOrNull { item ->
                 val cx = item.bounds.centerX()
                 val cy = item.bounds.centerY()
                 if (FloatingOverlayService.isInsideOverlay(cx, cy)) return@firstOrNull false
+                val cleanText = item.text.trim().replace(" ", "")
                 if (item.text.length > maxTextLength) return@firstOrNull false
+                if (isSingleCharKw && cleanText.length > 2) return@firstOrNull false
 
                 val inDynamicIsland = cy < screenHeight * 0.045f &&
                     cx in (screenWidth * 0.28f).toInt()..(screenWidth * 0.72f).toInt()
@@ -1219,7 +1223,16 @@ class OcrRecognizer {
             "offensive",
             "Google Play",
             "Play Store",
-            "Play 商店"
+            "Play 商店",
+            "開啟商店",
+            "前往商店",
+            "立即預訂",
+            "立即購買",
+            "BOOK",
+            "NOW",
+            "SHOP",
+            "BUY",
+            "ORDER"
         )
 
         val AD_REWARD_GRANTED_KEYWORDS = listOf(

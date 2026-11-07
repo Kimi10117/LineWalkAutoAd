@@ -13,6 +13,7 @@ import com.linewalk.autoad.ui.FloatingOverlayService
 import com.linewalk.autoad.vision.NodeInspector
 import com.linewalk.autoad.vision.OcrItem
 import com.linewalk.autoad.vision.OcrRecognizer
+import com.linewalk.autoad.vision.ScreenViewportCalibrator
 import com.linewalk.autoad.vision.TemplateMatcher
 import kotlin.math.hypot
 import kotlin.math.max
@@ -50,6 +51,9 @@ class AdCloserHandler(
     private var redirectCount: Int = 0
     private var hasRecentRedirect: Boolean = false
     private var socialLandingPageTicks: Int = 0
+    private var socialLandingPageTotalRecoveries: Int = 0
+    private var googlePlayPillClickCount: Int = 0
+    private var lastGooglePlayPillClickTimeMs: Long = 0L
     private var wasAdLoading: Boolean = false
     private var hasAdActuallyShown: Boolean = false
     private var adLoadingTicks: Int = 0
@@ -70,6 +74,9 @@ class AdCloserHandler(
             redirectCount = 0
             hasRecentRedirect = false
             socialLandingPageTicks = 0
+            socialLandingPageTotalRecoveries = 0
+            googlePlayPillClickCount = 0
+            lastGooglePlayPillClickTimeMs = 0L
             wasAdLoading = false
             hasAdActuallyShown = false
             adLoadingTicks = 0
@@ -103,6 +110,8 @@ class AdCloserHandler(
 
     private var currentScreenWidth: Int = 0
     private var currentScreenHeight: Int = 0
+    private var currentEffectiveBottomY: Int = 0
+    private var currentHasThreeButtonNavBar: Boolean = false
     private var isCurrentAdTopSponsored: Boolean = false
     private var topSponsoredBottomY: Int = 0
     private var topSponsoredCenterY: Int = 0
@@ -112,6 +121,10 @@ class AdCloserHandler(
         if (currentScreenHeight > 0 && currentScreenWidth > 0) {
             val sw = currentScreenWidth
             val sh = currentScreenHeight
+            // 傳統三大金剛按鍵安全禁區：嚴禁點擊底部系統返回/首頁/多工導覽列
+            if (currentHasThreeButtonNavBar && y >= currentEffectiveBottomY - (sh * 0.005f).toInt()) {
+                return true
+            }
             // 排除中央動態島與系統通知安全禁區 (x in 18%..82% sw, y < 8% sh)
             if (x in (sw * 0.18f).toInt()..(sw * 0.82f).toInt()) {
                 if (y < (sh * 0.08f).toInt()) return true
@@ -145,6 +158,9 @@ class AdCloserHandler(
         val sh = screenBitmap.height
         currentScreenWidth = sw
         currentScreenHeight = sh
+        val vp = ScreenViewportCalibrator.detectViewport(sw, sh, screenBitmap, ocrItems)
+        currentEffectiveBottomY = vp.effectiveBottomY
+        currentHasThreeButtonNavBar = vp.hasThreeButtonNavBar
         val topSponsoredItem = ocrItems.firstOrNull { item ->
             val cy = item.bounds.centerY().toFloat() / sh
             val t = item.text.trim()
@@ -197,22 +213,33 @@ class AdCloserHandler(
         val isSocialAppPkg = fgPkg != null && (
             fgPkg.contains("facebook", ignoreCase = true) ||
             fgPkg.contains("instagram", ignoreCase = true)
-        )
-        val isSocialLandingPage = ocrItems.any { item ->
+        ) && !AppConfig.isAdPackage(fgPkg)
+
+        val hasGameOrSubDialogMarkers = ocrItems.any { item ->
+            val t = item.text.replace(" ", "")
+            t.contains("中獎囉") || t.contains("分享給好友") || t.contains("抽抽樂") ||
+            t.contains("每日賓果") || t.contains("今日賓果") || t.contains("獲得票券") ||
+            t.contains("獲得金幣") || t.contains("好友排行榜")
+        }
+        val hasTopSocialHeader = ocrItems.any { item ->
             val t = item.text.replace(" ", "")
             val cy = item.bounds.centerY().toFloat() / sh
-            (cy < 0.20f && (
-                t.contains("SOGO") || t.contains("Facebook") || t.contains("FB") ||
-                t.contains("Reel") || t.contains("粉絲專頁") || t.contains("相片") ||
-                t.contains("貼文") || t.contains("活動") ||
-                item.text.trim() == "<" || item.text.trim() == "‹"
-            )) ||
-            (cy > 0.65f && (
-                t.contains("讚") || t.contains("留言") || t.contains("分享") ||
-                t.contains("追蹤") || t.contains("逛逛商店") || t.contains("發送訊息") ||
-                t.contains("限時動態") || t.contains("瞭解詳情")
-            ))
-        } || (isSocialAppPkg && socialLandingPageTicks >= 1)
+            cy < 0.18f && (
+                t.contains("SOGO") || t.contains("粉絲專頁") || t.contains("貼文") ||
+                t.contains("Reel") || (t.contains("Facebook") && !t.contains("fromMeta", ignoreCase = true))
+            )
+        }
+        val hasBottomSocialBar = ocrItems.any { item ->
+            val cy = item.bounds.centerY().toFloat() / sh
+            cy > 0.65f && item.text.contains("讚")
+        } && ocrItems.any { item ->
+            val cy = item.bounds.centerY().toFloat() / sh
+            cy > 0.65f && (item.text.contains("留言") || item.text.contains("發送訊息"))
+        }
+
+        val isSocialLandingPage = !hasGameOrSubDialogMarkers &&
+            socialLandingPageTotalRecoveries < 2 &&
+            (isSocialAppPkg || (hasTopSocialHeader && hasBottomSocialBar))
 
         if (isExternal || hasBrowserTitle) {
             hasAdActuallyShown = true
@@ -229,6 +256,7 @@ class AdCloserHandler(
             hasAdActuallyShown = true
             markRecentRedirect()
             socialLandingPageTicks++
+            socialLandingPageTotalRecoveries++
             lastClickedPoint?.let { badPt ->
                 blacklistedPoints.add(badPt)
                 lastClickedPoint = null
@@ -645,6 +673,25 @@ class AdCloserHandler(
             return AdStepResult.StillCountingDown(remainingSec, elapsedSec)
         }
 
+        // 4B-2. 【左上角 [▶| Google Play] 略過膠囊按鈕專責偵測器】
+        // 針對附圖 2 (iHEALTH 走路賺取現金獎勵等 Google AdMob 廣告)：
+        // 左上角黑色頂欄或頂部區域浮現 [▶| Google Play] 膠囊按鈕 (cy in 0.025f..0.18f, cx in 0.02f..0.42f)，
+        // 必須點擊該按鈕才能推進至結尾畫面並關閉廣告！
+        val nowMsForPill = System.currentTimeMillis()
+        if (elapsedSec >= 4 && googlePlayPillClickCount < 2 && nowMsForPill - lastGooglePlayPillClickTimeMs >= 4000L) {
+            val topLeftGooglePlayPill = findTopLeftGooglePlaySkipPill(ocrItems, sw, sh)
+            if (topLeftGooglePlayPill != null &&
+                !isInvalidOrBlacklisted(topLeftGooglePlayPill.centerX(), topLeftGooglePlayPill.centerY())
+            ) {
+                googlePlayPillClickCount++
+                lastGooglePlayPillClickTimeMs = nowMsForPill
+                hasAdActuallyShown = true
+                lastFallbackCornerTimeMs = nowMsForPill + 4000L
+                recordAndClick(service, topLeftGooglePlayPill, allowBlacklist = true)
+                return AdStepResult.ClickedCloseOrSkip("左上角[▶| Google Play]略過鈕", topLeftGooglePlayPill)
+            }
+        }
+
         // 4AA. 【已獲取獎勵膠囊藥丸 [Reward granted ✕] 秒速點擊】
         // 當畫面頂部浮現 [Reward granted ✕] 膠囊按鈕時，✕ 位於膠囊藥丸最右側 (x in 88%..98% sw, y in 4%..16% sh)。
         // 立即點擊右側 ✕ 區域秒關廣告，絕不拖延等候！
@@ -793,21 +840,22 @@ class AdCloserHandler(
         }
 
         // 8. 第三層辨識 B：啟動「高精度免樣本幾何角落 X 偵測器」
-        // 當具有 Meta 特徵時啟用 includeLeftZone = true，且於 elapsedSec >= 5 或無倒數時即可啟動！
-        // 非 Meta 廣告維持在 10 秒以上（或已獲獎勵）且 includeLeftZone = false
+        // 全面支援右上角與左上角幾何 (X) 偵測（解決 CACO 雙11 等左上角白底黑邊圓形 (X) 廣告與 Meta 左上角 (X) 廣告）！
+        val noActiveCountdown = remainingSec == null || remainingSec <= 1
         val shouldCheckGeoX = if (isMetaAd) {
-            elapsedSec >= 5 || remainingSec == null || rewardGrantedOcr != null
+            elapsedSec >= 5 || noActiveCountdown || rewardGrantedOcr != null
         } else {
-            elapsedSec >= 10 || rewardGrantedOcr != null
+            (elapsedSec >= 6 && noActiveCountdown) || elapsedSec >= 10 || rewardGrantedOcr != null
         }
 
         if (shouldCheckGeoX) {
-            val isRelaxed = elapsedSec >= 18 || rewardGrantedOcr != null || isCurrentAdTopSponsored
+            val isRelaxed = elapsedSec >= 14 || rewardGrantedOcr != null || isCurrentAdTopSponsored
+            val enableLeftCornerScan = isMetaAd || (noActiveCountdown && elapsedSec >= 5) || rewardGrantedOcr != null
             val geoMatch = templateMatcher.detectCornerGeometricX(
                 screenBitmap = screenBitmap,
                 blacklistedCoord = ::isInvalidOrBlacklisted,
                 isRelaxed = isRelaxed,
-                includeLeftZone = isMetaAd
+                includeLeftZone = enableLeftCornerScan
             )
             if (geoMatch != null) {
                 lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
@@ -961,6 +1009,55 @@ class AdCloserHandler(
 
         // 播放廣告期間嚴格保持靜候，禁止無差別滑動螢幕以免誤觸購物廣告商品卡或內嵌網頁！
         return AdStepResult.ScanningAd(elapsedSec)
+    }
+
+    /**
+     * 偵測全螢幕廣告左上角頂欄的 `[▶| Google Play]` 略過/推進膠囊按鈕（如 iHEALTH 走路賺取現金獎勵廣告）。
+     * - 嚴格限定於左上角區域 (cy in 2.5%..18.0% sh, cx in 2.0%..42.0% sw)，自適應 16:9 無黑邊與 21:9/22:9 摺疊機頂部黑邊。
+     * - 膠囊尺寸必須為小型獨立標籤 (寬度 <= 42% sw, 高度 <= 8% sh)，嚴格排除畫面中下方的商店橫幅或大型廣告圖卡。
+     */
+    fun findTopLeftGooglePlaySkipPill(
+        ocrItems: List<OcrItem>,
+        sw: Int,
+        sh: Int
+    ): Rect? {
+        if (sw <= 0 || sh <= 0) return null
+        val topLeftItems = ocrItems.filter { item ->
+            val cyRatio = item.bounds.centerY().toFloat() / sh
+            val cxRatio = item.bounds.centerX().toFloat() / sw
+            val wRatio = item.bounds.width().toFloat() / sw
+            val hRatio = item.bounds.height().toFloat() / sh
+            cyRatio in 0.025f..0.180f &&
+                cxRatio in 0.020f..0.420f &&
+                wRatio <= 0.42f &&
+                hRatio <= 0.08f
+        }
+        if (topLeftItems.isEmpty()) return null
+
+        // 1. 單一 OCR 行直接包含 "Google Play" 或 "GooglePlay"
+        val directPill = topLeftItems.firstOrNull { item ->
+            val clean = item.text.replace(" ", "")
+            clean.contains("GooglePlay", ignoreCase = true) ||
+                (clean.contains("Google", ignoreCase = true) && clean.contains("Play", ignoreCase = true))
+        }
+        if (directPill != null) {
+            return directPill.bounds
+        }
+
+        // 2. 同一水平線上分開的 "Google" 與 "Play" 元素合併
+        val googleItem = topLeftItems.firstOrNull { it.text.contains("Google", ignoreCase = true) }
+        val playItem = topLeftItems.firstOrNull { it.text.contains("Play", ignoreCase = true) }
+        if (googleItem != null && playItem != null &&
+            kotlin.math.abs(googleItem.bounds.centerY() - playItem.bounds.centerY()) <= sh * 0.025f
+        ) {
+            return Rect(
+                min(googleItem.bounds.left, playItem.bounds.left),
+                min(googleItem.bounds.top, playItem.bounds.top),
+                max(googleItem.bounds.right, playItem.bounds.right),
+                max(googleItem.bounds.bottom, playItem.bounds.bottom)
+            )
+        }
+        return null
     }
 
     private fun getNextFallbackTarget(

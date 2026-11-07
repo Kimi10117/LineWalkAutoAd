@@ -53,7 +53,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="6dp"
-                android:text="LINE 散步趣專用 ‧ 本地截圖 ‧ 離線 OCR ‧ 圖示取樣"
+                android:text="LINE 散步趣專用 ‧ 全自動視覺辨識 ‧ 全螢幕比例自適應"
                 android:textColor="#E8F5E9"
                 android:textSize="12sp" />
         </LinearLayout>
@@ -286,7 +286,7 @@
                 android:textSize="12.5sp" />
         </LinearLayout>
 
-        <!-- 卡片 3：手機端框選圖示範本管理 -->
+        <!-- 卡片 3：舊版取樣範本管理 (已全面自動化，隱藏此區塊並保留 View ID 相容性) -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -294,7 +294,8 @@
             android:background="@drawable/bg_card_sleek"
             android:elevation="1dp"
             android:orientation="vertical"
-            android:padding="16dp">
+            android:padding="16dp"
+            android:visibility="gone">
 
             <TextView
                 android:layout_width="wrap_content"
@@ -367,7 +368,7 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="四、即時狀態與執行日誌"
+                android:text="三、即時狀態與執行日誌"
                 android:textColor="@color/text_primary"
                 android:textSize="15sp"
                 android:textStyle="bold" />

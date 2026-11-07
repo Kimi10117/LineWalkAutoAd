@@ -414,13 +414,6 @@ class FloatingOverlayService : Service() {
             }
         }
 
-        val cropBtn = Button(this).apply {
-            styleIconBtn(this, R.drawable.ic_crop, "#D97706", "取樣")
-            setOnClickListener {
-                launchTemplateCropper()
-            }
-        }
-
         val homeBtn = Button(this).apply {
             styleIconBtn(this, R.drawable.ic_settings, "#334155", "")
             setOnClickListener {
@@ -447,7 +440,6 @@ class FloatingOverlayService : Service() {
         }
 
         btnRow.addView(toggleBtn)
-        btnRow.addView(cropBtn, marginParams)
         btnRow.addView(homeBtn, marginParams)
         btnRow.addView(closeOverlayBtn, marginParams)
         bodyLayout.addView(btnRow)

@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.Rect
 import com.linewalk.autoad.config.AppConfig
 import com.linewalk.autoad.vision.OcrItem
+import com.linewalk.autoad.vision.ScreenViewportCalibrator
 import kotlin.math.hypot
 
 /**
@@ -565,23 +566,30 @@ class FriendGiftTask {
     }
 
     /**
-     * 底部導覽列「好友」按鈕 (第 2 顆，位於底部 x ≈ 0.375f, y ≈ 0.910f)
-     * 優先透過 OCR 鎖定文字本體，備援座標嚴格錨定於 sh * 0.910f，精準避開底部 3 鍵導覽列 (54dp, y >= 0.93f) 與手勢條 (16dp)
+     * 底部導覽列「好友」按鈕 (第 2 顆，位於底部 x ≈ 0.375f)
+     * 優先透過 OCR 鎖定文字本體，備援座標透過 ScreenViewportCalibrator 自動適應 22:9/21:9/16:9 與傳統三大金剛導覽列
      */
-    fun getBottomFriendsTabRect(sw: Int, sh: Int, ocrItems: List<OcrItem> = emptyList()): Rect {
+    fun getBottomFriendsTabRect(sw: Int, sh: Int, ocrItems: List<OcrItem> = emptyList(), screenBitmap: Bitmap? = null): Rect {
         val ocrMatch = ocrItems.firstOrNull { item ->
             val cy = item.bounds.centerY().toFloat() / sh
             val cx = item.bounds.centerX().toFloat() / sw
             val t = item.text.replace(" ", "")
-            cy > 0.85f && cx in 0.20f..0.55f &&
+            cy > 0.80f && cx in 0.20f..0.55f &&
             t.contains("好友") && !t.contains("邀請") && !t.contains("被") && !t.contains("名單") && t.length <= 4
         }
         if (ocrMatch != null) {
             return ocrMatch.bounds
         }
+        val vp = ScreenViewportCalibrator.detectViewport(sw, sh, screenBitmap, ocrItems)
         val targetX = (sw * 0.375f).toInt()
-        val aspect = sh.toFloat() / sw.toFloat()
-        val targetY = if (aspect >= 2.2f) (sh * 0.945f).toInt() else (sh * 0.910f).toInt()
+        val aspect = vp.contentHeight.toFloat() / kotlin.math.max(1, sw)
+        val targetY = if (vp.hasThreeButtonNavBar) {
+            (vp.effectiveBottomY - sh * 0.032f).toInt()
+        } else if (aspect >= 2.15f) {
+            (sh * 0.945f).toInt()
+        } else {
+            (sh * 0.910f).toInt()
+        }
         val halfW = (sw * 0.08f).toInt()
         val halfH = (sh * 0.020f).toInt().coerceAtLeast(24)
         return Rect(targetX - halfW, targetY - halfH, targetX + halfW, targetY + halfH)
@@ -589,21 +597,28 @@ class FriendGiftTask {
 
     /**
      * 底部導覽列「集點」(首頁) 按鈕 (第 1 顆，位於底部 x ≈ 0.125f)
-     * 優先透過 OCR 鎖定文字本體，備援座標依據螢幕長寬比動態錨定 (22:9 超長螢幕為 0.945f，一般長寬比為 0.910f)
+     * 優先透過 OCR 鎖定文字本體，備援座標透過 ScreenViewportCalibrator 自動適應 22:9/21:9/16:9 與傳統三大金剛導覽列
      */
-    fun getBottomMainTabRect(sw: Int, sh: Int, ocrItems: List<OcrItem> = emptyList()): Rect {
+    fun getBottomMainTabRect(sw: Int, sh: Int, ocrItems: List<OcrItem> = emptyList(), screenBitmap: Bitmap? = null): Rect {
         val ocrMatch = ocrItems.firstOrNull { item ->
             val cy = item.bounds.centerY().toFloat() / sh
             val cx = item.bounds.centerX().toFloat() / sw
             val t = item.text.replace(" ", "")
-            cy > 0.85f && cx < 0.30f && (t == "集點" || (t.contains("集點") && t.length <= 4))
+            cy > 0.80f && cx < 0.30f && (t == "集點" || (t.contains("集點") && t.length <= 4))
         }
         if (ocrMatch != null) {
             return ocrMatch.bounds
         }
+        val vp = ScreenViewportCalibrator.detectViewport(sw, sh, screenBitmap, ocrItems)
         val targetX = (sw * 0.125f).toInt()
-        val aspect = sh.toFloat() / sw.toFloat()
-        val targetY = if (aspect >= 2.2f) (sh * 0.945f).toInt() else (sh * 0.910f).toInt()
+        val aspect = vp.contentHeight.toFloat() / kotlin.math.max(1, sw)
+        val targetY = if (vp.hasThreeButtonNavBar) {
+            (vp.effectiveBottomY - sh * 0.032f).toInt()
+        } else if (aspect >= 2.15f) {
+            (sh * 0.945f).toInt()
+        } else {
+            (sh * 0.910f).toInt()
+        }
         val halfW = (sw * 0.08f).toInt()
         val halfH = (sh * 0.020f).toInt().coerceAtLeast(24)
         return Rect(targetX - halfW, targetY - halfH, targetX + halfW, targetY + halfH)
