@@ -101,16 +101,27 @@ class AdCloserHandler(
 
     private var currentScreenWidth: Int = 0
     private var currentScreenHeight: Int = 0
+    private var isCurrentAdTopSponsored: Boolean = false
 
     private fun isInvalidOrBlacklisted(x: Int, y: Int): Boolean {
         if (FloatingOverlayService.isInsideOverlay(x, y)) return true
-        if (currentScreenHeight > 0) {
+        if (currentScreenHeight > 0 && currentScreenWidth > 0) {
+            val sw = currentScreenWidth
             val sh = currentScreenHeight
-            // 排除最頂部通知安全禁區 (中央動態島 y < currentScreenHeight * 0.08f，兩側邊角 y < 4.2% sh)
-            if (x in (currentScreenWidth * 0.18f).toInt()..(currentScreenWidth * 0.82f).toInt()) {
-                if (y < (currentScreenHeight * 0.08f).toInt()) return true
+            // 排除中央動態島與系統通知安全禁區 (x in 18%..82% sw, y < 8% sh)
+            if (x in (sw * 0.18f).toInt()..(sw * 0.82f).toInt()) {
+                if (y < (sh * 0.08f).toInt()) return true
+            }
+            if (isCurrentAdTopSponsored) {
+                // Meta Sponsored 頂部白底橫幅模式 (如截圖 2)：
+                // 1) 放行左上角 X 關閉按鈕 (x in 2.5%..11.5% sw, y in 1.5%..4.6% sh)
+                // 2) 嚴格封鎖品牌頭像、標題與下方網址列 (y in 4.6%..15.0% sh 且 x < 85% sw)，杜絕誤點跳轉瀏覽器！
+                // 3) 嚴格封鎖右上角靜音喇叭與 AdChoices 圖示 (x > 78% sw 且 y < 5.8% sh)！
+                if (y < (sh * 0.015f).toInt()) return true
+                if (y in (sh * 0.046f).toInt()..(sh * 0.150f).toInt() && x < (sw * 0.85f).toInt()) return true
+                if (x > (sw * 0.78f).toInt() && y < (sh * 0.058f).toInt()) return true
             } else {
-                if (y < (sh * 0.042f).toInt()) return true
+                if (y < (sh * 0.024f).toInt()) return true
             }
         }
         return blacklistedPoints.any { pt ->
@@ -127,6 +138,15 @@ class AdCloserHandler(
         val sh = screenBitmap.height
         currentScreenWidth = sw
         currentScreenHeight = sh
+        isCurrentAdTopSponsored = ocrItems.any { item ->
+            val cy = item.bounds.centerY().toFloat() / sh
+            val t = item.text.trim()
+            cy < 0.10f && (
+                t.contains("Sponsored", ignoreCase = true) ||
+                t.contains("贊助") ||
+                t.contains("Ads served by", ignoreCase = true)
+            )
+        }
         val elapsedSec = getElapsedSeconds()
 
         // 0. 最優先檢查：是否跳出「無法載入廣告 / 請稍後再試。」錯誤彈窗
@@ -457,7 +477,7 @@ class AdCloserHandler(
             val desc = node.contentDesc?.toString().orEmpty()
             val vid = node.viewId?.toString().orEmpty()
             txt.contains("略過") || txt.contains("跳過") || txt.contains("略过") || txt.contains("跳过") ||
-            txt.contains("Skip", ignoreCase = true) || txt.contains(">>") || txt.contains("▶") ||
+            txt.contains("Skip", ignoreCase = true) || (txt.contains(">>") && txt.trim().length <= 6) || txt.contains("▶|") ||
             desc.contains("略過") || desc.contains("跳過") || desc.contains("略过") || desc.contains("跳过") ||
             desc.contains("Skip", ignoreCase = true) || desc.contains("Close", ignoreCase = true) ||
             desc.contains("關閉") || desc.contains("关闭") ||
@@ -470,17 +490,21 @@ class AdCloserHandler(
             return AdStepResult.ClickedCloseOrSkip(explicitSkipNode.label, explicitSkipNode.bounds)
         }
 
-        // 4A-1. 【全畫面 ▶| / >| / >> / >>| 略過符號全域放行秒點】
-        // 畫面上任何區域（不論左上角、右上角、左下角或右下角），只要偵測到 ▶|、>|、>>、>>| 符號
-        // （包含 ShopBack 等廣告左上角之 ▶| Google Play 膠囊按鈕），一律發送點擊！
-        // 絕不受 Google Play 排除關鍵字抑制，全域放行秒點。
+        // 4A-1. 【全畫面 ▶| / >| / >> / >>| 略過符號精準秒點】
+        // 僅允許獨立短標籤 (長度 <= 6) 且位於畫面邊角區域，嚴格排除購物廣告內文之「雙11必買>>」等促銷按鈕！
         val fastSkipSymbols = listOf("▶|", ">|", ">>|", ">>")
+        val promoBaitWords = listOf(
+            "必買", "雙11", "折", "搶", "逛", "買", "領", "優惠", "詳情",
+            "下載", "安裝", "http", "www", "momo", "購物", "商場", "商店", "NT$", "$"
+        )
         val fastSkipMatch = ocrItems.firstOrNull { item ->
             val cx = item.bounds.centerX()
             val cy = item.bounds.centerY()
             val t = item.text.replace(" ", "")
             val hasSymbol = fastSkipSymbols.any { sym -> t.contains(sym) }
-            hasSymbol && !isInvalidOrBlacklisted(cx, cy)
+            val isShortSkipLabel = t.length <= 6 && promoBaitWords.none { bait -> t.contains(bait, ignoreCase = true) }
+            val isInCornerOrEdge = cy < sh * 0.20f || cy > sh * 0.82f || cx > sw * 0.72f || cx < sw * 0.28f
+            hasSymbol && isShortSkipLabel && isInCornerOrEdge && !isInvalidOrBlacklisted(cx, cy)
         }
         if (fastSkipMatch != null) {
             hasAdActuallyShown = true
@@ -631,7 +655,8 @@ class AdCloserHandler(
             t.contains("Play 商店") ||
             (item.bounds.centerY() < sh * 0.16f && (t.contains("Google", ignoreCase = true) || t.contains("Play", ignoreCase = true)))
         }
-        val isMetaAd = (fgPkg == "com.facebook.katana" || fgPkg == "com.facebook.orca" ||
+        val isMetaAd = (isCurrentAdTopSponsored ||
+            fgPkg == "com.facebook.katana" || fgPkg == "com.facebook.orca" ||
             fgPkg == "com.facebook.lite" || fgPkg == "com.facebook.mlite" ||
             fgPkg == "com.instagram.android" || fgPkg?.lowercase()?.startsWith("com.facebook.ads") == true ||
             ocrItems.any { item ->
@@ -753,7 +778,7 @@ class AdCloserHandler(
         }
 
         if (shouldCheckGeoX) {
-            val isRelaxed = elapsedSec >= 18 || rewardGrantedOcr != null
+            val isRelaxed = elapsedSec >= 18 || rewardGrantedOcr != null || isCurrentAdTopSponsored
             val geoMatch = templateMatcher.detectCornerGeometricX(
                 screenBitmap = screenBitmap,
                 blacklistedCoord = ::isInvalidOrBlacklisted,
@@ -762,8 +787,22 @@ class AdCloserHandler(
             )
             if (geoMatch != null) {
                 lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
-                recordAndClick(service, geoMatch.bounds, allowBlacklist = false)
+                recordAndClick(service, geoMatch.bounds, allowBlacklist = true)
                 return AdStepResult.ClickedCloseOrSkip(geoMatch.label, geoMatch.bounds)
+            }
+            // 若為頂部白底 Sponsored 橫幅廣告 (如截圖 2) 且無倒數計時，直接點擊左上角 X (0.042w..0.095w, 0.018h..0.042h)
+            if (isCurrentAdTopSponsored && (elapsedSec >= 6 || rewardGrantedOcr != null) && (remainingSec == null || remainingSec <= 1)) {
+                val sponsoredLeftTopX = Rect(
+                    (sw * 0.042f).toInt(),
+                    (sh * 0.018f).toInt(),
+                    (sw * 0.095f).toInt(),
+                    (sh * 0.042f).toInt()
+                )
+                if (!isInvalidOrBlacklisted(sponsoredLeftTopX.centerX(), sponsoredLeftTopX.centerY())) {
+                    lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
+                    recordAndClick(service, sponsoredLeftTopX, allowBlacklist = true)
+                    return AdStepResult.ClickedCloseOrSkip("Sponsored頂部左上角X", sponsoredLeftTopX)
+                }
             }
         }
 
@@ -800,8 +839,8 @@ class AdCloserHandler(
                 t.contains("連勝") ||
                 t.contains("現金回饋")
             }
-        // Compatibility contract: isEndCard && elapsedSec >= 15 (upgraded to 32s in v1.15.55 to prevent early cut-off of 30s video ads)
-        if (isEndCard && elapsedSec >= 32 && (elapsedSec >= 15 || rewardGrantedOcr != null) && now - lastBackActionTimeMs >= 2500L) {
+        // Compatibility contract: isEndCard && elapsedSec >= 15 (upgraded to 42s in v1.15.67 to prevent early cut-off of 30s-40s unskippable video ads)
+        if (isEndCard && elapsedSec >= 42 && (elapsedSec >= 15 || rewardGrantedOcr != null) && now - lastBackActionTimeMs >= 2500L) {
             hasAdActuallyShown = true
             lastBackActionTimeMs = now
             lastFallbackCornerTimeMs = now + 4000L
@@ -820,8 +859,8 @@ class AdCloserHandler(
         }
 
         if (remainingSec == null && elapsedSec >= 5) {
-            // 重定向拉回後安全返回：必須在廣告播滿至少 38 秒且畫面無關閉鈕時才允許返回鍵關閉，給予充分時間掃描畫面 X 與略過標籤！
-            if (redirectCount > 0 && !isGame && !isMetaWebPreview && elapsedSec >= 38 && now - lastBackActionTimeMs >= 2500L) {
+            // 重定向拉回後安全返回：必須在廣告播滿至少 42 秒且畫面無關閉鈕時才允許返回鍵關閉，給予充分時間掃描畫面 X 與略過標籤！
+            if (redirectCount > 0 && !isGame && !isMetaWebPreview && elapsedSec >= 42 && now - lastBackActionTimeMs >= 2500L) {
                 service.safeNavigateBack(allowInGame = true)
                 lastBackActionTimeMs = now
                 return AdStepResult.WatchdogBackTriggered(elapsedSec, "重定向安全返回鍵")
@@ -841,13 +880,13 @@ class AdCloserHandler(
                 return AdStepResult.WatchdogBackTriggered(elapsedSec, "已獲獎勵內部返回鍵")
             }
 
-            // Meta 備援關閉熱區：在確認為 Meta 廣告且播放滿 28 秒或無倒數計時時，允許對左上角關閉按鈕區域發送精確點擊，避免廣告停滯超過 30 秒卡死
+            // Meta 備援關閉熱區：在確認為 Meta 廣告且播放滿 28 秒或無倒數計時時，對頂部左上角 X 區域發送精確點擊（避開 y >= 0.046f 之網址列）
             if (isMetaAd && !hasGooglePlayOnScreen && (elapsedSec >= 28 || (remainingSec == null && elapsedSec >= 25)) && !isOutsideGame && redirectCount == 0 && closeClickCount == 0 && now - lastFallbackCornerTimeMs >= 3000L) {
                 val metaLeftTopHotZone = Rect(
-                    (sw * 0.035f).toInt(),
-                    (sh * 0.048f).toInt(),
-                    (sw * 0.140f).toInt(),
-                    (sh * 0.095f).toInt()
+                    (sw * 0.042f).toInt(),
+                    (sh * 0.018f).toInt(),
+                    (sw * 0.095f).toInt(),
+                    (sh * 0.042f).toInt()
                 )
                 if (!isInvalidOrBlacklisted(metaLeftTopHotZone.centerX(), metaLeftTopHotZone.centerY())) {
                     lastFallbackCornerTimeMs = now
@@ -856,8 +895,8 @@ class AdCloserHandler(
                 }
             }
 
-            // 備援盲點與安全返回：僅在廣告播放超過 40 秒且無關閉鈕時觸發
-            if (elapsedSec >= 40) {
+            // 備援盲點與安全返回：僅在廣告播放超過 45 秒且無關閉鈕時觸發，防止不可略過廣告提早退出
+            if (elapsedSec >= 45) {
                 // 若已經發生過外部重定向，或者在散步趣內部，嚴禁盲點角落熱區以免再度跳轉 Google Play！
                 // 直接使用安全系統返回鍵關閉廣告最為可靠！
                 if (redirectCount > 0 && !isGame) {
@@ -867,7 +906,7 @@ class AdCloserHandler(
                         return AdStepResult.WatchdogBackTriggered(elapsedSec, "末期安全返回鍵")
                     }
                 } else {
-                    // 若未發生重定向，輪流嘗試角落備援熱區（右上角/左上角/內容右上角）與安全返回鍵
+                    // 若未發生重定向，輪流嘗試角落備援熱區（右上角/右下角/內容右上角）與安全返回鍵
                     if (!isOutsideGame && now - lastFallbackCornerTimeMs >= 3000L) {
                         val (label, targetRect) = getNextFallbackTarget(sw, sh, ocrItems)
                         lastFallbackCornerTimeMs = now
@@ -883,7 +922,7 @@ class AdCloserHandler(
             }
         }
 
-        // 9. 防卡死 Watchdog：若單支廣告超過最大等待秒數 (預設 48 秒)，以安全返回鍵強制關閉廣告
+        // 9. 防卡死 Watchdog：若單支廣告超過最大等待秒數 (預設 65 秒)，以安全返回鍵強制關閉廣告
         if (elapsedSec >= config.maxAdWaitSeconds && now - lastBackActionTimeMs >= 2000L) {
             if (!isOutsideGame) {
                 service.safeNavigateBack(allowInGame = true)
@@ -894,20 +933,7 @@ class AdCloserHandler(
             return AdStepResult.WatchdogBackTriggered(elapsedSec, "超時安全返回鍵")
         }
 
-        // 8C. 控制項自動隱藏喚醒手勢 (Keep-Alive / Reveal Swipe):
-        // 針對 Google Play 互動式廣告、可玩式廣告或各類影音廣告，控制項（略過按鈕、關閉 X、倒數時間）
-        // 經常在無觸摸 2~3 秒後自動隱藏淡出，必須手滑動螢幕才會重新浮現！
-        // 當廣告已播放超過 5 秒且當前畫面上未看見任何關閉/略過按鈕時，每 3.5 秒派發一次短滑手勢以喚醒浮現控制項！
-        if (elapsedSec >= 5 && remainingSec == null && !isOutsideGame && now - lastRevealSwipeTimeMs >= 3500L) {
-            lastRevealSwipeTimeMs = now
-            val swipeStartX = sw * 0.5f
-            val swipeStartY = sh * 0.65f
-            val swipeEndX = sw * 0.5f
-            val swipeEndY = sh * 0.48f
-            service.performSwipe(swipeStartX, swipeStartY, swipeEndX, swipeEndY, durationMs = 200L)
-            Log.d(TAG, "廣告播放中派發滑動喚醒手勢，喚出自動隱藏的略過/關閉控制項")
-        }
-
+        // 播放廣告期間嚴格保持靜候，禁止無差別滑動螢幕以免誤觸購物廣告商品卡或內嵌網頁！
         return AdStepResult.ScanningAd(elapsedSec)
     }
 
@@ -972,11 +998,11 @@ class AdCloserHandler(
         val nearbyClicks = clickedHistory.count { p ->
             hypot((p.x - pt.x).toDouble(), (p.y - pt.y).toDouble()) < BLACKLIST_RADIUS_PX
         }
-        if (allowBlacklist && nearbyClicks >= 3) {
-            // 同一區域 (半徑 65px 內) 在同支廣告中已被點擊滿 3 次仍未關閉，加入黑名單避免重複空點
+        if (allowBlacklist && nearbyClicks >= 2) {
+            // 同一區域 (半徑 65px 內) 在同支廣告中已被點擊滿 2 次仍未關閉，立即加入黑名單避免重複空點
             blacklistedPoints.add(pt)
-        } else if (!allowBlacklist && nearbyClicks >= 5) {
-            // 即使是不輕易黑名單的目標，若點擊達 5 次仍未關閉廣告，為防止死循環亦強制加入黑名單
+        } else if (!allowBlacklist && nearbyClicks >= 3) {
+            // 即使是不輕易黑名單的目標，若點擊達 3 次仍未關閉廣告，為防止死循環亦強制加入黑名單
             blacklistedPoints.add(pt)
         }
         closeClickCount++

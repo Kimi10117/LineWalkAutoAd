@@ -674,10 +674,10 @@ class TemplateMatcher {
         searchZones.add(Rect((sw * 0.75f).toInt(), rightUpperTopLimitY, (sw * 0.98f).toInt(), rightUpperBottomLimitY))
 
         if (includeLeftZone) {
-            // 左上角 (Meta 輪播/插頁廣告關閉鈕唯一位置，涵蓋 x in 2.5%..18% 與 y in 4.8%..14%)
-            val leftTopLimitY = max((sh * 0.048f).toInt(), 48)
-            val leftBottomLimitY = (sh * 0.14f).toInt()
-            searchZones.add(Rect((sw * 0.025f).toInt(), leftTopLimitY, (sw * 0.18f).toInt(), leftBottomLimitY))
+            // 左上角 (Meta Sponsored 頂部橫幅與輪播/插頁廣告關閉鈕位置，涵蓋 x in 2.0%..14% 與 y in 1.4%..12%)
+            val leftTopLimitY = max((sh * 0.014f).toInt(), 18)
+            val leftBottomLimitY = (sh * 0.12f).toInt()
+            searchZones.add(Rect((sw * 0.020f).toInt(), leftTopLimitY, (sw * 0.14f).toInt(), leftBottomLimitY))
         }
 
         var bestCandidate: TemplateMatchResult? = null
@@ -735,8 +735,8 @@ class TemplateMatcher {
                             continue
                         }
                     } else if (zone.left < sw / 2) {
-                        // 左上角 (Meta 廣告)：頂部限制為 4.0% sh 或 40px，覆蓋 y ≈ 6.5% 的 Meta 關閉按鈕
-                        if (absY - r < max((sh * 0.040f).toInt(), 40)) {
+                        // 左上角 (Meta Sponsored 橫幅與輪播廣告)：頂部限制為 1.4% sh 或 16px，覆蓋 y ≈ 2.8% 與 6.5% 的 Meta 關閉按鈕
+                        if (absY - r < max((sh * 0.014f).toInt(), 16)) {
                             cx += step
                             continue
                         }

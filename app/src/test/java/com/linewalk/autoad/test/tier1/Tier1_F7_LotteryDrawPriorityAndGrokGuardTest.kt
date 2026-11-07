@@ -75,21 +75,30 @@ class Tier1_F7_LotteryDrawPriorityAndGrokGuardTest {
     }
 
     @Test
-    fun test03_lotteryAllInCooldownReturnsNull() {
+    fun test03_lotteryFiveDrawThirdPriorityAndInsufficientReturnsNull() {
         val mockBitmap = mockk<Bitmap>(relaxed = true)
         every { mockBitmap.width } returns sw
         every { mockBitmap.height } returns sh
+        every { templateMatcher.isPopupButtonDisabledGray(any(), any(), any()) } returns false
 
         val items = listOf(
             MockFixtures.createNormalizedOcrItem("抽抽樂", 0.40f, 0.12f, 0.60f, 0.16f, sw, sh),
             MockFixtures.createNormalizedOcrItem("BIG", 0.15f, 0.35f, 0.35f, 0.40f, sw, sh),
             MockFixtures.createNormalizedOcrItem("回復還需 02:45", 0.15f, 0.46f, 0.45f, 0.52f, sw, sh),
             MockFixtures.createNormalizedOcrItem("回復還需 04:30", 0.65f, 0.53f, 0.95f, 0.58f, sw, sh),
-            MockFixtures.createNormalizedOcrItem("5張 抽1次", 0.65f, 0.46f, 0.95f, 0.52f, sw, sh)
+            MockFixtures.createNormalizedOcrItem("5張 抽1次", 0.65f, 0.43f, 0.95f, 0.49f, sw, sh)
         )
 
         val target = lotteryTask.findTargetDrawButton(mockBitmap, items, templateMatcher)
-        assertNull("When both are cooling, must return null (and never click 5-draw)", target)
+        assertNotNull("When 50-draw and free-draw are cooling, 5-draw must be selected as 3rd priority", target)
+        assertEquals("5張抽一次", target!!.first)
+
+        // When tickets < 5 (e.g., 3張), must return null
+        val insufficientItems = items + listOf(
+            MockFixtures.createNormalizedOcrItem("3張", 0.80f, 0.18f, 0.95f, 0.22f, sw, sh)
+        )
+        val nullTarget = lotteryTask.findTargetDrawButton(mockBitmap, insufficientItems, templateMatcher)
+        assertNull("When tickets < 5 and both others cooling, must return null", nullTarget)
     }
 
     @Test

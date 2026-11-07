@@ -137,9 +137,9 @@ class LotteryTask {
 
     /**
      * 尋找符合規則的抽抽樂按鈕：
-     * - 【第一優先】：50 抽按鈕 (含 "50張")，若票券不足 (< 50) 則嚴禁點擊
-     * - 【第二順位】：免費抽按鈕 (含 "免費抽" 或 "免費")，抽完即進入倒計時冷卻！
-     * - 絕對過濾排除 "5張" 按鈕！
+     * - 【第一優先】：50 抽按鈕 (含 "50張")，若票券不足 (< 50) 或冷卻中則跳過
+     * - 【第二順位】：免費抽按鈕 (含 "免費抽" 或 "免費")，抽完即進入倒計時冷卻
+     * - 【第三順位】：5 抽按鈕 (含 "5張 抽1次"，免看廣告直接消耗 5 張彩券開獎)，若票券不足 (< 5) 或反灰則跳過
      */
     fun findTargetDrawButton(
         screenBitmap: Bitmap,
@@ -153,11 +153,11 @@ class LotteryTask {
         val ticketCount = extractTicketCount(ocrItems, screenBitmap, sh, sw)
         val isTicketInsufficient = ticketCount != null && ticketCount < 50
 
-        // 0A. 檢查「免費抽」(右側偏下區域 x > 0.48f, y in 0.45f..0.62f) 是否處於倒計時冷卻中
+        // 0A. 檢查「免費抽」(右側偏下區域 x > 0.48f, y in 0.495f..0.62f) 是否處於倒計時冷卻中
         val isFreeInCooldown = ocrItems.any { item ->
             val cy = item.bounds.centerY()
             val cx = item.bounds.centerX()
-            cx > (sw * 0.48f).toInt() && cy in (sh * 0.45f).toInt()..(sh * 0.62f).toInt() && (
+            cx > (sw * 0.48f).toInt() && cy in (sh * 0.495f).toInt()..(sh * 0.62f).toInt() && (
                 item.text.contains("回復還需") ||
                 item.text.contains("還需") ||
                 item.text.contains("倒計時") ||
@@ -205,13 +205,18 @@ class LotteryTask {
             }
         }
 
-        // 2. 【第二順位】：免費看廣告抽一次 (免費抽1次，x in 0.50f..0.98f, y in 0.48f..0.60f)
+        // 2. 【第二順位】：免費看廣告抽一次 (免費抽1次，x in 0.50f..0.98f, y in 0.495f..0.60f)
         val freeTarget = findFreeDrawOnly(screenBitmap, ocrItems, templateMatcher)
         if (freeTarget != null) {
             return freeTarget
         }
 
-        // 3. 【嚴格防呆】：若任何候選含有 "5張"，絕對回傳 null！
+        // 3. 【第三順位】：5 張抽 1 次 (x in 0.50f..0.96f, y in 0.41f..0.525f，橘色膠囊按鈕)
+        val fiveTarget = findFiveDrawOnly(screenBitmap, ocrItems, templateMatcher)
+        if (fiveTarget != null) {
+            return fiveTarget
+        }
+
         return null
     }
 
@@ -219,7 +224,8 @@ class LotteryTask {
      * 自動轉向決策：
      * - 若票券數充足 (>= 50 或未識別) 且 50 抽按鈕可點 -> 回傳 50 抽按鈕
      * - 若票券不足 (< 50) 或 50 抽反灰/冷卻 -> 自動轉向「免費抽1次」
-     * - 若無可抽項目 (50 抽不可點且免費抽不可點) -> 回傳關閉視窗 (X) 按鈕熱區，乾淨關閉彈窗
+     * - 若免費抽亦冷卻 -> 自動轉向「5張 抽1次」
+     * - 若無可抽項目 (三者皆不可點) -> 回傳關閉視窗 (X) 按鈕熱區，乾淨關閉彈窗
      */
     fun resolveNextAction(
         screenBitmap: Bitmap,
@@ -234,7 +240,7 @@ class LotteryTask {
     }
 
     /**
-     * 尋找第二順位「免費看廣告抽一次」按鈕 (x in 0.50f..0.98f, y in 0.48f..0.60f)
+     * 尋找第二順位「免費看廣告抽一次」按鈕 (x in 0.50f..0.98f, y in 0.495f..0.60f)
      * 當 50 抽已達每輪上限或票券不足時，可直接調用此方法切換至免費抽，杜絕死循環！
      */
     fun findFreeDrawOnly(
@@ -248,7 +254,7 @@ class LotteryTask {
         val isFreeInCooldown = ocrItems.any { item ->
             val cy = item.bounds.centerY()
             val cx = item.bounds.centerX()
-            cx > (sw * 0.48f).toInt() && cy in (sh * 0.45f).toInt()..(sh * 0.62f).toInt() && (
+            cx > (sw * 0.48f).toInt() && cy in (sh * 0.495f).toInt()..(sh * 0.62f).toInt() && (
                 item.text.contains("回復還需") ||
                 item.text.contains("還需") ||
                 item.text.contains("倒計時") ||
@@ -261,7 +267,7 @@ class LotteryTask {
             val cy = item.bounds.centerY()
             val cx = item.bounds.centerX()
             val t = item.text.replace(" ", "")
-            cy in (sh * 0.48f).toInt()..(sh * 0.62f).toInt() &&
+            cy in (sh * 0.49f).toInt()..(sh * 0.62f).toInt() &&
             cx > (sw * 0.48f).toInt() &&
             (t.contains("免費抽") || t.contains("免費")) &&
             !t.contains("5張") && !t.contains("回復") && !t.contains("還需")
@@ -274,10 +280,99 @@ class LotteryTask {
             }
         }
 
-        // 備援：2D 黃色按鈕聚類偵測 (x: 0.52f..0.98f, y: 0.49f..0.58f，黃底白字『▶ 免費抽1次』)
+        // 備援：2D 黃色按鈕聚類偵測 (x: 0.52f..0.98f, y: 0.50f..0.58f，黃底白字『▶ 免費抽1次』)
         val freeYellowBtn = findFreeDrawByColor(screenBitmap)
         if (freeYellowBtn != null && !templateMatcher.isPopupButtonDisabledGray(screenBitmap, freeYellowBtn.centerY(), freeYellowBtn.centerX())) {
             return Pair("免費看廣告抽一次(黃色按鈕)", freeYellowBtn)
+        }
+        return null
+    }
+
+    /**
+     * 尋找第三順位「5張 抽1次」按鈕 (x in 0.50f..0.96f, y in 0.40f..0.525f)
+     * 當 50 抽與免費抽皆冷卻或不可點，且彩券數量 >= 5 時，自動點擊「5張 抽1次」！
+     */
+    fun findFiveDrawOnly(
+        screenBitmap: Bitmap,
+        ocrItems: List<OcrItem>,
+        templateMatcher: TemplateMatcher
+    ): Pair<String, Rect>? {
+        val sh = screenBitmap.height
+        val sw = screenBitmap.width
+
+        val ticketCount = extractTicketCount(ocrItems, screenBitmap, sh, sw)
+        if (ticketCount != null && ticketCount < 5) {
+            return null
+        }
+
+        val isFiveInCooldown = ocrItems.any { item ->
+            val cy = item.bounds.centerY()
+            val cx = item.bounds.centerX()
+            cx > (sw * 0.48f).toInt() && cy in (sh * 0.40f).toInt()..(sh * 0.495f).toInt() && (
+                item.text.contains("回復還需") ||
+                item.text.contains("還需") ||
+                item.text.contains("剩0次") ||
+                item.text.replace(" ", "") == "0次" ||
+                Regex("""\d{1,2}:\d{2}""").containsMatchIn(item.text)
+            )
+        }
+        if (isFiveInCooldown) return null
+
+        val fiveDrawOcr = ocrItems.firstOrNull { item ->
+            val cy = item.bounds.centerY()
+            val cx = item.bounds.centerX()
+            val t = item.text.replace(" ", "")
+            cy in (sh * 0.40f).toInt()..(sh * 0.525f).toInt() &&
+            cx > (sw * 0.48f).toInt() &&
+            t.contains("5張") && !t.contains("50張") && !t.contains("15張") && !t.contains("25張") &&
+            !t.contains("回復") && !t.contains("還需")
+        }
+        if (fiveDrawOcr != null) {
+            val cy = fiveDrawOcr.bounds.centerY()
+            val cx = fiveDrawOcr.bounds.centerX()
+            if (!templateMatcher.isPopupButtonDisabledGray(screenBitmap, cy, cx)) {
+                return Pair("5張抽一次", fiveDrawOcr.bounds)
+            }
+        }
+
+        // 備援：2D 橘色按鈕聚類偵測 (x: 0.52f..0.96f, y: 0.42f..0.495f，橘底白字『5張 抽1次』)
+        val fiveOrangeBtn = findFiveDrawByColor(screenBitmap)
+        if (fiveOrangeBtn != null && !templateMatcher.isPopupButtonDisabledGray(screenBitmap, fiveOrangeBtn.centerY(), fiveOrangeBtn.centerX())) {
+            return Pair("5張抽一次(橘色按鈕)", fiveOrangeBtn)
+        }
+        return null
+    }
+
+    private fun findFiveDrawByColor(screenBitmap: Bitmap): Rect? {
+        val sw = screenBitmap.width
+        val sh = screenBitmap.height
+        val orangePts = mutableListOf<android.graphics.Point>()
+        val yStart = (sh * 0.42f).toInt()
+        val yEnd = (sh * 0.495f).toInt()
+        val xStart = (sw * 0.52f).toInt()
+        val xEnd = (sw * 0.96f).toInt()
+
+        for (y in yStart..yEnd step 3) {
+            for (x in xStart..xEnd step 3) {
+                val c = screenBitmap.getPixel(x, y)
+                val r = (c shr 16) and 0xFF
+                val g = (c shr 8) and 0xFF
+                val b = c and 0xFF
+                // 橘色膠囊按鈕: r > 210 && g in 65..145 && b < 55
+                if (r > 210 && g in 65..145 && b < 55 && (r - g) > 75) {
+                    orangePts.add(android.graphics.Point(x, y))
+                }
+            }
+        }
+
+        if (orangePts.size >= 60) {
+            val minX = orangePts.minOf { it.x }
+            val maxX = orangePts.maxOf { it.x }
+            val minY = orangePts.minOf { it.y }
+            val maxY = orangePts.maxOf { it.y }
+            if (maxX - minX >= (sw * 0.28f).toInt() && maxY - minY in 12..(sh * 0.10f).toInt()) {
+                return Rect(minX, minY, maxX, maxY)
+            }
         }
         return null
     }
@@ -446,8 +541,8 @@ class LotteryTask {
     }
 
     /**
-     * 檢查「50抽」與「免費抽」是否皆處於反灰或冷卻不可點狀態：
-     * 當兩者皆為灰色/冷卻時，可直接關閉抽抽樂視窗繼續檢查下一項，絕不點擊下方任何廣告區域。
+     * 檢查「50抽」、「免費抽」與「5抽」是否皆處於反灰、冷卻或票券不足不可點狀態：
+     * 當三者皆不可點時，可直接關閉抽抽樂視窗繼續檢查下一項，絕不點擊下方任何廣告區域。
      */
     fun areBothDrawsUnavailable(
         screenBitmap: Bitmap,
@@ -459,6 +554,9 @@ class LotteryTask {
         }
         val sw = screenBitmap.width
         val sh = screenBitmap.height
+        val ticketCount = extractTicketCount(ocrItems, screenBitmap, sh, sw)
+        val isFiveUnavailable = (ticketCount != null && ticketCount < 5) ||
+            templateMatcher.isPopupButtonDisabledGray(screenBitmap, (sh * 0.455f).toInt(), (sw * 0.75f).toInt())
         val leftGray = templateMatcher.isPopupButtonDisabledGray(screenBitmap, (sh * 0.48f).toInt(), (sw * 0.26f).toInt())
         val rightFreeGray = templateMatcher.isPopupButtonDisabledGray(screenBitmap, (sh * 0.53f).toInt(), (sw * 0.75f).toInt())
         val hasLeftCooldown = ocrItems.any { item ->
@@ -470,10 +568,10 @@ class LotteryTask {
         val hasRightCooldown = ocrItems.any { item ->
             val cy = item.bounds.centerY()
             val cx = item.bounds.centerX()
-            cx > (sw * 0.48f).toInt() && cy in (sh * 0.45f).toInt()..(sh * 0.62f).toInt() &&
+            cx > (sw * 0.48f).toInt() && cy in (sh * 0.495f).toInt()..(sh * 0.62f).toInt() &&
             (item.text.contains("回復還需") || item.text.contains("還需") || Regex("""\d{1,2}:\d{2}""").containsMatchIn(item.text))
         }
-        return (leftGray || hasLeftCooldown) && (rightFreeGray || hasRightCooldown)
+        return (leftGray || hasLeftCooldown) && (rightFreeGray || hasRightCooldown) && isFiveUnavailable
     }
 
     fun findLotteryRewardAdButton(screenBitmap: Bitmap, ocrItems: List<OcrItem>): Rect? {

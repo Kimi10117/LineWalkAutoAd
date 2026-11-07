@@ -10,7 +10,7 @@ import unicodedata
 import pytest
 
 REPO_ROOT = r"C:\Users\kimic\.gemini\antigravity\scratch\LineWalkAutoAd"
-COMMIT_HASH = "68e0534"
+COMMIT_HASH = "HEAD"
 
 # 嚴格禁止的 Emoji 及圖形符號 Unicode 區間
 EMOJI_RANGES = [

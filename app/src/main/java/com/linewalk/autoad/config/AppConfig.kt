@@ -36,7 +36,7 @@ class AppConfig(context: Context) {
         get() = prefs.getBoolean(KEY_ENABLE_BINGO, true)
         set(value) = prefs.edit().putBoolean(KEY_ENABLE_BINGO, value).apply()
 
-    /** 抽抽樂（優先50抽 / 次選免費抽，嚴禁點5張） */
+    /** 抽抽樂（優先50抽 / 次選免費抽 / 第三順位5張抽1次） */
     var enableLotteryTask: Boolean
         get() = prefs.getBoolean(KEY_ENABLE_LOTTERY, true)
         set(value) = prefs.edit().putBoolean(KEY_ENABLE_LOTTERY, value).apply()
@@ -51,6 +51,11 @@ class AppConfig(context: Context) {
         get() = prefs.getBoolean(KEY_ENABLE_FRIEND_GIFT, true)
         set(value) = prefs.edit().putBoolean(KEY_ENABLE_FRIEND_GIFT, value).apply()
 
+    /** 接收好友禮物（自動開啟右上角禮物盒領取好友送來的禮物） */
+    var enableReceiveGiftTask: Boolean
+        get() = prefs.getBoolean(KEY_ENABLE_RECEIVE_GIFT, true)
+        set(value) = prefs.edit().putBoolean(KEY_ENABLE_RECEIVE_GIFT, value).apply()
+
     /** 當彈窗沒有「看廣告」按鈕（例如廣告次數用盡或僅有一般領取）時，是否自動點一般領取 */
     var claimNormalWhenNoAd: Boolean
         get() = prefs.getBoolean(KEY_CLAIM_NORMAL_NO_AD, true)
@@ -61,9 +66,9 @@ class AppConfig(context: Context) {
         get() = prefs.getLong(KEY_LOOP_INTERVAL_MS, 1200L).coerceIn(1000L, 1800L)
         set(value) = prefs.edit().putLong(KEY_LOOP_INTERVAL_MS, value.coerceIn(1000L, 1800L)).apply()
 
-    /** 廣告單次最長等待秒數，超過則觸發防卡死返回鍵 (預設 48 秒，容許 30~35 秒完整影音播放與 5 秒結算卡片) */
+    /** 廣告單次最長等待秒數，超過則觸發防卡死返回鍵 (預設 65 秒，確保不可略過之 30~45 秒完整影音播放與結算卡片不提早退出) */
     var maxAdWaitSeconds: Int
-        get() = prefs.getInt(KEY_MAX_AD_WAIT_SEC, 48)
+        get() = prefs.getInt(KEY_MAX_AD_WAIT_SEC, 65)
         set(value) = prefs.edit().putInt(KEY_MAX_AD_WAIT_SEC, value.coerceIn(20, 180)).apply()
 
     /** 圖像模板匹配相似度門檻 (0.70f ~ 0.95f，預設 0.80f) */
@@ -86,9 +91,10 @@ class AppConfig(context: Context) {
         private const val KEY_ENABLE_LOTTERY = "enable_lottery_v18"
         private const val KEY_ENABLE_DAILY_MISSION = "enable_daily_mission_v18"
         private const val KEY_ENABLE_FRIEND_GIFT = "enable_friend_gift_v18"
+        private const val KEY_ENABLE_RECEIVE_GIFT = "enable_receive_gift_v19"
         private const val KEY_CLAIM_NORMAL_NO_AD = "claim_normal_no_ad"
         private const val KEY_LOOP_INTERVAL_MS = "loop_interval_ms"
-        private const val KEY_MAX_AD_WAIT_SEC = "max_ad_wait_sec"
+        private const val KEY_MAX_AD_WAIT_SEC = "max_ad_wait_sec_v19"
         private const val KEY_MATCH_THRESHOLD = "match_threshold"
         private const val KEY_TARGET_PACKAGES = "target_game_packages"
 

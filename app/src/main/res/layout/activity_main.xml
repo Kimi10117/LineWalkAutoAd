@@ -196,7 +196,7 @@
                 android:id="@+id/cbIdleReward"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="2.【時間】放置蘋果與寶箱獎勵 (第二順位)"
+                android:text="2.【時間】優先看廣告獲莓果與收成獎勵 (第二順位)"
                 android:textColor="@color/text_primary"
                 android:textSize="13sp" />
 
@@ -235,7 +235,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="4dp"
-                android:text="5.【賓果】開啟賓果格與連線獎勵 (第五順位)"
+                android:text="5.【賓果】開啟賓果格與連線 Get 獎勵 (第五順位)"
                 android:textColor="@color/text_primary"
                 android:textSize="13sp" />
 
@@ -243,7 +243,7 @@
                 android:id="@+id/cbLotteryTask"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="6.【抽抽樂】優先 50 抽與免費抽 (禁點5張)"
+                android:text="6.【抽抽樂】優先 50 抽 / 免費抽 / 5 張抽 1 次"
                 android:textColor="@color/text_primary"
                 android:textSize="13sp" />
 
@@ -259,7 +259,15 @@
                 android:id="@+id/cbFriendGiftTask"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="8.【好友送禮】排行榜逐一送禮 (優先送自己)"
+                android:text="8.【好友送禮】排行榜自動送禮 (優先送自己)"
+                android:textColor="@color/text_primary"
+                android:textSize="13sp" />
+
+            <CheckBox
+                android:id="@+id/cbReceiveGiftTask"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="9.【接收禮物】自動開啟禮物盒領取好友禮物"
                 android:textColor="@color/text_primary"
                 android:textSize="13sp" />
 

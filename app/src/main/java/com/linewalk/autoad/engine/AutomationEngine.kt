@@ -179,6 +179,7 @@ class AutomationEngine private constructor(private val context: Context) {
     private var lotteryResultRewardWaitTicks = 0
     private var lotteryFiftyDrawAttempts = 0
     private var lotteryFreeDrawAttempts = 0
+    private var lotteryFiveDrawAttempts = 0
     var isMissionCompleted = false
         internal set
     var isReceiveGiftCompleted = false
@@ -324,6 +325,8 @@ class AutomationEngine private constructor(private val context: Context) {
         lotteryResultRewardWaitTicks = 0
         lotteryFiftyDrawAttempts = 0
         lotteryFreeDrawAttempts = 0
+        lotteryFiveDrawAttempts = 0
+        timeTask.hasTriedBonusBerryInCurrentStay = false
         isMissionCompleted = false
         isReceiveGiftCompleted = false
         isFriendGiftCompleted = false
@@ -1283,14 +1286,20 @@ class AutomationEngine private constructor(private val context: Context) {
         val rewardTarget = bingoTask.findNextClaimableReward(screenBitmap, ocrItems, claimedBingoColumns)
         if (rewardTarget != null) {
             currentPhaseEmptyTicks = 0
-            claimedBingoColumns.add(rewardTarget.columnIndex)
-            appendLog("[賓果] 點擊連線獎勵【${rewardTarget.label}】！")
+            val colIdx = rewardTarget.columnIndex
+            val colRetries = (bingoColumnRetryCount[colIdx] ?: 0) + 1
+            bingoColumnRetryCount[colIdx] = colRetries
+            if (colRetries >= 3) {
+                claimedBingoColumns.add(colIdx)
+            }
+            appendLog("[賓果] 點擊連線獎勵【${rewardTarget.label}】(第 $colRetries/3 次)！")
             FloatingOverlayService.clickWithOverlayPassthrough(rewardTarget.bounds) {
                 service.clickRect(rewardTarget.bounds)
             }
-            updateDetail("[賓果] 已點擊【${rewardTarget.label}】，繼續領取獎勵...", "[賓果] 領取獎勵中...")
-            delay(350)
-            // 保持在 IN_GAME_SCAN，下一 Tick 立即掃描下一欄，秒速領取所有連線 Get！
+            updateDetail("[賓果] 已點擊【${rewardTarget.label}】，等待看廣告或領獎結果...", "[賓果] 領取獎勵中...")
+            delay(400)
+            popupRetryTicks = 0
+            transitionTo(EngineState.TRIGGER_AD_POPUP, "已點擊賓果連線獎勵【${rewardTarget.label}】，等待廣告或領獎確認窗...", "[賓果] 領取獎勵中...")
             return
         }
 
@@ -1423,50 +1432,62 @@ class AutomationEngine private constructor(private val context: Context) {
             lotteryResultRewardWaitTicks = 0
         }
 
-        // 1. 依使用者規則尋找：【優先50抽】->【次選免費抽】->【嚴禁點5張】
-        val drawTarget = lotteryTask.findTargetDrawButton(screenBitmap, ocrItems, templateMatcher)
-        if (drawTarget != null) {
-            // 若為 50 抽且已達每輪上限 (>= 2 次)，代表票券不足或已抽完，轉向檢查免費看廣告抽一次！
-            if (drawTarget.first.contains("50張") && lotteryFiftyDrawAttempts >= 2) {
-                appendLog("[抽獎]【抽抽樂】50抽已嘗試 $lotteryFiftyDrawAttempts 次 (票券不足或已達上限)，轉向檢查免費看廣告抽一次！")
-                val freeTarget = lotteryTask.findFreeDrawOnly(screenBitmap, ocrItems, templateMatcher)
-                if (freeTarget != null && lotteryFreeDrawAttempts < 2) {
-                    hasClickedLotteryAdReward = false
-                    currentPhaseEmptyTicks = 0
-                    appendLog("[抽獎]【抽抽樂】依規則點擊第二順位：${freeTarget.first}")
-                    FloatingOverlayService.clickWithOverlayPassthrough(freeTarget.second) {
-                        service.clickRect(freeTarget.second)
-                    }
+        // 1. 依使用者規則尋找：【第一優先：50抽】->【第二順位：免費抽】->【第三順位：5張抽1次】
+        val rawDrawTarget = lotteryTask.findTargetDrawButton(screenBitmap, ocrItems, templateMatcher)
+        val effectiveDrawTarget: Pair<String, Rect>? = when {
+            rawDrawTarget == null -> null
+            rawDrawTarget.first.contains("50張") && lotteryFiftyDrawAttempts >= 2 -> {
+                appendLog("[抽獎]【抽抽樂】50抽已嘗試 $lotteryFiftyDrawAttempts 次，轉向檢查免費抽或 5 張抽 1 次！")
+                val freeFallback = if (lotteryFreeDrawAttempts < 2) {
+                    lotteryTask.findFreeDrawOnly(screenBitmap, ocrItems, templateMatcher)
+                } else null
+                freeFallback ?: if (lotteryFiveDrawAttempts < 25) {
+                    lotteryTask.findFiveDrawOnly(screenBitmap, ocrItems, templateMatcher)
+                } else null
+            }
+            rawDrawTarget.first.contains("免費") && lotteryFreeDrawAttempts >= 2 -> {
+                appendLog("[抽獎]【抽抽樂】免費抽已嘗試 $lotteryFreeDrawAttempts 次，轉向檢查 5 張抽 1 次！")
+                if (lotteryFiveDrawAttempts < 25) {
+                    lotteryTask.findFiveDrawOnly(screenBitmap, ocrItems, templateMatcher)
+                } else null
+            }
+            rawDrawTarget.first.contains("5張") && lotteryFiveDrawAttempts >= 25 -> {
+                appendLog("[抽獎]【抽抽樂】本輪 5 張抽 1 次已連抽達 $lotteryFiveDrawAttempts 次上限，準備結束本輪抽獎")
+                null
+            }
+            else -> rawDrawTarget
+        }
+
+        if (effectiveDrawTarget != null) {
+            hasClickedLotteryAdReward = false
+            currentPhaseEmptyTicks = 0
+            appendLog("[抽獎]【抽抽樂】依規則點擊：${effectiveDrawTarget.first}")
+            FloatingOverlayService.clickWithOverlayPassthrough(effectiveDrawTarget.second) {
+                service.clickRect(effectiveDrawTarget.second)
+            }
+            when {
+                effectiveDrawTarget.first.contains("免費") -> {
                     lotteryFreeDrawAttempts++
                     adCloserHandler.onEnterAdMode()
-                    transitionTo(EngineState.AD_WATCHING, "已點擊 ${freeTarget.first}，觀看廣告抽獎...", "[抽獎] 廣告抽獎中...")
-                    return
+                    transitionTo(EngineState.AD_WATCHING, "已點擊 ${effectiveDrawTarget.first}，觀看廣告抽獎...", "[抽獎] 廣告抽獎中...")
                 }
-            } else if (drawTarget.first.contains("免費") && lotteryFreeDrawAttempts >= 2) {
-                appendLog("[抽獎]【抽抽樂】本輪免費抽廣告已嘗試 $lotteryFreeDrawAttempts 次，跳過以防死循環")
-            } else {
-                hasClickedLotteryAdReward = false
-                currentPhaseEmptyTicks = 0
-                appendLog("[抽獎]【抽抽樂】依規則點擊：${drawTarget.first}")
-                FloatingOverlayService.clickWithOverlayPassthrough(drawTarget.second) {
-                    service.clickRect(drawTarget.second)
-                }
-                if (drawTarget.first.contains("免費")) {
-                    lotteryFreeDrawAttempts++
-                    adCloserHandler.onEnterAdMode()
-                    transitionTo(EngineState.AD_WATCHING, "已點擊 ${drawTarget.first}，觀看廣告抽獎...", "[抽獎] 廣告抽獎中...")
-                } else {
+                effectiveDrawTarget.first.contains("50張") -> {
                     lotteryFiftyDrawAttempts++
                     delay(400)
                     popupRetryTicks = 0
-                    transitionTo(EngineState.TRIGGER_AD_POPUP, "已點擊 ${drawTarget.first}，等待抽獎結果彈窗...", "[抽獎] 抽獎中...")
+                    transitionTo(EngineState.TRIGGER_AD_POPUP, "已點擊 ${effectiveDrawTarget.first}，等待抽獎結果彈窗...", "[抽獎] 抽獎中...")
                 }
-                return
+                else -> {
+                    lotteryFiveDrawAttempts++
+                    delay(400)
+                    popupRetryTicks = 0
+                    transitionTo(EngineState.TRIGGER_AD_POPUP, "已點擊 ${effectiveDrawTarget.first} ($lotteryFiveDrawAttempts/25)，等待開獎結果...", "[抽獎] 5張抽獎中...")
+                }
             }
+            return
         }
 
-        // 兩次檢查確認 50 抽與免費抽皆不可點 (50 抽已無次數/票券不足，且免費抽已完成，且嚴格不點 5 抽)
-        // 且確認畫面上無待領獎彈窗且不在結果畫面時，才允許點擊右上角 X 關閉視窗！
+        // 兩次檢查確認 50 抽、免費抽與 5 抽皆不可點或已達上限，且確認畫面上無待領獎彈窗且不在結果畫面時，點擊右上角 X 關閉視窗！
         if (modalCloseBtn == null && !hasLotteryResultContext) {
             val bothGray = lotteryTask.areBothDrawsUnavailable(screenBitmap, ocrItems, templateMatcher)
             currentPhaseEmptyTicks++
@@ -1479,7 +1500,7 @@ class AutomationEngine private constructor(private val context: Context) {
             hasClickedLotteryAdReward = false
             isLotteryCompleted = true
             lotteryDialogCloseAttempts++
-            appendLog("[完成]【抽抽樂】已無可抽項目 (50抽已滿或票券不足，免費抽已完成，且絕不點5張)，關閉視窗 (嘗試:$lotteryDialogCloseAttempts/2)")
+            appendLog("[完成]【抽抽樂】已無可抽項目 (50抽/免費抽/5抽皆已處理完畢)，關閉視窗 (嘗試:$lotteryDialogCloseAttempts/2)")
             if (lotteryDialogCloseAttempts >= 2) {
                 appendLog("[提示]【抽抽樂】點擊關閉視窗無響應，發送系統返回鍵 (BACK) 強制關閉！")
                 service.navigateBack()
@@ -1660,7 +1681,7 @@ class AutomationEngine private constructor(private val context: Context) {
         }
 
         if (isFriendGiftCompleted) {
-            if (config.enableFriendGiftTask && !isReceiveGiftCompleted) {
+            if (config.enableReceiveGiftTask && !isReceiveGiftCompleted) {
                 currentPhase = PatrolPhase.RECEIVE_GIFT
                 friendGiftOpenDrawerTicks++
                 appendLog("[禮物]【好友送禮】已完成，點擊右上角【禮物盒】開啟收禮視窗 ($friendGiftOpenDrawerTicks/3)！")
@@ -1814,7 +1835,7 @@ class AutomationEngine private constructor(private val context: Context) {
 
         // 4. 連續微步滾動 4~5 次皆未發現新好友，判定好友送禮全數完成！
         isFriendGiftCompleted = true
-        if (config.enableFriendGiftTask && !isReceiveGiftCompleted) {
+        if (config.enableReceiveGiftTask && !isReceiveGiftCompleted) {
             currentPhase = PatrolPhase.RECEIVE_GIFT
             friendGiftOpenDrawerTicks++
             appendLog("[完成]【好友送禮】好友禮物贈送階段結束，直接點擊右上角【禮物盒】開啟收禮視窗！")
@@ -2040,10 +2061,11 @@ class AutomationEngine private constructor(private val context: Context) {
                     return
                 }
 
-                // 檢查是否已成功換頁，分頁變更時重置停滯計數
+                // 檢查是否已成功換頁，分頁變更時重置停滯計數與時間分頁紅利看廣告狀態
                 if (lastObservedTab != currentTab) {
                     lastObservedTab = currentTab
                     tabStagnationTicks = 0
+                    timeTask.hasTriedBonusBerryInCurrentStay = false
                 }
 
                 // 巡邏同一分頁停滯自癒守護
@@ -2116,38 +2138,45 @@ class AutomationEngine private constructor(private val context: Context) {
                 }
 
                 if (target != null) {
-                    emptyTicksOnCurrentTab = 0
-                    tabStagnationTicks = 0
-                    nonMainScreenIdleTicks = 0
-                    confirmedEmptyTabs.remove(currentTab)
-                    val newTaskCount = _uiStatus.value.tasksTriggeredCount + 1
-                    _uiStatus.value = _uiStatus.value.copy(tasksTriggeredCount = newTaskCount)
-                    appendLog("[目標]【${currentTab.tabName}】點擊: ${target.targetLabel}")
-                    FloatingOverlayService.clickWithOverlayPassthrough(target.bounds) {
-                        service.clickRect(target.bounds)
+                    val targetCyRatio = target.bounds.centerY().toFloat() / sh
+                    // 硬性座標防護罩：在非遊戲分頁之主畫面（首頁/步數/時間），嚴格禁止點擊 y in 0.445f..0.895f 下方橫幅廣告區！
+                    if (currentTab != MainTab.GAME && targetCyRatio in 0.445f..0.895f) {
+                        appendLog("[防護] 攔截主畫面下方橫幅廣告誤判點擊 (${target.targetLabel})，跳過此目標！")
+                    } else {
+                        emptyTicksOnCurrentTab = 0
+                        tabStagnationTicks = 0
+                        nonMainScreenIdleTicks = 0
+                        confirmedEmptyTabs.remove(currentTab)
+                        val newTaskCount = _uiStatus.value.tasksTriggeredCount + 1
+                        _uiStatus.value = _uiStatus.value.copy(tasksTriggeredCount = newTaskCount)
+                        appendLog("[目標]【${currentTab.tabName}】點擊: ${target.targetLabel}")
+                        FloatingOverlayService.clickWithOverlayPassthrough(target.bounds) {
+                            service.clickRect(target.bounds)
+                        }
+                        popupRetryTicks = 0
+                        transitionTo(
+                            EngineState.TRIGGER_AD_POPUP,
+                            "已點擊 ${target.targetLabel}，等待『跳過廣告 / 紅利獲得』彈窗...",
+                            "[彈窗] 等待彈窗出現..."
+                        )
+                        delay(550)
+                        return
                     }
-                    popupRetryTicks = 0
-                    transitionTo(
-                        EngineState.TRIGGER_AD_POPUP,
-                        "已點擊 ${target.targetLabel}，等待『跳過廣告 / 紅利獲得』彈窗...",
-                        "[彈窗] 等待彈窗出現..."
-                    )
-                    delay(550)
-                    return
                 }
 
-                // 本分頁目前沒有亮起的可領取獎勵按鈕
+                // 本分頁目前沒有亮起的可領取獎勵按鈕：必須連續確認 3 次無目標才換頁，確保單一分頁徹底巡完再換頁！
                 emptyTicksOnCurrentTab++
-                if (emptyTicksOnCurrentTab < 2) {
+                if (emptyTicksOnCurrentTab < 3) {
                     updateDetail(
-                        "[巡邏] 正在檢查【${currentTab.tabName}】是否有可領取獎勵 ($emptyTicksOnCurrentTab/2)...",
-                        "[巡邏] 檢查[${currentTab.shortLabel}] ($emptyTicksOnCurrentTab/2)..."
+                        "[巡邏] 正在檢查【${currentTab.tabName}】是否有可領取獎勵 ($emptyTicksOnCurrentTab/3)...",
+                        "[巡邏] 檢查[${currentTab.shortLabel}] ($emptyTicksOnCurrentTab/3)..."
                     )
                     return
                 }
 
                 // 確認本分頁已無可領取項目
                 emptyTicksOnCurrentTab = 0
+                timeTask.hasTriedBonusBerryInCurrentStay = false
                 confirmedEmptyTabs.add(currentTab)
 
                 val nextRemainingTabs = enabledTabs.filter { it !in confirmedEmptyTabs }
@@ -2279,7 +2308,7 @@ class AutomationEngine private constructor(private val context: Context) {
             }
 
             PatrolPhase.RECEIVE_GIFT -> {
-                if (!config.enableFriendGiftTask || isReceiveGiftCompleted) {
+                if (!config.enableReceiveGiftTask || isReceiveGiftCompleted) {
                     currentPhase = getNextPhase(PatrolPhase.RECEIVE_GIFT)
                     return
                 }
@@ -2347,6 +2376,8 @@ class AutomationEngine private constructor(private val context: Context) {
         lotteryResultRewardWaitTicks = 0
         lotteryFiftyDrawAttempts = 0
         lotteryFreeDrawAttempts = 0
+        lotteryFiveDrawAttempts = 0
+        timeTask.hasTriedBonusBerryInCurrentStay = false
         isMissionCompleted = false
         checkedMissionTabs.clear()
         isFriendGiftCompleted = false
@@ -2457,7 +2488,7 @@ class AutomationEngine private constructor(private val context: Context) {
                 PatrolPhase.LOTTERY -> config.enableLotteryTask && !isLotteryCompleted
                 PatrolPhase.MISSION -> config.enableDailyMissionTask && !isMissionCompleted
                 PatrolPhase.FRIEND_GIFT -> config.enableFriendGiftTask && !isFriendGiftCompleted
-                PatrolPhase.RECEIVE_GIFT -> config.enableFriendGiftTask && !isReceiveGiftCompleted
+                PatrolPhase.RECEIVE_GIFT -> config.enableReceiveGiftTask && !isReceiveGiftCompleted
                 PatrolPhase.COMPLETED -> false
             }
             if (isEnabled) return p

@@ -484,8 +484,12 @@ class OcrRecognizer {
                 t.contains("邀請好友吧") ||
                 t.contains("邀請任務觸發") ||
                 t.contains("完成邀請任務") ||
+                t.contains("被邀請的好友") ||
+                t.contains("雙方都可獲得") ||
+                t.contains("最高可獲") ||
+                t.contains("快來領取吧") ||
                 t.contains("邀請好友快來領取") ||
-                (t.contains("邀請好友") && (t.contains("快來領取") || t.contains("領取吧") || t.contains("賺取")))
+                (t.contains("邀請好友") && (t.contains("快來領取") || t.contains("領取吧") || t.contains("賺取") || t.contains("10000")))
             ) {
                 hasPromoKeyword = true
             }
@@ -502,21 +506,26 @@ class OcrRecognizer {
         if (hasPromoKeyword) return true
         if (hasInviteText && hasCoinsOrRewardText && items.any {
             val t = it.text.replace(" ", "")
-            (t.contains("邀請") && t.contains("任務")) || t.contains("獲得金幣的流程")
+            (t.contains("邀請") && t.contains("任務")) ||
+            t.contains("獲得金幣的流程") ||
+            t.contains("雙方都") ||
+            t.contains("可獲得金幣") ||
+            t.contains("快來領取") ||
+            t.contains("10000")
         }) return true
 
         return false
     }
 
     /**
-     * LINE 內部宣傳廣告右上角的圓形關閉按鈕 (X) 區域 (x in 86%..98%, y in 6.5%..13%)。
+     * LINE 內部宣傳廣告右上角的圓形關閉按鈕 (X) 區域 (中心約 x=91.8%, y=9.1%)。
      */
     fun getLineInHousePromoCloseButton(sw: Int, sh: Int): Rect {
         return Rect(
-            (sw * 0.86f).toInt(),
-            (sh * 0.050f).toInt(),
-            (sw * 0.98f).toInt(),
-            (sh * 0.120f).toInt()
+            (sw * 0.875f).toInt(),
+            (sh * 0.065f).toInt(),
+            (sw * 0.960f).toInt(),
+            (sh * 0.118f).toInt()
         )
     }
 
@@ -690,6 +699,17 @@ class OcrRecognizer {
         val sw = screenBitmap.width
         val sh = screenBitmap.height
 
+        // 0. 嚴格一票否決：若畫面為每日賓果、邀請好友宣傳頁、抽抽樂、任務或好友頁面，絕非「無法載入廣告」錯誤彈窗！
+        val isNonErrorScreen = items.any { item ->
+            val t = item.text.replace(" ", "")
+            t.contains("每日賓果") || t.contains("今日賓果") || t.contains("距離下次抽選") ||
+            t.contains("開啟賓果格") || t.contains("1BINGO") || t.contains("3BINGO") ||
+            t.contains("邀請好友") || t.contains("10000") || t.contains("快來領取吧") ||
+            t.contains("雙方都") || t.contains("被邀請的好友") ||
+            t.contains("抽抽樂") || t.contains("50張") || t.contains("免費抽")
+        }
+        if (isNonErrorScreen) return null
+
         val hasErrorText = items.any { item ->
             val t = item.text.replace(" ", "")
             t.contains("無法載入廣告") ||
@@ -705,6 +725,11 @@ class OcrRecognizer {
             t.contains("廣告播放失敗")
         }
 
+        // 強制要求必須有明確的錯誤提示文字，徹底廢除無文字時僅憑綠色像素盲猜（防止將賓果綠底、邀請好友綠底或首頁下方原萃綠茶廣告誤判為錯誤彈窗）
+        if (!hasErrorText) {
+            return null
+        }
+
         // 1. OCR 定位中下半部 (y in 0.58f..0.76f) 的「關閉 / 確認 / 確定」按鈕
         val ocrClose = items.firstOrNull { item ->
             val cy = item.bounds.centerY().toFloat() / sh
@@ -716,8 +741,7 @@ class OcrRecognizer {
             )
         }
 
-        // 2. 幾何像素綠色熊大卡片與綠色膠囊探測
-        // 下半部 (y in 0.58..0.76 全機型螢幕自適應) 鮮綠色橢圓按鈕 (g > 140 && g - r > 35 && g - b > 35)
+        // 2. 幾何像素綠色膠囊按鈕探測 (y in 0.58..0.76)
         var greenButtonPts = 0
         var greenButtonMinX = sw
         var greenButtonMaxX = 0
@@ -745,24 +769,6 @@ class OcrRecognizer {
             }
         }
 
-        // 上半部 (y in 0.38..0.52) 綠色熊大卡片背景
-        var greenCardPts = 0
-        val cy1 = (sh * 0.38f).toInt().coerceIn(0, sh - 1)
-        val cy2 = (sh * 0.52f).toInt().coerceIn(cy1 + 1, sh)
-        for (y in cy1 until cy2 step 4) {
-            for (x in x1 until x2 step 4) {
-                val c = screenBitmap.getPixel(x, y)
-                val r = (c shr 16) and 0xFF
-                val g = (c shr 8) and 0xFF
-                val b = c and 0xFF
-                if (g > 140 && (g - r > 30) && (g - b > 30)) {
-                    greenCardPts++
-                }
-            }
-        }
-
-        val hasGreenModalPixelFeatures = greenButtonPts >= 25 && greenCardPts >= 35
-
         val dynamicButtonRect = if (greenButtonPts >= 25 && greenButtonMaxX > greenButtonMinX && greenButtonMaxY > greenButtonMinY) {
             Rect(greenButtonMinX, greenButtonMinY, greenButtonMaxX, greenButtonMaxY)
         } else {
@@ -774,15 +780,8 @@ class OcrRecognizer {
             )
         }
 
-        if (hasErrorText) {
-            if (ocrClose != null) return "錯誤彈窗[關閉]OCR" to ocrClose.bounds
-            return "錯誤彈窗綠色[關閉]鈕" to dynamicButtonRect
-        } else if (hasGreenModalPixelFeatures) {
-            if (ocrClose != null) return "錯誤彈窗[關閉]OCR" to ocrClose.bounds
-            return "錯誤彈窗綠色[關閉]鈕" to dynamicButtonRect
-        }
-
-        return null
+        if (ocrClose != null) return "錯誤彈窗[關閉]OCR" to ocrClose.bounds
+        return "錯誤彈窗綠色[關閉]鈕" to dynamicButtonRect
     }
 
     fun isLineWalkMainScreenVisible(
@@ -1065,6 +1064,19 @@ class OcrRecognizer {
             "開始遊玩",
             "遊玩",
             "下載",
+            "立即下載",
+            "瞭解詳情",
+            "了解詳情",
+            "酷澎",
+            "Coupang",
+            "原萃",
+            "CRYSTAL",
+            "VALLEY",
+            "報名中",
+            "去逛逛",
+            "momo",
+            "雙11",
+            "必買",
             "解鎖更多",
             "想體驗",
             "Sponsored",
@@ -1110,6 +1122,16 @@ class OcrRecognizer {
             "LINE POINTS",
             "安裝",
             "下載",
+            "立即下載",
+            "瞭解詳情",
+            "了解詳情",
+            "酷澎",
+            "Coupang",
+            "原萃",
+            "輕鬆賺",
+            "開始遊玩",
+            "報名中",
+            "去逛逛",
             "雙方",
             "Hide",
             "Report",
@@ -1148,8 +1170,7 @@ class OcrRecognizer {
             "下一則",
             "下一個",
             "✕",
-            "×",
-            ">>"
+            "×"
         )
 
         val AD_CLOSE_EXCLUDE_KEYWORDS = listOf(
@@ -1169,11 +1190,24 @@ class OcrRecognizer {
             "Reward in",
             "同意並繼續",
             "下載",
+            "立即下載",
             "安裝",
             "隱私權",
             "條款",
             "邀請",
             "好友",
+            "必買",
+            "雙11",
+            "搶購",
+            "優惠",
+            "去逛逛",
+            "逛逛",
+            "瞭解詳情",
+            "了解詳情",
+            "http",
+            "momo",
+            "酷澎",
+            "Coupang",
             "Hide",
             "Report",
             "irrelevant",

@@ -28,7 +28,7 @@ data class ClaimGiftTarget(
  */
 class ReceiveGiftTask {
 
-    fun isEnabled(config: AppConfig): Boolean = config.enableFriendGiftTask
+    fun isEnabled(config: AppConfig): Boolean = config.enableReceiveGiftTask
 
     /**
      * 右上角「禮物盒」圖示座標 (揚聲器與齒輪設定之間，常帶有紅點通知，主頁與好友頁皆通用)

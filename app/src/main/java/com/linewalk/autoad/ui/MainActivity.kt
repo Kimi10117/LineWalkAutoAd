@@ -62,6 +62,7 @@ class MainActivity : AppCompatActivity() {
         binding.cbLotteryTask.isChecked = cfg.enableLotteryTask
         binding.cbDailyMissionTask.isChecked = cfg.enableDailyMissionTask
         binding.cbFriendGiftTask.isChecked = cfg.enableFriendGiftTask
+        binding.cbReceiveGiftTask.isChecked = cfg.enableReceiveGiftTask
         binding.cbClaimNormalWhenNoAd.isChecked = cfg.claimNormalWhenNoAd
 
         binding.cbStepBottle.setOnCheckedChangeListener { _, isChecked ->
@@ -87,6 +88,9 @@ class MainActivity : AppCompatActivity() {
         }
         binding.cbFriendGiftTask.setOnCheckedChangeListener { _, isChecked ->
             cfg.enableFriendGiftTask = isChecked
+        }
+        binding.cbReceiveGiftTask.setOnCheckedChangeListener { _, isChecked ->
+            cfg.enableReceiveGiftTask = isChecked
         }
         binding.cbClaimNormalWhenNoAd.setOnCheckedChangeListener { _, isChecked ->
             cfg.claimNormalWhenNoAd = isChecked

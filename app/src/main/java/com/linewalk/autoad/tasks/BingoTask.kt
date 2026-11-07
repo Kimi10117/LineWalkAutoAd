@@ -282,7 +282,7 @@ class BingoTask {
             val y1 = (sh * 0.74f).toInt().coerceIn(0, sh - 1)
             val y2 = (sh * 0.90f).toInt().coerceIn(y1 + 1, sh)
 
-            // 1. 檢查該欄是否有鮮紅色 [▶ Get] 膠囊按鈕 (嚴格排除米黃色/淺粉紅糖果與金幣圖示 r≈250, g≈210, b≈160)
+            // 1. 檢查該欄是否有鮮紅/珊瑚粉紅 [▶ Get] 膠囊按鈕 (嚴格排除米黃色/淺粉紅糖果與金幣圖示 r≈250, g≈210, b≈160)
             val redPoints = mutableListOf<android.graphics.Point>()
             var y = y1
             while (y < y2) {
@@ -292,7 +292,7 @@ class BingoTask {
                     val r = (c shr 16) and 0xFF
                     val g = (c shr 8) and 0xFF
                     val b = c and 0xFF
-                    if (r > 195 && g < 110 && b < 110 && (r - g) > 90 && (r - b) > 90) {
+                    if (r > 185 && g < 128 && b < 135 && (r - g) > 75 && (r - b) > 70) {
                         redPoints.add(android.graphics.Point(x, y))
                     }
                     x += 2
@@ -300,12 +300,12 @@ class BingoTask {
                 y += 2
             }
 
-            if (redPoints.size >= 25) {
+            if (redPoints.size >= 18) {
                 val minX = redPoints.minOf { it.x }
                 val maxX = redPoints.maxOf { it.x }
                 val minY = redPoints.minOf { it.y }
                 val maxY = redPoints.maxOf { it.y }
-                if (maxX - minX >= (sw * 0.07f).toInt() && maxY - minY in 10..(sh * 0.08f).toInt()) {
+                if (maxX - minX >= (sw * 0.06f).toInt() && maxY - minY in 8..(sh * 0.085f).toInt()) {
                     return BingoRewardTarget(colIndex, "紅色獎勵鈕(欄${colIndex + 1})", Rect(minX, minY, maxX, maxY))
                 }
             }
@@ -318,6 +318,8 @@ class BingoTask {
                     item.text.contains("Get", ignoreCase = true) ||
                     item.text.contains("Cet", ignoreCase = true) ||
                     item.text.contains("Qet", ignoreCase = true) ||
+                    item.text.contains("6et", ignoreCase = true) ||
+                    item.text.contains("OGet", ignoreCase = true) ||
                     item.text.contains("領取") ||
                     item.text.contains("▶")
                 ) && !item.text.contains("今日上限") && !item.text.contains("開啟")
