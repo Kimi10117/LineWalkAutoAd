@@ -681,10 +681,10 @@ class TemplateMatcher {
         }
 
         var bestCandidate: TemplateMatchResult? = null
-        var bestRawScore = if (isRelaxed) 65f else 82f
-        val centerContrastMin = if (isRelaxed) 35f else 45f
-        val contrastMin = if (isRelaxed) 45f else 55f
-        val minArmContrastMin = if (isRelaxed) 22f else 35f
+        var bestRawScore = if (isRelaxed) 58f else 82f
+        val centerContrastMin = if (isRelaxed) 28f else 45f
+        val contrastMin = if (isRelaxed) 40f else 55f
+        val minArmContrastMin = if (isRelaxed) 20f else 35f
 
         for ((zoneIdx, zone) in searchZones.withIndex()) {
             val zw = zone.width()
@@ -832,7 +832,8 @@ class TemplateMatcher {
     ): TemplateMatchResult? = withContext(Dispatchers.Default) {
         val sw = screenBitmap.width
         val sh = screenBitmap.height
-        val topLimitY = max((sh * 0.015f).toInt(), 20)
+        // 嚴格排除 y < 4.2% 之頂部系統狀態列 (Wi-Fi、電量、訊號與靜音圖示)
+        val topLimitY = max((sh * 0.042f).toInt(), 45)
         val bottomLimitY = (sh * 0.115f).toInt()
         val leftLimitX = (sw * 0.72f).toInt()
         val rightLimitX = (sw * 0.965f).toInt()
@@ -920,30 +921,12 @@ class TemplateMatcher {
                             dy += 2
                         }
 
-                        // 模式 A：深色圓形底圖內嵌高亮白色圖示 (如黑色半透明圓鈕)
+                        // 僅保留模式 A：深色半透明圓形底圖內嵌高亮白色圖示 (▶|)，徹底移除容易誤判白底廣告右上角靜音喇叭、AdChoices 與網址文字的模式 B
                         if (ringMean < 115f && ringMax < 135f && (centerLum - ringMean > 35f || centerLum > 150f)) {
                             val contrast = innerMax - ringMean
                             if (innerMax > 175f && contrast > 85f) {
                                 if (contrast > bestScore) {
                                     bestScore = contrast
-                                    val boxRadius = rOuter + 4
-                                    bestCandidate = TemplateMatchResult(
-                                        score = (contrast / 180f).coerceIn(0.85f, 0.99f),
-                                        bounds = Rect(absX - boxRadius, absY - boxRadius, absX + boxRadius, absY + boxRadius),
-                                        label = "右上角略過鈕(▶|)"
-                                    )
-                                }
-                            }
-                        }
-
-                        // 模式 B：淺色狀態列或白色頂部區域上的深色/高反差略過按鈕 (如 Galaxy Z Flip5 22:9 頂部狀態列)
-                        if (ringMean > 200f && (ringMean - centerLum > 35f || centerLum < 200f)) {
-                            val contrast = ringMean - innerMin
-                            if (innerMin < 160f && contrast > 85f) {
-                                val fillRatio = darkInnerCount.toFloat() / max(1, totalInner).toFloat()
-                                val qualityScore = contrast * (0.5f + 0.5f * fillRatio)
-                                if (qualityScore > bestScore) {
-                                    bestScore = qualityScore
                                     val boxRadius = rOuter + 4
                                     bestCandidate = TemplateMatchResult(
                                         score = (contrast / 180f).coerceIn(0.85f, 0.99f),

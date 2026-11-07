@@ -58,6 +58,7 @@ class AdCloserHandler(
     private var lastFallbackCornerTimeMs: Long = 0L
     private var lastRevealSwipeTimeMs: Long = 0L
     private var fallbackCornerCycle: Int = 0
+    private var fastForwardSkipClicks: Int = 0
     private val clickedHistory = mutableListOf<Point>()
     private val blacklistedPoints = mutableListOf<Point>()
 
@@ -77,6 +78,7 @@ class AdCloserHandler(
             lastFallbackCornerTimeMs = 0L
             lastRevealSwipeTimeMs = 0L
             fallbackCornerCycle = 0
+            fastForwardSkipClicks = 0
             clickedHistory.clear()
             blacklistedPoints.clear()
         }
@@ -102,6 +104,8 @@ class AdCloserHandler(
     private var currentScreenWidth: Int = 0
     private var currentScreenHeight: Int = 0
     private var isCurrentAdTopSponsored: Boolean = false
+    private var topSponsoredBottomY: Int = 0
+    private var topSponsoredCenterY: Int = 0
 
     private fun isInvalidOrBlacklisted(x: Int, y: Int): Boolean {
         if (FloatingOverlayService.isInsideOverlay(x, y)) return true
@@ -113,13 +117,16 @@ class AdCloserHandler(
                 if (y < (sh * 0.08f).toInt()) return true
             }
             if (isCurrentAdTopSponsored) {
-                // Meta Sponsored 頂部白底橫幅模式 (如截圖 2)：
-                // 1) 放行左上角 X 關閉按鈕 (x in 2.5%..11.5% sw, y in 1.5%..4.6% sh)
-                // 2) 嚴格封鎖品牌頭像、標題與下方網址列 (y in 4.6%..15.0% sh 且 x < 85% sw)，杜絕誤點跳轉瀏覽器！
-                // 3) 嚴格封鎖右上角靜音喇叭與 AdChoices 圖示 (x > 78% sw 且 y < 5.8% sh)！
+                // Meta Sponsored 頂部白底橫幅模式 (同時支援 3M y≈0.029h 與 Trip.com y≈0.067h)：
+                // 1) 放行左側獨立 X 關閉欄 (x in 2.5%..11.6% sw, y in 1.5%..sponsoredBottom+0.6% sh)
+                // 2) 嚴格封鎖品牌圓形頭像 (Trip. / 3M) 與標題區 (x in 11.8%..85.0% sw 且 y < 15.0% sh)
+                // 3) 嚴格封鎖 Sponsored 下方之網址列 (y in (sponsoredBottom+0.6% sh)..15.0% sh 且 x < 85% sw)
+                // 4) 嚴格封鎖右上角靜音喇叭與 AdChoices 圖示 (x > 78% sw 且 y < 12.0% sh)
                 if (y < (sh * 0.015f).toInt()) return true
-                if (y in (sh * 0.046f).toInt()..(sh * 0.150f).toInt() && x < (sw * 0.85f).toInt()) return true
-                if (x > (sw * 0.78f).toInt() && y < (sh * 0.058f).toInt()) return true
+                val safeLeftHeaderBottom = (topSponsoredBottomY + (sh * 0.006f).toInt()).coerceAtLeast((sh * 0.048f).toInt())
+                if (x in (sw * 0.118f).toInt()..(sw * 0.850f).toInt() && y < (sh * 0.150f).toInt()) return true
+                if (x < (sw * 0.118f).toInt() && y in safeLeftHeaderBottom..(sh * 0.150f).toInt()) return true
+                if (x > (sw * 0.78f).toInt() && y < (sh * 0.120f).toInt()) return true
             } else {
                 if (y < (sh * 0.024f).toInt()) return true
             }
@@ -138,14 +145,28 @@ class AdCloserHandler(
         val sh = screenBitmap.height
         currentScreenWidth = sw
         currentScreenHeight = sh
-        isCurrentAdTopSponsored = ocrItems.any { item ->
+        val topSponsoredItem = ocrItems.firstOrNull { item ->
             val cy = item.bounds.centerY().toFloat() / sh
             val t = item.text.trim()
-            cy < 0.10f && (
+            cy < 0.12f && (
                 t.contains("Sponsored", ignoreCase = true) ||
                 t.contains("贊助") ||
-                t.contains("Ads served by", ignoreCase = true)
+                (cy < 0.09f && t.contains("Trip.com", ignoreCase = true))
             )
+        }
+        isCurrentAdTopSponsored = topSponsoredItem != null || ocrItems.any { item ->
+            val cy = item.bounds.centerY().toFloat() / sh
+            val t = item.text.trim()
+            cy < 0.12f && (
+                t.contains("Sponsored", ignoreCase = true) ||
+                t.contains("贊助")
+            )
+        }
+        topSponsoredBottomY = topSponsoredItem?.bounds?.bottom ?: (sh * 0.085f).toInt()
+        topSponsoredCenterY = if (topSponsoredItem != null) {
+            (topSponsoredItem.bounds.top - (sh * 0.004f).toInt()).coerceIn((sh * 0.024f).toInt(), (sh * 0.080f).toInt())
+        } else {
+            (sh * 0.065f).toInt()
         }
         val elapsedSec = getElapsedSeconds()
 
@@ -681,8 +702,10 @@ class AdCloserHandler(
 
         // 4C. 【全螢幕快轉/略過按鈕 (▶| 或 >>) 圖示偵測器】
         // 專門應對 Meta Audience Network 等影音廣告右上角的深色圓底高亮快轉略過鈕 (▶|)。
-        // 只要播放滿 5 秒（影音廣告略過鈕浮現時間）或已獲取獎勵時立即秒速偵測點擊，絕不拖延等廣告播完！
-        if ((isMetaAd || fgPkg == "com.linecorp.LGWKTW" || fgPkg == "com.linecorp.LGWALK") &&
+        // 限制：非頂部白底 Sponsored 橫幅廣告，且單支廣告最多嘗試 2 次，杜絕在右上角連續空點 6~8 次！
+        if (!isCurrentAdTopSponsored &&
+            fastForwardSkipClicks < 2 &&
+            (isMetaAd || fgPkg == "com.linecorp.LGWKTW" || fgPkg == "com.linecorp.LGWALK") &&
             (elapsedSec >= 5 || rewardGrantedOcr != null) &&
             (remainingSec == null || remainingSec <= 1 || rewardGrantedOcr != null)
         ) {
@@ -691,6 +714,7 @@ class AdCloserHandler(
                 blacklistedCoord = ::isInvalidOrBlacklisted
             )
             if (skipMatch != null) {
+                fastForwardSkipClicks++
                 hasAdActuallyShown = true
                 lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
                 recordAndClick(service, skipMatch.bounds, allowBlacklist = true)
@@ -790,13 +814,14 @@ class AdCloserHandler(
                 recordAndClick(service, geoMatch.bounds, allowBlacklist = true)
                 return AdStepResult.ClickedCloseOrSkip(geoMatch.label, geoMatch.bounds)
             }
-            // 若為頂部白底 Sponsored 橫幅廣告 (如截圖 2) 且無倒數計時，直接點擊左上角 X (0.042w..0.095w, 0.018h..0.042h)
-            if (isCurrentAdTopSponsored && (elapsedSec >= 6 || rewardGrantedOcr != null) && (remainingSec == null || remainingSec <= 1)) {
+            // 若為頂部白底 Sponsored 橫幅廣告 (如 3M 或 Trip.com) 且無倒數計時，直接以 Sponsored 標題高度動態對齊點擊左上角 X
+            if (isCurrentAdTopSponsored && (elapsedSec >= 5 || rewardGrantedOcr != null) && (remainingSec == null || remainingSec <= 1)) {
+                val halfH = max(14, (sh * 0.012f).toInt())
                 val sponsoredLeftTopX = Rect(
-                    (sw * 0.042f).toInt(),
-                    (sh * 0.018f).toInt(),
-                    (sw * 0.095f).toInt(),
-                    (sh * 0.042f).toInt()
+                    (sw * 0.048f).toInt(),
+                    (topSponsoredCenterY - halfH).coerceAtLeast((sh * 0.016f).toInt()),
+                    (sw * 0.098f).toInt(),
+                    (topSponsoredCenterY + halfH).coerceAtMost((sh * 0.092f).toInt())
                 )
                 if (!isInvalidOrBlacklisted(sponsoredLeftTopX.centerX(), sponsoredLeftTopX.centerY())) {
                     lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
@@ -880,13 +905,14 @@ class AdCloserHandler(
                 return AdStepResult.WatchdogBackTriggered(elapsedSec, "已獲獎勵內部返回鍵")
             }
 
-            // Meta 備援關閉熱區：在確認為 Meta 廣告且播放滿 28 秒或無倒數計時時，對頂部左上角 X 區域發送精確點擊（避開 y >= 0.046f 之網址列）
+            // Meta 備援關閉熱區：在確認為 Meta 廣告且播放滿 28 秒或無倒數計時時，對頂部左上角 X 區域發送精確點擊
             if (isMetaAd && !hasGooglePlayOnScreen && (elapsedSec >= 28 || (remainingSec == null && elapsedSec >= 25)) && !isOutsideGame && redirectCount == 0 && closeClickCount == 0 && now - lastFallbackCornerTimeMs >= 3000L) {
+                val halfH = max(14, (sh * 0.012f).toInt())
                 val metaLeftTopHotZone = Rect(
-                    (sw * 0.042f).toInt(),
-                    (sh * 0.018f).toInt(),
-                    (sw * 0.095f).toInt(),
-                    (sh * 0.042f).toInt()
+                    (sw * 0.048f).toInt(),
+                    (topSponsoredCenterY - halfH).coerceAtLeast((sh * 0.016f).toInt()),
+                    (sw * 0.098f).toInt(),
+                    (topSponsoredCenterY + halfH).coerceAtMost((sh * 0.092f).toInt())
                 )
                 if (!isInvalidOrBlacklisted(metaLeftTopHotZone.centerX(), metaLeftTopHotZone.centerY())) {
                     lastFallbackCornerTimeMs = now

@@ -885,6 +885,16 @@ class AutomationEngine private constructor(private val context: Context) {
         if (bingoTask.isBingoDialogOpen(ocrItems, sh)) {
             nonGameScreenTicks = 0
             subDialogOpenAttempts = 0
+            // 防護：若賓果視窗前方疊加了「1 跳過廣告糖果到手！[關閉]」等中央領獎彈窗，必須最優先點擊中央 [關閉] 按鈕！
+            val foregroundCloseBtn = ocrRecognizer.findCenterRewardModalCloseButton(screenBitmap, ocrItems)
+            if (foregroundCloseBtn != null) {
+                appendLog("[完成] 點擊賓果前景領獎彈窗: ${foregroundCloseBtn.first}")
+                FloatingOverlayService.clickWithOverlayPassthrough(foregroundCloseBtn.second) {
+                    service.clickRect(foregroundCloseBtn.second)
+                }
+                delay(400)
+                return
+            }
             if (isBingoCompleted) {
                 bingoDialogCloseAttempts++
                 val closeBtn = bingoTask.findCloseButton(ocrItems, sw, sh) ?: bingoTask.getCloseButtonBounds(sw, sh, ocrItems, screenBitmap)
@@ -1950,13 +1960,26 @@ class AutomationEngine private constructor(private val context: Context) {
         sh: Int
     ): Boolean {
         val activeTab = detectTabFromScreen(screenBitmap, ocrItems)
+
+        // 1. 直接放行條件：若畫面上已經看得到「賓果 / 抽抽樂 / 糖果 / 任務」日常任務圖示列，
+        // 或具有【首頁(移動) / 步數 / 時間】上半部看板特徵，代表 100% 已經在有日常任務圖示的分頁上！
+        val hasDailyIconsOrNonGameBoard = ocrItems.any { item ->
+            val cy = item.bounds.centerY().toFloat() / sh
+            val t = item.text.replace(" ", "")
+            (cy in 0.34f..0.47f && (t == "賓果" || t == "抽抽樂" || t == "糖果" || t == "任務" || t.contains("抽抽樂") || t.contains("可領取獎勵"))) ||
+            (cy in 0.16f..0.36f && (t.contains("累積數量") || t.contains("距離下次") || t.contains("今天的步數") || t.contains("步數瓶") || t.contains("速度") || t.contains("放置")))
+        }
+        if (hasDailyIconsOrNonGameBoard || activeTab == MainTab.MOVE || activeTab == MainTab.STEP || activeTab == MainTab.TIME) {
+            tabSwitchRetries = 0
+            return true
+        }
+
+        // 2. 嚴格判定【遊戲】分頁專屬特徵（移除會在首頁/步數下方橫幅出現的 POINTSGAME / 輕鬆賺 / 開始遊玩）
         val hasGamePageFeatures = ocrItems.any { item ->
             val t = item.text.replace(" ", "")
-            t.contains("秘寶挖挖哇") || t.contains("數獨達人") || t.contains("接龍高手") ||
-            t.contains("簡單賺金幣") || t.contains("POINTSGAME", ignoreCase = true) ||
-            t.contains("輕鬆賺") || t.contains("開始遊玩")
+            t.contains("秘寶挖挖哇") || t.contains("數獨達人") || t.contains("接龍高手") || t.contains("簡單賺金幣")
         }
-        if (activeTab == MainTab.GAME || hasGamePageFeatures) {
+        if ((activeTab == MainTab.GAME || hasGamePageFeatures) && tabSwitchRetries < 2) {
             tabSwitchRetries++
             val targetTab = if (tabSwitchRetries >= 2) MainTab.STEP else MainTab.MOVE
             val tabRect = getTabRect(targetTab, sw, sh, ocrItems, screenBitmap)

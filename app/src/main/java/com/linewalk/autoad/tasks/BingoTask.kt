@@ -310,7 +310,7 @@ class BingoTask {
                 }
             }
 
-            // 2. 檢查該欄 OCR 是否包含 Get / 領取 / ▶
+            // 2. 檢查該欄 OCR 是否包含 Get / 領取 / ▶（必須同時具備至少 8 個珊瑚粉紅像素點，嚴格排除已領取後的「綠旗黑字 Get」！）
             val colOcr = ocrItems.firstOrNull { item ->
                 val icx = item.bounds.centerX()
                 val icy = item.bounds.centerY()
@@ -324,7 +324,7 @@ class BingoTask {
                     item.text.contains("▶")
                 ) && !item.text.contains("今日上限") && !item.text.contains("開啟")
             }
-            if (colOcr != null) {
+            if (colOcr != null && redPoints.size >= 8) {
                 return BingoRewardTarget(colIndex, "OCR[${colOcr.text}](欄${colIndex + 1})", colOcr.bounds)
             }
         }

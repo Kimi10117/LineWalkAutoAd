@@ -201,20 +201,25 @@ class OcrRecognizer {
         val hasExplicitTicketOrCoinModalTitle = items.any { item ->
             val cy = item.bounds.centerY().toFloat() / sh
             val t = item.text.replace(" ", "")
-            cy in 0.20f..0.42f && (t.contains("張票券！") || t.contains("張票券!") || t.contains("獲得15張") || t.contains("獲得10張") || t.contains("枚金幣！") || t.contains("枚金幣!"))
+            cy in 0.20f..0.42f && (
+                t.contains("張票券！") || t.contains("張票券!") ||
+                t.contains("獲得15張") || t.contains("獲得10張") ||
+                t.contains("枚金幣！") || t.contains("枚金幣!") ||
+                t.contains("糖果到手") || t.contains("跳過廣告糖果") ||
+                t.contains("到手！") || t.contains("到手!") ||
+                t.contains("獲得糖果")
+            )
         }
 
         // 00A. 嚴格一票否決：若畫面為【遊戲】分頁（街機遊戲畫面、遊戲挑戰清單）且無明確領獎標題，絕非中央領獎彈窗！
         // 街機台深色背景容易被誤判為黑幕遮罩，導致對著下方遊戲卡片連續空點死鎖
+        // 注意：移除 POINTSGAME / 輕鬆賺 / 開始遊玩，因為首頁與步數分頁下方皆有該輪播橫幅！
         val isGameTabScreen = !hasExplicitTicketOrCoinModalTitle && items.any { item ->
             val t = item.text.replace(" ", "")
             t.contains("秘寶挖挖哇") ||
             t.contains("數獨達人") ||
             t.contains("接龍高手") ||
-            t.contains("POINTSGAME", ignoreCase = true) ||
-            t.contains("簡單賺金幣") ||
-            t.contains("輕鬆賺") ||
-            t.contains("開始遊玩")
+            t.contains("簡單賺金幣")
         }
         if (isGameTabScreen) {
             return null
@@ -230,20 +235,9 @@ class OcrRecognizer {
             t.contains("完成任務") || t.contains("即可獲得") || t.contains("大量金幣") ||
             t.contains("5張抽") || t.contains("50張抽") || t.contains("回復還需") ||
             (cy in 0.08f..0.22f && (t == "抽抽樂" || t.contains("抽抽樂"))) ||
-            (cy in 0.60f..0.76f && (t.contains("x1", ignoreCase = true) || t.contains("1張")) && !t.contains("金幣") && !t.contains("票券"))
+            (cy in 0.60f..0.76f && (t.contains("x1", ignoreCase = true) || t.contains("1張")) && !t.contains("金幣") && !t.contains("票券") && !t.contains("糖果"))
         }
         if (isLotteryPanelOrResult) {
-            return null
-        }
-
-        // 00C. 嚴格一票否決：每日賓果與任務視窗
-        val isOtherSubDialog = !hasExplicitTicketOrCoinModalTitle && items.any { item ->
-            val cy = item.bounds.centerY().toFloat() / sh
-            val t = item.text.replace(" ", "")
-            (cy in 0.08f..0.22f && (t.contains("每日賓果") || t.contains("今日賓果") || t.contains("任務"))) ||
-            t.contains("距離下次抽選") || t.contains("開啟賓果格") || t.contains("特別任務")
-        }
-        if (isOtherSubDialog) {
             return null
         }
 
@@ -278,7 +272,7 @@ class OcrRecognizer {
 
             (isExactOk || isChineseClose) && t.length <= 6
         }
-        // 2. 檢查是否有『獲得15張票券！』『獲得60枚金幣！』標題文字，或像素級中央彈窗特徵
+        // 2. 檢查是否有『獲得15張票券！』『獲得60枚金幣！』『1 跳過廣告糖果到手！』標題文字，或像素級中央彈窗特徵
         val hasRewardTitleOcr = items.any { item ->
             val cy = item.bounds.centerY().toFloat() / sh
             val t = item.text.replace(" ", "")
@@ -289,7 +283,6 @@ class OcrRecognizer {
                 !t.contains("POINTS") &&
                 !t.contains("Sponsored") &&
                 !t.contains("AD") &&
-                !t.contains("廣告") &&
                 !t.contains("推薦") &&
                 !t.contains("條款") &&
                 !t.contains("最多") &&
@@ -301,18 +294,18 @@ class OcrRecognizer {
                 (
                     t.contains("張票券") ||
                     t.contains("枚金幣") ||
-                    ((t.contains("票券") || t.contains("金幣")) && t.contains("獲得") && (t.contains("！") || t.contains("!")))
+                    t.contains("糖果到手") ||
+                    t.contains("跳過廣告糖果") ||
+                    t.contains("到手！") ||
+                    t.contains("到手!") ||
+                    t.contains("獲得糖果") ||
+                    ((t.contains("票券") || t.contains("金幣") || t.contains("糖果")) && (t.contains("獲得") || t.contains("到手")) && (t.contains("！") || t.contains("!")))
                 )
         }
         val isDimmedModal = isDimmedCenterModalOpen(screenBitmap)
 
-        // 若找到 OCR 關閉按鈕，但畫面既無標題亦無黑幕壓暗，代表非領獎彈窗，嚴格防止誤點主畫面按鈕
-        if (closeOcr != null && (hasRewardTitleOcr || isDimmedModal)) {
-            return "OCR[${closeOcr.text}]" to closeOcr.bounds
-        }
-
         // 像素級驗證中央領獎彈窗底部的白底黑字 [ 關閉 ] 膠囊按鈕 (y in 0.675..0.710)：
-        // 當懸浮視窗遮擋上半部『獲得15張票券！』標題且 OCR 漏抓『關閉』二字時，仍可精準識別並點擊關閉！
+        // 當懸浮視窗遮擋上半部『獲得15張票券！ / 1 跳過廣告糖果到手！』標題且 OCR 漏抓『關閉』二字時，仍可精準識別並點擊關閉！
         val hasPixelCloseButton = if (isDimmedModal && sw >= 100 && sh >= 100) {
             var darkCenterPts = 0
             val y1 = (sh * 0.675f).toInt().coerceIn(0, sh - 1)
@@ -352,12 +345,28 @@ class OcrRecognizer {
             false
         }
 
-        // 備援：【嚴格雙重驗證】必須確認有領獎標題文字（張票券/枚金幣）且（具備半透明遮罩或像素級白底黑字膠囊鈕）！
-        // 絕對禁止在無領獎標題 OCR 的情況下僅靠像素遮罩盲猜 fallback，防止在遊戲分頁或抽抽樂主畫面空點死鎖！
-        if (hasRewardTitleOcr && (isDimmedModal || hasPixelCloseButton || items.any {
+        // 若找到 OCR [關閉] 按鈕且具備領獎標題、半透明遮罩或像素級白底黑字關閉鈕，立即點擊關閉（即使底層壓暗背景仍有每日賓果/任務亦優先關閉前景彈窗）！
+        if (closeOcr != null && (hasRewardTitleOcr || isDimmedModal || hasPixelCloseButton)) {
+            return "OCR[${closeOcr.text}]" to closeOcr.bounds
+        }
+
+        // 00C. 嚴格一票否決：若畫面既無 OCR [關閉] 按鈕亦無像素級 [關閉] 膠囊鈕，且處於每日賓果或任務視窗，則不觸發備援盲點
+        val isOtherSubDialog = !hasExplicitTicketOrCoinModalTitle && !hasPixelCloseButton && items.any { item ->
+            val cy = item.bounds.centerY().toFloat() / sh
+            val t = item.text.replace(" ", "")
+            (cy in 0.08f..0.22f && (t.contains("每日賓果") || t.contains("今日賓果") || t.contains("任務"))) ||
+            t.contains("距離下次抽選") || t.contains("開啟賓果格") || t.contains("特別任務")
+        }
+        if (isOtherSubDialog) {
+            return null
+        }
+
+        // 備援：確認有領獎標題文字且具備半透明遮罩，或同時具備半透明遮罩與像素級白底黑字 [關閉] 膠囊鈕（應對懸浮窗遮住標題文字之情況）！
+        if ((hasRewardTitleOcr && (isDimmedModal || hasPixelCloseButton || items.any {
                 val s = it.text.replace(" ", "")
-                s.contains("張票券！") || s.contains("枚金幣！") || s.contains("張票券!") || s.contains("枚金幣!")
-            })
+                s.contains("張票券！") || s.contains("枚金幣！") || s.contains("張票券!") || s.contains("枚金幣!") ||
+                s.contains("糖果到手") || s.contains("到手！") || s.contains("到手!")
+            })) || (isDimmedModal && hasPixelCloseButton)
         ) {
             val fallbackCloseRect = Rect(
                 (sw * 0.20f).toInt(),
@@ -808,17 +817,13 @@ class OcrRecognizer {
 
         // 1. 若看完廣告後的中央領獎彈窗 (『獲得15張票券！ [關閉]』) 正開啟中，代表不在主畫面！
         // 遊戲分頁一票否決：街機背景易誤觸 isDimmedCenterModalOpen 假陽性，當為遊戲分頁時徹底屏蔽純像素遮罩判定，唯有真正偵測到領獎彈窗關閉按鈕時方判定不在主畫面
+        // 注意：移除 POINTSGAME / LINEPOINTS / 輕鬆賺 / 開始遊玩，因為首頁與步數分頁下方皆有該輪播橫幅！
         val isGameTabScreen = items.any { item ->
             val t = item.text.replace(" ", "")
             t.contains("秘寶挖挖哇") ||
             t.contains("數獨達人") ||
             t.contains("接龍高手") ||
-            t.contains("POINTSGAME", ignoreCase = true) ||
-            t.contains("LINEPOINTS", ignoreCase = true) ||
-            t.contains("簡單賺金幣") ||
-            t.contains("輕鬆賺") ||
-            t.contains("開始遊玩") ||
-            t.contains("玩LINE")
+            t.contains("簡單賺金幣")
         }
         if ((!isGameTabScreen && (findCenterRewardModalCloseButton(screenBitmap, items) != null || isDimmedCenterModalOpen(screenBitmap))) ||
             (isGameTabScreen && findCenterRewardModalCloseButton(screenBitmap, items) != null)
