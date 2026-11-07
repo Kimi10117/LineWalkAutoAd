@@ -1,18 +1,44 @@
 # LINE 散步趣自動看廣告助手 (LineWalkAutoAd) 發布說明
 
 ## 版本資訊
-- 版本名稱：v1.15.69
-- 版本代碼：versionCode 102, versionName "1.15.69"
+- 版本名稱：v1.15.70
+- 版本代碼：versionCode 103, versionName "1.15.70"
 - 發布類型：正式版本 (Release)
 
 ---
 
 ## 概述
-LineWalkAutoAd v1.15.69 為全機型螢幕比例自適應與深度穩定性升級版本：新增 `ScreenViewportCalibrator` 全面適配摺疊機 `22:9` / `21:9`、`16:9`、全螢幕手勢與傳統三大金剛導覽列；修復左上角 `[▶| Google Play]` 膠囊廣告與 `CACO DOUBLE 11. SALE` 左上角圓形 `(X)` 廣告無法關閉問題；徹底根除實機日誌 `1_15_68bug.txt` 中的 5 大死循環（`FacebookLandingPage` 69 秒洗版、`Skip 開啟商店` 與 `BOOK NOW ×` 誤跳轉、每日賓果與抽抽樂右上角 `(X)` 連點 11~70 次失誤、抽抽樂中獎結果畫面重複點 10 次）；並將日誌改為直接匯出含版本號之 `.txt` 檔案至手機「檔案 (Downloads)」App，同時移除舊版「取樣」按鈕。
+LineWalkAutoAd v1.15.70 為掛機穩定性修復版本：根除實機日誌 `散步趣助手_v1.15.69_診斷日誌_20261108_010457.txt` 中掛機卡在抽抽樂「BIG 8獎 100 枚金幣中獎囉！」結果彈窗長達 6 分鐘的無限循環；封鎖 InMobi 廣告左上角幾何 `(X)` 連續 4 次誤點跳轉瀏覽器；限制 `LINE宣傳廣告關閉(X)` 在同一支廣告連點 35 次的問題。
 
 ---
 
-## 具體更新與修復內容 (v1.15.69)
+## 具體更新與修復內容 (v1.15.70)
+
+### 1. 修復掛機卡在抽抽樂「BIG 8獎 中獎囉！」結果彈窗
+- **檔案**：`LotteryTask.kt`, `AutomationEngine.kt`
+- **根因**：從廣告返回時抽獎箱開啟動畫遮住 `50張 / 免費抽 / 5張` 按鈕，`areBothDrawsUnavailable` 誤判為三者皆反灰，第 1 個 Tick 即標記 `isLotteryCompleted = true`；之後結果彈窗浮現，引擎卻一直點擊被模態彈窗遮擋的背景右上角 `(X)` 與底部【集點】，且第 6 次後計數歸零造成無限循環。
+- **實作細節**：
+  - `AutomationEngine` 抽抽樂區塊在處理完成狀態前，先處理前景領獎彈窗；若前景仍為中獎結果彈窗，撤銷完成標記並交由 `handleLotteryDialog` 點擊 `[x1 獲得]` 或 `[關閉]`。
+  - `handleLotteryDialog` 結束判定改為至少連續 3 個空 Tick。
+  - `isLotteryWinResultScreen` 新增「頂部 N獎 / 枚金幣 + 中下部 `[x1 獲得]` / 底部 `[關閉]`」複合特徵與實心綠色膠囊像素特徵，並忽略彈窗下方露出的「BIG 獎項一覽」。
+  - `areBothDrawsUnavailable` 在偵測到結果彈窗、前景 `[關閉]` / `[分享給好友]`，或看不到任何主面板特徵時，一律不判定為反灰。
+  - 關閉脫困順序：前景 `[關閉]` -> 右上角 `(X)` -> 上方遮罩 -> 底部【集點】 -> 安全返回鍵 (第 7、8 次)，不再歸零循環。
+
+### 2. 封鎖左上角幾何 X 連續誤點跳轉瀏覽器
+- **檔案**：`AdCloserHandler.kt`, `AutomationEngine.kt`
+- **實作細節**：同一支廣告若點擊左上角後觸發外部跳轉 (`sbrowser` 等)，立即封鎖整個左上角區域；非 Meta 廣告左上角幾何 `(X)` 最多嘗試 2 次。
+
+### 3. 限制 LINE 宣傳廣告關閉 (X) 連點
+- **檔案**：`AdCloserHandler.kt`
+- **實作細節**：`LINE宣傳廣告關閉(X)` 最多嘗試 2 次並檢查黑名單，未關閉即交由標準廣告關閉流程處理。
+
+### 4. 廣告倒數秒數防誤判
+- **檔案**：`OcrRecognizer.kt`, `AutomationEngine.kt`
+- **實作細節**：頂部純數字倒數必須位於左右兩側角落；抽抽樂等子視窗內不再因內嵌文字誤進廣告監控模式。
+
+---
+
+## 歷史紀錄 (v1.15.69)
 
 ### 1. 全機型螢幕比例 (摺疊機 22:9 / 21:9、16:9、全螢幕手勢、傳統三大金剛鍵) 自適應防誤點架構
 - **檔案**：`ScreenViewportCalibrator.kt`, `BingoTask.kt`, `LotteryTask.kt`, `MissionTask.kt`, `ReceiveGiftTask.kt`, `FriendGiftTask.kt`, `AdCloserHandler.kt`

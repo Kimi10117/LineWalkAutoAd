@@ -476,29 +476,90 @@ class LotteryTask {
      * - 絕對排除日常領獎標題（獲得票券！、獲得金幣！等）！
      */
     /**
-     * 嚴格判定目前是否處於「抽抽樂中獎結果彈窗」（中獎囉！ / 5枚金幣 / [▶ x1 獲得] / 分享給好友 / 關閉）：
-     * - 絕對一票否決抽抽樂主面板特徵（查看獎項一覽、5張、50張、回復還需、完成任務、即可獲得、大量金幣），
-     *   徹底根除抽抽樂主面板下方黃色推廣橫幅「完成任務 即可獲得 大量金幣!!」被誤判為中獎結果而誤點進入 LINE 推廣頁的死循環！
+     * 嚴格判定目前是否處於「抽抽樂中獎結果彈窗」（BIG 8獎 / 100 枚金幣中獎囉！ / [▶ x1 獲得] / 分享給好友 / 關閉）：
+     * - 支援懸浮膠囊遮擋標題左半部或底層露出「BIG 獎項一覽」時的複合特徵辨識（頂部 1~10獎/特獎 + 中下部 [x1 獲得] / [分享給好友] / [關閉] 組合）
+     * - 絕對排除抽抽樂主面板中央區域特徵（5張、50張、免費抽、回復還需、完成任務、即可獲得、大量金幣），
+     *   防止主面板下方黃色推廣橫幅「完成任務 即可獲得 大量金幣!!」被誤判為中獎結果！
      */
-    fun isLotteryWinResultScreen(ocrItems: List<OcrItem>, sh: Int): Boolean {
-        val hasExplicitWinTitle = ocrItems.any { item ->
+    fun isLotteryWinResultScreen(
+        ocrItems: List<OcrItem>,
+        sh: Int,
+        screenBitmap: Bitmap? = null
+    ): Boolean {
+        val hasRankHeader = ocrItems.any { item ->
             val t = item.text.replace(" ", "")
-            t.contains("中獎囉") || t.contains("恭喜中獎") || t.contains("分享給好友")
+            val inTopModalArea = if (sh > 0) {
+                item.bounds.centerY() in (sh * 0.12f).toInt()..(sh * 0.36f).toInt()
+            } else {
+                item.bounds.centerY() in 150..900
+            }
+            inTopModalArea && (
+                Regex("""([1-9]|10|特|頭)獎""").containsMatchIn(t) ||
+                t.contains("枚金幣")
+            )
         }
 
+        val hasRewardX1ButtonOcr = ocrItems.any { item ->
+            val t = item.text.replace(" ", "")
+            val inMidLower = if (sh > 0) {
+                item.bounds.centerY() in (sh * 0.54f).toInt()..(sh * 0.76f).toInt()
+            } else {
+                item.bounds.centerY() in 1100..1900
+            }
+            inMidLower &&
+                (t.contains("x1", ignoreCase = true) || t.contains("×1") || t.contains("1張")) &&
+                !t.contains("5張") && !t.contains("50張") && !t.contains("抽1次") &&
+                !t.contains("完成任務") && !t.contains("即可獲得")
+        }
+
+        val hasModalCloseButtonOcr = ocrItems.any { item ->
+            val t = item.text.replace(" ", "")
+            val inBottomModal = if (sh > 0) {
+                item.bounds.centerY() in (sh * 0.72f).toInt()..(sh * 0.87f).toInt()
+            } else {
+                item.bounds.centerY() in 1500..2200
+            }
+            inBottomModal && (t == "關閉" || t.contains("關閉"))
+        }
+
+        val hasExplicitWinTitle = ocrItems.any { item ->
+            val t = item.text.replace(" ", "")
+            t.contains("中獎囉") ||
+            t.contains("恭喜中獎") ||
+            t.contains("恭喜獲得") ||
+            t.contains("分享給好友") ||
+            (t.contains("中獎") && (t.contains("金幣") || t.contains("枚") || t.contains("囉") || t.contains("！") || t.contains("!")))
+        } || (hasRankHeader && (hasRewardX1ButtonOcr || hasModalCloseButtonOcr)) ||
+            (hasRewardX1ButtonOcr && hasModalCloseButtonOcr)
+
+        if (hasExplicitWinTitle) {
+            return true
+        }
+
+        // 若有傳入 screenBitmap，檢查是否具備『頂部獎項/底部關閉 + 中下部實心鮮綠膠囊按鈕』像素特徵
+        if (screenBitmap != null && (hasRankHeader || hasModalCloseButtonOcr)) {
+            if (hasSolidGreenCapsuleInResultZone(screenBitmap)) {
+                return true
+            }
+        }
+
+        // 檢查抽抽樂主面板中央區域特徵 (y < 0.85f，忽略 y > 0.86f 在結果彈窗下方邊緣露出的「BIG 獎項一覽」)
         val hasMainLotteryPanelFeatures = ocrItems.any { item ->
             val t = item.text.replace(" ", "")
-            t.contains("查看獎項") ||
-            t.contains("獎項一覽") ||
-            t.contains("回復還需") ||
-            t.contains("完成任務") ||
-            t.contains("即可獲得") ||
-            t.contains("大量金幣") ||
-            (t.contains("5張") && !t.contains("15張") && !t.contains("25張")) ||
-            t.contains("50張") ||
-            t.contains("免費抽")
+            val inMainPanelBody = if (sh > 0) item.bounds.centerY() < (sh * 0.85f).toInt() else true
+            inMainPanelBody && (
+                t.contains("查看獎項") ||
+                t.contains("獎項一覽") ||
+                t.contains("回復還需") ||
+                t.contains("完成任務") ||
+                t.contains("即可獲得") ||
+                t.contains("大量金幣") ||
+                (t.contains("5張") && !t.contains("15張") && !t.contains("25張")) ||
+                t.contains("50張") ||
+                t.contains("免費抽")
+            )
         }
-        if (hasMainLotteryPanelFeatures && !hasExplicitWinTitle) {
+        if (hasMainLotteryPanelFeatures) {
             return false
         }
 
@@ -520,6 +581,37 @@ class LotteryTask {
         }
     }
 
+    private fun hasSolidGreenCapsuleInResultZone(screenBitmap: Bitmap): Boolean {
+        val sw = screenBitmap.width
+        val sh = screenBitmap.height
+        if (sw <= 0 || sh <= 0) return false
+        val yStart = (sh * 0.58f).toInt()
+        val yEnd = (sh * 0.74f).toInt()
+        val xStart = (sw * 0.18f).toInt()
+        val xEnd = (sw * 0.82f).toInt()
+        val stepX = 4
+        val stepY = 3
+        val minGreenPerRow = ((xEnd - xStart) / stepX * 0.35f).toInt()
+        var solidRowCount = 0
+        for (y in yStart..yEnd step stepY) {
+            var greenCount = 0
+            for (x in xStart..xEnd step stepX) {
+                val c = screenBitmap.getPixel(x, y)
+                val r = (c shr 16) and 0xFF
+                val g = (c shr 8) and 0xFF
+                val b = c and 0xFF
+                if (g > 135 && (g - r > 30) && (g - b > 30)) {
+                    greenCount++
+                }
+            }
+            if (greenCount >= minGreenPerRow) {
+                solidRowCount++
+                if (solidRowCount >= 3) return true
+            }
+        }
+        return false
+    }
+
     /**
      * 檢查「50抽」、「免費抽」與「5抽」是否皆處於反灰、冷卻或票券不足不可點狀態：
      * 當三者皆不可點時，可直接關閉抽抽樂視窗繼續檢查下一項，絕不點擊下方任何廣告區域。
@@ -529,11 +621,35 @@ class LotteryTask {
         ocrItems: List<OcrItem>,
         templateMatcher: TemplateMatcher
     ): Boolean {
+        val sw = screenBitmap.width
+        val sh = screenBitmap.height
+        // 嚴格防護 1：若前景正開啟「中獎囉！ / BIG 8獎」結果彈窗，絕對不可誤判為抽獎按鈕反灰完成！
+        if (isLotteryWinResultScreen(ocrItems, sh, screenBitmap)) {
+            return false
+        }
+        // 嚴格防護 2：若畫面中下部存在「關閉」或「分享給好友」等前景模態彈窗按鈕，代表主面板被遮擋，不可判定為反灰
+        val hasForegroundModalButtons = ocrItems.any { item ->
+            val cy = item.bounds.centerY()
+            val t = item.text.replace(" ", "")
+            cy in (sh * 0.62f).toInt()..(sh * 0.88f).toInt() &&
+                (t == "關閉" || t.contains("關閉") || t.contains("分享給好友"))
+        }
+        if (hasForegroundModalButtons) {
+            return false
+        }
         if (findTargetDrawButton(screenBitmap, ocrItems, templateMatcher) != null) {
             return false
         }
-        val sw = screenBitmap.width
-        val sh = screenBitmap.height
+        // 嚴格防護 3：確認畫面確實看得到抽抽樂主面板特徵（避免開獎動畫過渡幀遮擋按鈕時被誤判為反灰）
+        val hasVisibleMainPanelFeature = ocrItems.any { item ->
+            val t = item.text.replace(" ", "")
+            t.contains("50張") || t.contains("5張") || t.contains("免費") ||
+            t.contains("回復") || t.contains("還需") || t.contains("查看獎項") ||
+            t.contains("完成任務")
+        }
+        if (!hasVisibleMainPanelFeature) {
+            return false
+        }
         val ticketCount = extractTicketCount(ocrItems, screenBitmap, sh, sw)
         val isFiveUnavailable = (ticketCount != null && ticketCount < 5) ||
             templateMatcher.isPopupButtonDisabledGray(screenBitmap, (sh * 0.455f).toInt(), (sw * 0.75f).toInt())
@@ -573,7 +689,7 @@ class LotteryTask {
             return null
         }
 
-        val hasLotteryResultContext = isLotteryWinResultScreen(ocrItems, sh)
+        val hasLotteryResultContext = isLotteryWinResultScreen(ocrItems, sh, screenBitmap)
         if (!hasLotteryResultContext) {
             return null
         }
@@ -718,8 +834,9 @@ class LotteryTask {
         if (ocrMatch != null) {
             return ocrMatch.bounds
         }
-        // 若畫面確定有抽獎結果標題 (中獎囉！)，提供幾何預設關閉按鈕
-        val hasResultTitle = ocrItems.any { it.text.contains("中獎") || it.text.contains("中獎囉") }
+        // 若畫面確定有抽獎結果標題 (中獎囉！) 或複合結果彈窗特徵 (BIG 8獎 / [x1 獲得])，提供幾何預設關閉按鈕
+        val hasResultTitle = ocrItems.any { it.text.contains("中獎") || it.text.contains("中獎囉") } ||
+            isLotteryWinResultScreen(ocrItems, sh, screenBitmap)
         if (hasResultTitle) {
             return Rect(
                 (sw * 0.15f).toInt(),

@@ -63,6 +63,10 @@ class AdCloserHandler(
     private var lastRevealSwipeTimeMs: Long = 0L
     private var fallbackCornerCycle: Int = 0
     private var fastForwardSkipClicks: Int = 0
+    private var leftCornerGeoXClicks: Int = 0
+    private var disableLeftCornerForCurrentAd: Boolean = false
+    private var linePromoCloseClicks: Int = 0
+    private var lastLeftCornerClickTimeMs: Long = 0L
     private val clickedHistory = mutableListOf<Point>()
     private val blacklistedPoints = mutableListOf<Point>()
 
@@ -86,6 +90,10 @@ class AdCloserHandler(
             lastRevealSwipeTimeMs = 0L
             fallbackCornerCycle = 0
             fastForwardSkipClicks = 0
+            leftCornerGeoXClicks = 0
+            disableLeftCornerForCurrentAd = false
+            linePromoCloseClicks = 0
+            lastLeftCornerClickTimeMs = 0L
             clickedHistory.clear()
             blacklistedPoints.clear()
         }
@@ -96,11 +104,37 @@ class AdCloserHandler(
         clickedHistory.clear()
     }
 
-    fun markRecentRedirect(clickedPoint: Point? = null) {
+    /**
+     * 標記剛發生外部跳轉 (瀏覽器 / Play 商店 / 社群 App)：
+     * - 若最近一次點擊位於左上角區域 (x < 25% sw 且 y < 20% sh)，或 6 秒內剛點擊過左上角幾何 X，
+     *   立即對目前這支廣告永久封鎖整個左上角區域，杜絕同一支廣告在相鄰座標反覆誤點跳轉瀏覽器。
+     */
+    fun markRecentRedirect(clickedPoint: Point? = null, fromExternalApp: Boolean = false) {
+        val pt = clickedPoint ?: lastClickedPoint
+        val sw = currentScreenWidth
+        val sh = currentScreenHeight
+        val clickedLeftCorner = pt != null && sw > 0 && sh > 0 &&
+            pt.x < (sw * 0.25f).toInt() && pt.y < (sh * 0.20f).toInt()
+        val leftCornerWindowMs = if (fromExternalApp) 10000L else 6000L
+        val recentLeftCornerClick = lastLeftCornerClickTimeMs > 0L &&
+            System.currentTimeMillis() - lastLeftCornerClickTimeMs < leftCornerWindowMs
+        if (clickedLeftCorner || recentLeftCornerClick) {
+            disableLeftCornerForCurrentAd = true
+        }
         hasRecentRedirect = true
         redirectCount++
         resetClickBlacklist()
         lastClickedPoint = null
+    }
+
+    /** 目前廣告是否已封鎖左上角掃描（供測試與診斷使用） */
+    fun isLeftCornerDisabledForCurrentAd(): Boolean = disableLeftCornerForCurrentAd
+
+    private fun isInLeftCornerZone(x: Int, y: Int): Boolean {
+        val sw = currentScreenWidth
+        val sh = currentScreenHeight
+        if (sw <= 0 || sh <= 0) return false
+        return x < (sw * 0.25f).toInt() && y < (sh * 0.20f).toInt()
     }
 
     fun getElapsedSeconds(): Int {
@@ -292,11 +326,15 @@ class AdCloserHandler(
 
         // 1A-4. LINE 內部促銷宣傳全螢幕廣告 (如『還沒有邀請好友 實在太可惜了！』『獲得金幣的流程』)：
         // 屬於帶點廣告時可能彈出的促銷全螢幕廣告，絕不等待 30 秒倒數，立即點擊右上角圓形白底 (X) 關閉退回遊戲！
-        if (isGame && !isAd && ocrRecognizer.isLineInHousePromoAd(ocrItems)) {
+        if (isGame && !isAd && linePromoCloseClicks < 2 && ocrRecognizer.isLineInHousePromoAd(ocrItems)) {
             val promoCloseRect = ocrRecognizer.getLineInHousePromoCloseButton(sw, sh)
-            hasAdActuallyShown = true
-            recordAndClick(service, promoCloseRect, allowBlacklist = true)
-            return AdStepResult.ClickedCloseOrSkip("LINE宣傳廣告關閉(X)", promoCloseRect)
+            if (!isInvalidOrBlacklisted(promoCloseRect.centerX(), promoCloseRect.centerY())) {
+                // 最多嘗試 2 次：若仍未關閉，代表並非 LINE 內部宣傳頁（第三方廣告文案碰巧命中），放行給後續標準廣告關閉流程
+                linePromoCloseClicks++
+                hasAdActuallyShown = true
+                recordAndClick(service, promoCloseRect, allowBlacklist = true)
+                return AdStepResult.ClickedCloseOrSkip("LINE宣傳廣告關閉(X)", promoCloseRect)
+            }
         }
 
         // 1A-3. Meta 輪播廣告 / 外部跳轉安全防死循環返回機制：
@@ -850,14 +888,22 @@ class AdCloserHandler(
 
         if (shouldCheckGeoX) {
             val isRelaxed = elapsedSec >= 14 || rewardGrantedOcr != null || isCurrentAdTopSponsored
-            val enableLeftCornerScan = isMetaAd || (noActiveCountdown && elapsedSec >= 5) || rewardGrantedOcr != null
+            // 左上角掃描防護：若本支廣告已因點擊左上角觸發外部跳轉 (立即封鎖)，或非 Meta 廣告已嘗試 2 次左上角幾何 X 仍未關閉，永久封鎖左上角
+            val leftCornerAllowedForAd = !disableLeftCornerForCurrentAd && (isMetaAd || leftCornerGeoXClicks < 2)
+            val enableLeftCornerScan = leftCornerAllowedForAd &&
+                (isMetaAd || (noActiveCountdown && elapsedSec >= 5) || rewardGrantedOcr != null)
             val geoMatch = templateMatcher.detectCornerGeometricX(
                 screenBitmap = screenBitmap,
-                blacklistedCoord = ::isInvalidOrBlacklisted,
+                blacklistedCoord = { x, y ->
+                    isInvalidOrBlacklisted(x, y) || (!leftCornerAllowedForAd && isInLeftCornerZone(x, y))
+                },
                 isRelaxed = isRelaxed,
                 includeLeftZone = enableLeftCornerScan
             )
             if (geoMatch != null) {
+                if (isInLeftCornerZone(geoMatch.bounds.centerX(), geoMatch.bounds.centerY())) {
+                    leftCornerGeoXClicks++
+                }
                 lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
                 recordAndClick(service, geoMatch.bounds, allowBlacklist = true)
                 return AdStepResult.ClickedCloseOrSkip(geoMatch.label, geoMatch.bounds)
@@ -871,7 +917,7 @@ class AdCloserHandler(
                     (sw * 0.098f).toInt(),
                     (topSponsoredCenterY + halfH).coerceAtMost((sh * 0.092f).toInt())
                 )
-                if (!isInvalidOrBlacklisted(sponsoredLeftTopX.centerX(), sponsoredLeftTopX.centerY())) {
+                if (!disableLeftCornerForCurrentAd && !isInvalidOrBlacklisted(sponsoredLeftTopX.centerX(), sponsoredLeftTopX.centerY())) {
                     lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
                     recordAndClick(service, sponsoredLeftTopX, allowBlacklist = true)
                     return AdStepResult.ClickedCloseOrSkip("Sponsored頂部左上角X", sponsoredLeftTopX)
@@ -1117,6 +1163,8 @@ class AdCloserHandler(
     ) {
         val pt = Point(rect.centerX(), rect.centerY())
         lastClickedPoint = pt
+        // 記錄最近一次點擊是否位於左上角（若隨後觸發外部跳轉，用於封鎖本支廣告的左上角區域）
+        lastLeftCornerClickTimeMs = if (isInLeftCornerZone(pt.x, pt.y)) System.currentTimeMillis() else 0L
         clickedHistory.add(pt)
         val nearbyClicks = clickedHistory.count { p ->
             hypot((p.x - pt.x).toDouble(), (p.y - pt.y).toDouble()) < BLACKLIST_RADIUS_PX

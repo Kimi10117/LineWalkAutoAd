@@ -6,7 +6,7 @@ SRC_DIR = Path("app/src/main/java/com/linewalk/autoad")
 def test_v1_15_58_lottery_win_result_screen_strict_veto():
     """Verify isLotteryWinResultScreen vetoes main lottery panel promo banner ('完成任務 即可獲得 大量金幣!!')."""
     lt_code = (SRC_DIR / "tasks/LotteryTask.kt").read_text(encoding="utf-8")
-    assert "fun isLotteryWinResultScreen(ocrItems: List<OcrItem>, sh: Int): Boolean" in lt_code
+    assert "fun isLotteryWinResultScreen(" in lt_code  # v1.15.70: 新增 screenBitmap 參數
     assert 't.contains("完成任務")' in lt_code
     assert 't.contains("即可獲得")' in lt_code
     assert 't.contains("大量金幣")' in lt_code
@@ -20,9 +20,9 @@ def test_v1_15_58_both_draws_unavailable_immediate_close():
     lt_code = (SRC_DIR / "tasks/LotteryTask.kt").read_text(encoding="utf-8")
     assert "fun areBothDrawsUnavailable(" in lt_code
     ae_code = (SRC_DIR / "engine/AutomationEngine.kt").read_text(encoding="utf-8")
-    assert "val hasLotteryResultContext = lotteryTask.isLotteryWinResultScreen(ocrItems, sh)" in ae_code
+    assert "val hasLotteryResultContext = lotteryTask.isLotteryWinResultScreen(ocrItems, sh, screenBitmap)" in ae_code
     assert "val bothGray = lotteryTask.areBothDrawsUnavailable(screenBitmap, ocrItems, templateMatcher)" in ae_code
-    assert "if (!bothGray && currentPhaseEmptyTicks < 2)" in ae_code
+    assert "if (currentPhaseEmptyTicks < 3)" in ae_code  # v1.15.70: 至少 3 個空 Tick 才判定完成
 
 
 def test_v1_15_58_center_modal_close_excludes_lottery_main_panel():

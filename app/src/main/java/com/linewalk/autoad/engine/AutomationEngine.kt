@@ -502,7 +502,7 @@ class AutomationEngine private constructor(private val context: Context) {
         val safePkgLabel = if (externalPkg.length > 20) externalPkg.takeLast(20) else externalPkg
 
         appendLog("[防護] 偵測到非散步趣應用 ($externalPkg)，啟動嚴格防誤點保護 (連續 ${externalAppTicks} 次)")
-        adCloserHandler.markRecentRedirect()
+        adCloserHandler.markRecentRedirect(fromExternalApp = true)
         _uiStatus.value = _uiStatus.value.copy(
             statusDetail = "[防護] 前景非散步趣 ($externalPkg)",
             overlaySafeDetail = "[外部保護] 非散步趣App ($safePkgLabel)"
@@ -932,11 +932,59 @@ class AutomationEngine private constructor(private val context: Context) {
         if (lotteryTask.isLotteryDialogOpen(ocrItems, sh)) {
             nonGameScreenTicks = 0
             subDialogOpenAttempts = 0
+            // 前景模態彈窗最優先防護：若抽抽樂面板前方疊加「獲得 1 張票券！[關閉]」等中央領獎彈窗，必須先點擊其 [關閉]！
+            val lotteryFgModalClose = ocrRecognizer.findCenterRewardModalCloseButton(screenBitmap, ocrItems)
+            if (lotteryFgModalClose != null) {
+                appendLog("[抽抽樂] 偵測到前景領獎彈窗，優先點擊: ${lotteryFgModalClose.first}")
+                FloatingOverlayService.clickWithOverlayPassthrough(lotteryFgModalClose.second) {
+                    service.clickRect(lotteryFgModalClose.second)
+                }
+                delay(400)
+                return
+            }
+            // 前景「BIG 8獎 / 中獎囉！」結果彈窗防護：若過早標記完成，必須撤銷完成狀態並交由結果彈窗流程處理 ([x1 獲得] 或 [關閉])，
+            // 嚴禁點擊被模態彈窗遮擋的背景右上角 (X) 與底部【集點】造成無限循環！
+            if (isLotteryCompleted && lotteryTask.isLotteryWinResultScreen(ocrItems, sh, screenBitmap)) {
+                appendLog("[抽抽樂] 偵測到前景仍顯示中獎結果彈窗，撤銷完成標記並優先處理結果彈窗")
+                isLotteryCompleted = false
+                lotteryDialogCloseAttempts = 0
+                currentPhaseEmptyTicks = 0
+                currentPhase = PatrolPhase.LOTTERY
+            }
             if (isLotteryCompleted) {
                 lotteryDialogCloseAttempts++
-                if (lotteryDialogCloseAttempts >= 6) {
-                    appendLog("[抽抽樂] 抽抽樂視窗連續嘗試關閉達 $lotteryDialogCloseAttempts 次，點擊底部【集點】強制重置回主畫面並推進下一階段！")
+                // 若畫面中下部存在任何前景彈窗 [關閉] / [確認] 按鈕，優先點擊該按鈕 (避免點擊被遮擋的背景 X)
+                val lotteryBottomClose = ocrItems.firstOrNull { item ->
+                    val cy = item.bounds.centerY()
+                    val t = item.text.replace(" ", "")
+                    cy in (sh * 0.60f).toInt()..(sh * 0.86f).toInt() &&
+                        (t == "關閉" || t == "確認" || t == "確定")
+                }
+                if (lotteryBottomClose != null && lotteryDialogCloseAttempts <= 3) {
+                    appendLog("[抽抽樂] 抽抽樂已完成，優先點擊前景彈窗 [${lotteryBottomClose.text}] 按鈕 (嘗試: $lotteryDialogCloseAttempts)")
+                    FloatingOverlayService.clickWithOverlayPassthrough(lotteryBottomClose.bounds) {
+                        service.clickRect(lotteryBottomClose.bounds)
+                    }
+                    delay(400)
+                    return
+                }
+                if (lotteryDialogCloseAttempts >= 8) {
+                    appendLog("[抽抽樂] 抽抽樂視窗點擊【集點】後仍未離開，發送安全返回鍵脫困並推進下一階段！")
                     lotteryDialogCloseAttempts = 0
+                    isLotteryCompleted = false
+                    currentPhase = getNextPhase(PatrolPhase.LOTTERY)
+                    service.safeNavigateBack(allowInGame = true)
+                    delay(500)
+                    return
+                }
+                if (lotteryDialogCloseAttempts == 7) {
+                    appendLog("[抽抽樂] 抽抽樂視窗連續嘗試關閉仍未離開，發送安全返回鍵脫困 (嘗試: 7)")
+                    service.safeNavigateBack(allowInGame = true)
+                    delay(500)
+                    return
+                }
+                if (lotteryDialogCloseAttempts == 6) {
+                    appendLog("[抽抽樂] 抽抽樂視窗連續嘗試關閉達 $lotteryDialogCloseAttempts 次，點擊底部【集點】強制重置回主畫面並推進下一階段！")
                     currentPhase = getNextPhase(PatrolPhase.LOTTERY)
                     val mainTabBtn = friendGiftTask.getBottomMainTabRect(sw, sh, ocrItems, screenBitmap)
                     FloatingOverlayService.clickWithOverlayPassthrough(mainTabBtn) {
@@ -1418,7 +1466,7 @@ class AutomationEngine private constructor(private val context: Context) {
         }
 
         // 0. 嚴格檢查是否處於抽獎中獎結果畫面（排除抽抽樂主面板「完成任務 即可獲得 大量金幣!!」推廣橫幅）
-        val hasLotteryResultContext = lotteryTask.isLotteryWinResultScreen(ocrItems, sh)
+        val hasLotteryResultContext = lotteryTask.isLotteryWinResultScreen(ocrItems, sh, screenBitmap)
 
         // 0A. 抽獎結果畫面中：若尚未點擊看廣告獲票，【最高優先】尋找並點擊綠色按鈕 [▶ [抽獎] x1 獲得]！
         if (hasLotteryResultContext && !hasClickedLotteryAdReward) {
@@ -1553,8 +1601,10 @@ class AutomationEngine private constructor(private val context: Context) {
         if (modalCloseBtn == null && !hasLotteryResultContext) {
             val bothGray = lotteryTask.areBothDrawsUnavailable(screenBitmap, ocrItems, templateMatcher)
             currentPhaseEmptyTicks++
-            if (!bothGray && currentPhaseEmptyTicks < 2) {
-                updateDetail("[抽抽樂] 檢查可抽項目 ($currentPhaseEmptyTicks/2)...", "[抽抽樂] 檢查中...")
+            // 抽獎箱開啟動畫或廣告剛返回時，結果彈窗可能尚未浮現：至少連續 3 個空 Tick 確認後才可判定完成
+            if (currentPhaseEmptyTicks < 3) {
+                val waitHint = if (bothGray) "確認按鈕反灰狀態" else "檢查可抽項目"
+                updateDetail("[抽抽樂] $waitHint ($currentPhaseEmptyTicks/3)...", "[抽抽樂] 檢查中...")
                 return
             }
 
@@ -2806,7 +2856,7 @@ class AutomationEngine private constructor(private val context: Context) {
         )
         val isGameScreen = adCloserHandler.isGameScreenVisible(service, screenBitmap, ocrItems)
         // 嚴格安全防護：若畫面仍在主畫面或領獎下半部彈窗，絕不誤判為全螢幕廣告！
-        if (!onMainScreenDirect && !isBottomRewardPopup && (hasAdOcrDirect || (!isStillInSubDialog && (directGeoX != null || isExternalDirect || hasBrowserTitleDirect || (!isGameScreen && popupRetryTicks >= 2))))) {
+        if (!onMainScreenDirect && !isBottomRewardPopup && ((hasAdOcrDirect && !isStillInSubDialog) || (!isStillInSubDialog && (directGeoX != null || isExternalDirect || hasBrowserTitleDirect || (!isGameScreen && popupRetryTicks >= 2))))) {
             appendLog("[廣告] 點擊目標後已直接進入全螢幕廣告/宣傳頁，啟動廣告監控流程！")
             adCloserHandler.onEnterAdMode()
             transitionTo(EngineState.AD_WATCHING, "已進入廣告畫面，安全監控中...", "[廣告] 監控中...")

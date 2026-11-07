@@ -942,7 +942,7 @@ class OcrRecognizer {
         }
     }
 
-    fun detectAdCountdownSeconds(items: List<OcrItem>, screenHeight: Int): Int? {
+    fun detectAdCountdownSeconds(items: List<OcrItem>, screenHeight: Int, screenWidth: Int = 0): Int? {
         val topBarThreshold = (screenHeight * 0.22f).toInt()
         val hasLongPeriodTimer = items.any { item ->
             val itText = item.text.replace(" ", "")
@@ -966,11 +966,20 @@ class OcrRecognizer {
                 }
             }
             // 支援頂部兩側角落純數字圓圈倒數計時 (如 15、25 等)，若存在遊戲內長週期計時器則嚴格略過純數字
+            // 嚴格限定位於左右兩側角落 (cx < 25% 或 cx > 75% 螢幕寬)，避免將抽抽樂結果彈窗正中央「BIG 8獎」的「8」誤認為廣告倒數秒數
             if (!hasLongPeriodTimer) {
                 val trimmed = t.trim()
                 if (trimmed.length in 1..2 && trimmed.all { it.isDigit() }) {
+                    val effectiveSw = if (screenWidth > 0) {
+                        screenWidth
+                    } else {
+                        maxOf((screenHeight * 0.45f).toInt(), items.maxOfOrNull { it.bounds.right } ?: 0)
+                    }
+                    val cx = item.bounds.centerX()
+                    val inSideCorner = effectiveSw <= 0 ||
+                        cx < (effectiveSw * 0.25f).toInt() || cx > (effectiveSw * 0.75f).toInt()
                     val sec = trimmed.toIntOrNull()
-                    if (sec != null && sec in 1..60) {
+                    if (inSideCorner && sec != null && sec in 1..60) {
                         return sec
                     }
                 }

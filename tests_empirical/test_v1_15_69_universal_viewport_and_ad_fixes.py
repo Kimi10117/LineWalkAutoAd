@@ -44,7 +44,7 @@ class TestV1_15_69UniversalViewportAndAdFixes:
         assert "isTopLeftGooglePlayPill" in node_code
 
         # 2. CACO 左上角白底圓形 (X) 開放無倒數計時廣告掃描並擴展至 19.5% sw
-        assert "val enableLeftCornerScan = isMetaAd || (noActiveCountdown && elapsedSec >= 5) || rewardGrantedOcr != null" in ad_code
+        assert "(isMetaAd || (noActiveCountdown && elapsedSec >= 5) || rewardGrantedOcr != null)" in ad_code  # v1.15.70: 加入 leftCornerAllowedForAd 防護
         assert "searchZones.add(Rect((sw * 0.020f).toInt(), leftTopLimitY, (sw * 0.195f).toInt(), leftBottomLimitY))" in tm_code
 
     def test_03_five_log_anomalies_remediated(self):
