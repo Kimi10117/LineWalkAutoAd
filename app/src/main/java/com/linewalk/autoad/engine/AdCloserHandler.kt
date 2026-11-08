@@ -28,6 +28,7 @@ sealed class AdStepResult {
     data class ClickedCloseOrSkip(val sourceLabel: String, val bounds: Rect) : AdStepResult()
     data class ReturnedToGame(val confirmBounds: Rect?, val label: String) : AdStepResult()
     data class WatchdogBackTriggered(val elapsedSec: Int, val actionLabel: String = "返回鍵") : AdStepResult()
+    data class SwipedToReveal(val attempt: Int, val elapsedSec: Int) : AdStepResult()
     data class ScanningAd(val elapsedSec: Int) : AdStepResult()
 }
 
@@ -61,6 +62,7 @@ class AdCloserHandler(
     private var lastBackActionTimeMs: Long = 0L
     private var lastFallbackCornerTimeMs: Long = 0L
     private var lastRevealSwipeTimeMs: Long = 0L
+    private var revealSwipeCount: Int = 0
     private var fallbackCornerCycle: Int = 0
     private var fastForwardSkipClicks: Int = 0
     private var leftCornerGeoXClicks: Int = 0
@@ -88,6 +90,7 @@ class AdCloserHandler(
             lastBackActionTimeMs = 0L
             lastFallbackCornerTimeMs = 0L
             lastRevealSwipeTimeMs = 0L
+            revealSwipeCount = 0
             fallbackCornerCycle = 0
             fastForwardSkipClicks = 0
             leftCornerGeoXClicks = 0
@@ -715,12 +718,13 @@ class AdCloserHandler(
 
         // 5. 【倒數計時防護已於步驟 3B 優先執行完成】
 
-        // 4B-2. 【左上角 [▶| Google Play] 略過膠囊按鈕專責偵測器】
-        // 針對附圖 2 (iHEALTH 走路賺取現金獎勵等 Google AdMob 廣告)：
-        // 左上角黑色頂欄或頂部區域浮現 [▶| Google Play] 膠囊按鈕 (cy in 0.025f..0.18f, cx in 0.02f..0.42f)，
-        // 必須點擊該按鈕才能推進至結尾畫面並關閉廣告！
+        // 4B-2. 【左上角 [▶| Google Play] 略過膠囊按鈕極速專責偵測器】
+        // 針對互動式試玩廣告 (如「解開港口」等 Google Play 可玩式廣告)：
+        // 左上角頂欄浮現 [▶| Google Play] 膠囊按鈕 (cy in 0.025f..0.18f, cx in 0.02f..0.42f)，
+        // 該按鈕為廣告略過之前置要件，必須第一時間立即點擊跳轉 Google Play 再按返回鍵才能略過！
+        // 若未即時點擊會自動淡出隱藏，因此移除 4 秒延遲，第 1 秒起即刻秒點！
         val nowMsForPill = System.currentTimeMillis()
-        if (elapsedSec >= 4 && googlePlayPillClickCount < 2 && nowMsForPill - lastGooglePlayPillClickTimeMs >= 4000L) {
+        if (elapsedSec >= 1 && googlePlayPillClickCount < 4 && nowMsForPill - lastGooglePlayPillClickTimeMs >= 2500L) {
             val topLeftGooglePlayPill = findTopLeftGooglePlaySkipPill(ocrItems, sw, sh)
             if (topLeftGooglePlayPill != null &&
                 !isInvalidOrBlacklisted(topLeftGooglePlayPill.centerX(), topLeftGooglePlayPill.centerY())
@@ -729,7 +733,7 @@ class AdCloserHandler(
                 lastGooglePlayPillClickTimeMs = nowMsForPill
                 hasAdActuallyShown = true
                 lastFallbackCornerTimeMs = nowMsForPill + 4000L
-                recordAndClick(service, topLeftGooglePlayPill, allowBlacklist = true)
+                recordAndClick(service, topLeftGooglePlayPill, allowBlacklist = false)
                 return AdStepResult.ClickedCloseOrSkip("左上角[▶| Google Play]略過鈕", topLeftGooglePlayPill)
             }
         }
@@ -1043,6 +1047,34 @@ class AdCloserHandler(
                         return AdStepResult.WatchdogBackTriggered(elapsedSec, "超時安全返回鍵")
                     }
                 }
+            }
+        }
+
+        // 8B. 【試玩廣告控制項隱藏之滑動螢幕重新喚醒機制 (Reveal Swipe)】
+        // 針對可玩式試玩廣告 (如「解開港口」)，若廣告已播放 3 秒以上，
+        // 且左上角 [▶| Google Play] 膠囊已淡出隱藏、右上角亦未出現關閉/略過按鈕，
+        // 必須在螢幕中下方輕輕滑動一次以喚醒廣告頂部 UI，使略過按鈕或關閉叉叉重新浮現！
+        if (elapsedSec >= 3 && remainingSec == null && revealSwipeCount < 4 &&
+            now - lastRevealSwipeTimeMs >= 3500L && now - lastGooglePlayPillClickTimeMs >= 2500L &&
+            !isOutsideGame
+        ) {
+            val hasPlayableKeywords = ocrItems.any { item ->
+                val t = item.text.replace(" ", "")
+                t.contains("立即遊玩") || t.contains("遊玩") || t.contains("Play") ||
+                    t.contains("Level") || t.contains("港口") || t.contains("關卡")
+            }
+            if (hasPlayableKeywords || elapsedSec >= 6) {
+                revealSwipeCount++
+                lastRevealSwipeTimeMs = now
+                hasAdActuallyShown = true
+                service.performSwipe(
+                    startX = sw * 0.50f,
+                    startY = sh * 0.65f,
+                    endX = sw * 0.50f,
+                    endY = sh * 0.45f,
+                    durationMs = 180L
+                )
+                return AdStepResult.SwipedToReveal(revealSwipeCount, elapsedSec)
             }
         }
 

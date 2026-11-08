@@ -3283,6 +3283,14 @@ class AutomationEngine private constructor(private val context: Context) {
                 }
             }
 
+            is AdStepResult.SwipedToReveal -> {
+                appendLog("[廣告] 偵測到試玩廣告按鈕隱藏，執行滑動螢幕喚醒按鈕 (嘗試: ${res.attempt}/4)")
+                updateDetail(
+                    "[廣告] 試玩廣告按鈕隱藏，滑動螢幕喚醒中 (嘗試: ${res.attempt}/4)...",
+                    "[廣告] 播放中 (${res.elapsedSec}s)..."
+                )
+            }
+
             is AdStepResult.ScanningAd -> {
                 updateDetail(
                     "[搜尋] 搜尋關閉 X 或略過按鈕 (已播 ${res.elapsedSec}s)...",
