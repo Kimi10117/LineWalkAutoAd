@@ -212,6 +212,8 @@ class AutomationEngine private constructor(private val context: Context) {
     internal var sameTargetClickCount = 0
     internal var lastTargetClickName: String? = null
     internal var lastTargetClickRect: Rect? = null
+    internal var closeNodeConsecutiveClicks = 0
+    internal var lastCloseNodeLabel: String? = null
 
     private val _uiStatus = MutableStateFlow(EngineUiStatus())
     val uiStatus: StateFlow<EngineUiStatus> = _uiStatus.asStateFlow()
@@ -507,6 +509,20 @@ class AutomationEngine private constructor(private val context: Context) {
             statusDetail = "[防護] 前景非散步趣 ($externalPkg)",
             overlaySafeDetail = "[外部保護] 非散步趣App ($safePkgLabel)"
         )
+
+        // 外部工具與瀏覽器極速復原：連續 2 個 tick (約 2.5 秒) 前景仍為三星瀏覽器/Chrome/Play 商店，立即強制喚醒散步趣拉回前景！
+        val isBrowserOrStore = externalPkg == "com.android.vending" ||
+            externalPkg == "com.sec.android.app.sbrowser" ||
+            externalPkg.startsWith("com.sec.android") ||
+            externalPkg == "com.android.chrome"
+        if (externalAppTicks >= 2 && isBrowserOrStore) {
+            appendLog("[防護] 停留外部瀏覽器/商店 ($externalPkg) 達 2 次 tick，立即強制喚醒散步趣拉回前景！")
+            val targetPkg = config.targetGamePackages.firstOrNull { it != "jp.naver.line.android" } ?: "com.linecorp.LGWKTW"
+            service.bringAppToFront(targetPkg)
+            externalAppTicks = 0
+            transitionTo(EngineState.IN_GAME_SCAN, "已拉回散步趣，恢復遊戲巡邏...", "[巡邏] 巡邏畫面目標中...")
+            return
+        }
 
         // 逾時復原：連續外部應用超過 3 個 tick (約 4 秒)，強制將散步趣喚醒拉回前景！
         if (externalAppTicks >= 3) {
@@ -850,10 +866,36 @@ class AutomationEngine private constructor(private val context: Context) {
             return
         }
 
+        // A-1. 【抽抽樂中獎結果彈窗最高優先權與重疊 Bug 處理】
+        // 針對實機問題 (Screenshot_20261108_022009_LINE .jpg)：
+        // 散步趣已知 Bug：播放全螢幕廣告時，抽抽樂中獎結果視窗可能擋在廣告前面！
+        // 1) 若中獎視窗背後露出了廣告特徵（如「還沒有邀請好友 實在太可惜了！」或頂部廣告關閉鈕）：
+        //    只能點擊中獎彈窗底部的 [關閉] 按鈕關閉中獎視窗！等中獎視窗關閉後，下一個 Tick 再點擊廣告右上角 (X) 退出！
+        // 2) 若背後無廣告（正常中獎）：維持最佳策略，交由 handleLotteryDialog 點擊綠色 [▶ x1 獲得] 看廣告多賺彩券！
+        if (lotteryTask.isLotteryWinResultScreen(ocrItems, sh, screenBitmap)) {
+            nonGameScreenTicks = 0
+            subDialogOpenAttempts = 0
+            val hasBgAd = lotteryTask.hasBackgroundAdBehindLotteryResult(ocrItems, sh) || ocrRecognizer.isLineInHousePromoAd(ocrItems)
+            if (hasBgAd) {
+                appendLog("[抽抽樂] 偵測到抽抽樂中獎彈窗與背景廣告重疊 Bug，依規則優先點擊前景彈窗底部的 [關閉] 按鈕！")
+                val resultCloseBtn = lotteryTask.findLotteryResultCloseButton(screenBitmap, ocrItems)
+                    ?: Rect((sw * 0.15f).toInt(), (sh * 0.76f).toInt(), (sw * 0.85f).toInt(), (sh * 0.86f).toInt())
+                FloatingOverlayService.clickWithOverlayPassthrough(resultCloseBtn) {
+                    service.clickRect(resultCloseBtn, allowTopSafeZone = true)
+                }
+                delay(400)
+                return
+            } else {
+                handleLotteryDialog(service, screenBitmap, ocrItems, sw, sh)
+                return
+            }
+        }
+
         // A0. 檢查是否跳出 LINE 內部宣傳促銷全螢幕廣告（如『邀請好友 快來領取吧！！』『還沒有邀請好友 實在太可惜了！』）
         // 嚴格安全防護：若畫面為主畫面四大分頁（首頁/步數/時間/遊戲）或具有步數/導覽列特徵，絕不可誤判！
+        // 且嚴格排除抽抽樂中獎結果視窗（避免被中獎視窗擋住時狂點背景右上角 X）！
         val onMainScreenForPromo = ocrRecognizer.isLineWalkMainScreenVisible(screenBitmap, ocrItems, templateMatcher)
-        if (!onMainScreenForPromo && ocrRecognizer.isLineInHousePromoAd(ocrItems)) {
+        if (!onMainScreenForPromo && ocrRecognizer.isLineInHousePromoAd(ocrItems) && !lotteryTask.isLotteryWinResultScreen(ocrItems, sh, screenBitmap)) {
             nonGameScreenTicks = 0
             val closeBtn = ocrRecognizer.getLineInHousePromoCloseButton(sw, sh)
             appendLog("[廣告] 偵測到 LINE 宣傳廣告/促銷彈窗，點擊右上角 (X) 關閉視窗")
@@ -1129,6 +1171,46 @@ class AutomationEngine private constructor(private val context: Context) {
         }
 
         // D. 若不在主畫面（代表有宣傳視窗如『邀請好友』、『玩遊戲賺點數 -> 跳過』、領獎確認窗或全螢幕廣告）：
+        // D0. 【防放棄中斷確認彈窗優先攔截】
+        // 針對實機問題 (Screenshot_20261108_113914_LINE .jpg)：
+        // 廣告播放中若誤觸彈出「關閉廣告？您將無法獲得獎勵」對話框：
+        // 1) 優先點擊藍色按鈕 [繼續] 或 [繼續觀看]，恢復廣告播放正常領獎！
+        // 2) 絕對嚴格禁止點擊對話框標題「關閉廣告？」（避免連續狂點標題上百次死鎖）！
+        val hasAdAbortPopup = ocrItems.any { item ->
+            val t = item.text.replace(" ", "")
+            t.contains("無法獲得獎勵") || (t.contains("關閉廣告") && (t.contains("？") || t.contains("?"))) || t.contains("放棄獎勵")
+        }
+        if (hasAdAbortPopup) {
+            val resumeBtn = ocrItems.firstOrNull { item ->
+                val t = item.text.replace(" ", "")
+                val cy = item.bounds.centerY()
+                cy > (sh * 0.40f).toInt() && (t == "繼續" || t.contains("繼續") || t.equals("Resume", ignoreCase = true) || t.equals("Continue", ignoreCase = true))
+            }
+            if (resumeBtn != null) {
+                appendLog("[廣告] 偵測到「關閉廣告？您將無法獲得獎勵」彈窗，優先點擊 [${resumeBtn.text}] 恢復廣告播放領獎！")
+                FloatingOverlayService.clickWithOverlayPassthrough(resumeBtn.bounds) {
+                    service.clickRect(resumeBtn.bounds)
+                }
+                adCloserHandler.onEnterAdMode(preserveRedirectState = true)
+                transitionTo(EngineState.AD_WATCHING, "已點擊 [繼續]，恢復廣告播放中...", "[廣告] 監控中...")
+                return
+            }
+            // 若無 [繼續] 按鈕，點擊對話框右下角按鈕區的 [關閉] 按鈕（嚴禁點擊頂部標題「關閉廣告？」）
+            val realCloseBtn = ocrItems.firstOrNull { item ->
+                val t = item.text.trim()
+                val cy = item.bounds.centerY()
+                cy in (sh * 0.50f).toInt()..(sh * 0.85f).toInt() && (t == "關閉" || t == "關閉廣告")
+            }
+            if (realCloseBtn != null) {
+                appendLog("[廣告] 彈窗無繼續按鈕，點擊彈窗按鈕區 [關閉] 退出")
+                FloatingOverlayService.clickWithOverlayPassthrough(realCloseBtn.bounds) {
+                    service.clickRect(realCloseBtn.bounds)
+                }
+                delay(400)
+                return
+            }
+        }
+
         // D1. 短字按鈕 OCR（跳過 / 略過 / 確認 / 確定 / 關閉，字數 <= 6，覆蓋到 y < 0.94f）
         val dismissOrSkipOcr = ocrRecognizer.findMatch(
             items = ocrItems,
@@ -1148,7 +1230,7 @@ class AutomationEngine private constructor(private val context: Context) {
             return
         }
 
-        // D2. 無障礙節點樹關閉按鈕
+        // D2. 無障礙節點樹關閉按鈕（內建 3 次點擊斷路器與 Coupang 備援關閉，徹底終結連點 1135 次死循環）
         val closeNode = nodeInspector.findAdCloseNode(
             root = service.getSafeRootNode(),
             screenWidth = sw,
@@ -1159,9 +1241,58 @@ class AutomationEngine private constructor(private val context: Context) {
         )
         if (closeNode != null) {
             nonGameScreenTicks = 0
-            appendLog("[關閉] 自動點擊關閉節點: ${closeNode.label}")
-            service.clickRect(closeNode.bounds)
+            if (lastCloseNodeLabel == closeNode.label) {
+                closeNodeConsecutiveClicks++
+            } else {
+                closeNodeConsecutiveClicks = 1
+                lastCloseNodeLabel = closeNode.label
+            }
+
+            // 斷路器防護：同一無障礙節點連續點擊達 3 次未響應
+            if (closeNodeConsecutiveClicks >= 3) {
+                appendLog("[斷路器] 無障礙關閉節點 (${closeNode.label}) 連續點擊達 $closeNodeConsecutiveClicks 次無響應，啟動斷路脫困！")
+                // 檢查是否為 Coupang 酷澎全螢幕廣告 (Screenshot_20261108_112149_LINE .jpg)
+                val isCoupang = ocrItems.any { item ->
+                    val t = item.text.lowercase()
+                    t.contains("coupang") || t.contains("酷澎")
+                }
+                if (isCoupang && closeNodeConsecutiveClicks == 3) {
+                    // Coupang 備援策略：點擊無效 Node[txt=✖] 正下方 (y 偏移 75~120px) 真正的圓形灰底 (X)
+                    val coupangAltX = Rect(
+                        closeNode.bounds.left,
+                        closeNode.bounds.bottom + (sh * 0.015f).toInt(),
+                        closeNode.bounds.right,
+                        closeNode.bounds.bottom + (sh * 0.065f).toInt()
+                    )
+                    appendLog("[酷澎] 嘗試點擊 Coupang 備援圓形 (X) 關閉按鈕")
+                    FloatingOverlayService.clickWithOverlayPassthrough(coupangAltX) {
+                        service.clickRect(coupangAltX, allowTopSafeZone = true)
+                    }
+                    delay(500)
+                    return
+                } else if (closeNodeConsecutiveClicks == 4) {
+                    appendLog("[斷路器] 無障礙節點無效，發送系統返回鍵 (BACK) 退出！")
+                    service.safeNavigateBack(allowInGame = true)
+                    delay(500)
+                    return
+                } else if (closeNodeConsecutiveClicks >= 5) {
+                    appendLog("[斷路器] 連續 5 次未關閉，強制喚醒散步趣拉回主畫面！")
+                    closeNodeConsecutiveClicks = 0
+                    lastCloseNodeLabel = null
+                    service.bringAppToFront("com.linecorp.LGWKTW")
+                    delay(800)
+                    return
+                }
+            }
+
+            appendLog("[關閉] 自動點擊關閉節點: ${closeNode.label} (嘗試: $closeNodeConsecutiveClicks/3)")
+            FloatingOverlayService.clickWithOverlayPassthrough(closeNode.bounds) {
+                service.clickRect(closeNode.bounds, allowTopSafeZone = true)
+            }
             return
+        } else {
+            closeNodeConsecutiveClicks = 0
+            lastCloseNodeLabel = null
         }
 
         // D3. 幾何角落 X 偵測器（如『邀請好友』右上角 X，或全螢幕廣告左上/右上角 X！）

@@ -549,6 +549,25 @@ class AdCloserHandler(
             return AdStepResult.WaitingGracePeriod(elapsedSec)
         }
 
+        // 3B. 【倒數計時絕對防護：若畫面正在倒數（含「56 秒後可獲獎勵」膠囊），嚴禁提早點擊任何關閉/略過按鈕！】
+        // 優先偵測「\d+ 秒後可獲獎勵 / 發放獎勵」膠囊，防止誤觸廣告中斷確認彈窗！
+        val pendingRewardSec = ocrRecognizer.detectRewardPendingCountdownSeconds(ocrItems, sh)
+        val normalCountdownSec = ocrRecognizer.detectAdCountdownSeconds(ocrItems, sh, sw)
+        val remainingSec = pendingRewardSec ?: normalCountdownSec
+        val rewardGrantedOcr = ocrRecognizer.findMatch(
+            items = ocrItems,
+            keywords = OcrRecognizer.AD_REWARD_GRANTED_KEYWORDS,
+            screenWidth = sw,
+            screenHeight = sh,
+            roiNormalized = RectF(0f, 0f, 1f, 0.25f)
+        )
+        if (remainingSec != null || rewardGrantedOcr != null) {
+            hasAdActuallyShown = true
+        }
+        if (remainingSec != null && remainingSec > 1 && rewardGrantedOcr == null) {
+            return AdStepResult.StillCountingDown(remainingSec, elapsedSec)
+        }
+
         // 4. 【最高優先：檢查是否有明確的「略過/跳過」按鈕（一旦略過出現立即秒點，絕不拖延等廣告播完）】
         // 4. 【最高優先：檢查是否有明確的「略過/跳過」按鈕（一旦略過出現立即秒點，絕不拖延等廣告播完）】
         // 4A. 無障礙節點樹中的明確略過按鈕 (node.text/desc/id 包含 略過/跳過/Skip/Close)
@@ -694,22 +713,7 @@ class AdCloserHandler(
             return AdStepResult.ClickedCloseOrSkip("OCR[${nextAdMatch.text}]", nextAdMatch.bounds)
         }
 
-        // 5. 【倒數計時防護：無明確略過按鈕且倒數中時嚴格保持靜候】
-        // 若畫面上未出現明確略過按鈕，且正在倒數計時（如「還有 15 秒」），嚴格保持靜候播放，絕不碰觸螢幕！
-        val remainingSec = ocrRecognizer.detectAdCountdownSeconds(ocrItems, sh)
-        val rewardGrantedOcr = ocrRecognizer.findMatch(
-            items = ocrItems,
-            keywords = OcrRecognizer.AD_REWARD_GRANTED_KEYWORDS,
-            screenWidth = sw,
-            screenHeight = sh,
-            roiNormalized = RectF(0f, 0f, 1f, 0.25f)
-        )
-        if (remainingSec != null || rewardGrantedOcr != null) {
-            hasAdActuallyShown = true
-        }
-        if (remainingSec != null && remainingSec > 1 && rewardGrantedOcr == null) {
-            return AdStepResult.StillCountingDown(remainingSec, elapsedSec)
-        }
+        // 5. 【倒數計時防護已於步驟 3B 優先執行完成】
 
         // 4B-2. 【左上角 [▶| Google Play] 略過膠囊按鈕專責偵測器】
         // 針對附圖 2 (iHEALTH 走路賺取現金獎勵等 Google AdMob 廣告)：
@@ -1190,6 +1194,15 @@ class AdCloserHandler(
 
         // 0B. 若畫面為 LINE 內部促銷宣傳廣告 (如『還沒有邀請好友 實在太可惜了！』)，絕非遊戲主畫面！
         if (ocrRecognizer.isLineInHousePromoAd(ocrItems)) {
+            return false
+        }
+
+        // 0C. 若畫面為「關閉廣告？您將無法獲得獎勵」防放棄確認彈窗，絕非遊戲畫面，保持在廣告監控中點擊 [繼續]！
+        val hasAdAbortConfirm = ocrItems.any { item ->
+            val t = item.text.replace(" ", "")
+            t.contains("無法獲得獎勵") || (t.contains("關閉廣告") && (t.contains("？") || t.contains("?"))) || t.contains("放棄獎勵")
+        }
+        if (hasAdAbortConfirm) {
             return false
         }
 

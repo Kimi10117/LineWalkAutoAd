@@ -476,10 +476,36 @@ class LotteryTask {
      * - 絕對排除日常領獎標題（獲得票券！、獲得金幣！等）！
      */
     /**
+     * 判定抽抽樂中獎結果畫面背後是否疊加了全螢幕廣告（散步趣已知重疊 Bug）：
+     * - 當中獎彈窗背後露出廣告特徵（例如上方透出「還沒有邀請好友 實在太可惜了！」或頂部存在廣告關閉 X 等）
+     * - 遇到此 Bug 時，只能點擊中獎彈窗底部的 [關閉] 按鈕，關閉中獎彈窗後露出廣告本體，再由廣告關閉流程點擊廣告右上角 (X) 退出！
+     */
+    fun hasBackgroundAdBehindLotteryResult(ocrItems: List<OcrItem>, sh: Int = 0): Boolean {
+        return ocrItems.any { item ->
+            val t = item.text.replace(" ", "")
+            val cy = item.bounds.centerY()
+            val inTopOrBottomAdArea = if (sh > 0) {
+                cy < (sh * 0.22f).toInt() || cy > (sh * 0.88f).toInt()
+            } else {
+                cy < 500 || cy > 2100
+            }
+            inTopOrBottomAdArea && (
+                t.contains("還沒有邀請好友") ||
+                t.contains("實在太可惜了") ||
+                (t.contains("邀請好友") && !t.contains("分享")) ||
+                t.contains("最高可獲") ||
+                t.contains("Sponsored", ignoreCase = true) ||
+                t.contains("開啟商店") ||
+                t.contains("立即遊玩") ||
+                t.contains("安裝")
+            )
+        }
+    }
+
+    /**
      * 嚴格判定目前是否處於「抽抽樂中獎結果彈窗」（BIG 8獎 / 100 枚金幣中獎囉！ / [▶ x1 獲得] / 分享給好友 / 關閉）：
      * - 支援懸浮膠囊遮擋標題左半部或底層露出「BIG 獎項一覽」時的複合特徵辨識（頂部 1~10獎/特獎 + 中下部 [x1 獲得] / [分享給好友] / [關閉] 組合）
-     * - 絕對排除抽抽樂主面板中央區域特徵（5張、50張、免費抽、回復還需、完成任務、即可獲得、大量金幣），
-     *   防止主面板下方黃色推廣橫幅「完成任務 即可獲得 大量金幣!!」被誤判為中獎結果！
+     * - 即使中獎彈窗中間配圖帶有「完成任務 即可獲得 大量金幣!!」宣傳字樣，只要具備中獎特徵與底部按鈕，仍能正確辨識！
      */
     fun isLotteryWinResultScreen(
         ocrItems: List<OcrItem>,
@@ -489,33 +515,33 @@ class LotteryTask {
         val hasRankHeader = ocrItems.any { item ->
             val t = item.text.replace(" ", "")
             val inTopModalArea = if (sh > 0) {
-                item.bounds.centerY() in (sh * 0.12f).toInt()..(sh * 0.36f).toInt()
+                item.bounds.centerY() in (sh * 0.10f).toInt()..(sh * 0.38f).toInt()
             } else {
-                item.bounds.centerY() in 150..900
+                item.bounds.centerY() in 150..950
             }
             inTopModalArea && (
                 Regex("""([1-9]|10|特|頭)獎""").containsMatchIn(t) ||
-                t.contains("枚金幣")
+                t.contains("枚金幣") ||
+                (t.contains("獎") && !t.contains("獎項"))
             )
         }
 
         val hasRewardX1ButtonOcr = ocrItems.any { item ->
             val t = item.text.replace(" ", "")
             val inMidLower = if (sh > 0) {
-                item.bounds.centerY() in (sh * 0.54f).toInt()..(sh * 0.76f).toInt()
+                item.bounds.centerY() in (sh * 0.54f).toInt()..(sh * 0.78f).toInt()
             } else {
                 item.bounds.centerY() in 1100..1900
             }
             inMidLower &&
                 (t.contains("x1", ignoreCase = true) || t.contains("×1") || t.contains("1張")) &&
-                !t.contains("5張") && !t.contains("50張") && !t.contains("抽1次") &&
-                !t.contains("完成任務") && !t.contains("即可獲得")
+                !t.contains("5張") && !t.contains("50張") && !t.contains("抽1次")
         }
 
         val hasModalCloseButtonOcr = ocrItems.any { item ->
             val t = item.text.replace(" ", "")
             val inBottomModal = if (sh > 0) {
-                item.bounds.centerY() in (sh * 0.72f).toInt()..(sh * 0.87f).toInt()
+                item.bounds.centerY() in (sh * 0.70f).toInt()..(sh * 0.88f).toInt()
             } else {
                 item.bounds.centerY() in 1500..2200
             }
@@ -544,6 +570,7 @@ class LotteryTask {
         }
 
         // 檢查抽抽樂主面板中央區域特徵 (y < 0.85f，忽略 y > 0.86f 在結果彈窗下方邊緣露出的「BIG 獎項一覽」)
+        // 注意：中獎彈窗中間配圖亦可能印有「完成任務 即可獲得 大量金幣!!」，不可單憑此字樣否決！
         val hasMainLotteryPanelFeatures = ocrItems.any { item ->
             val t = item.text.replace(" ", "")
             val inMainPanelBody = if (sh > 0) item.bounds.centerY() < (sh * 0.85f).toInt() else true
@@ -551,9 +578,6 @@ class LotteryTask {
                 t.contains("查看獎項") ||
                 t.contains("獎項一覽") ||
                 t.contains("回復還需") ||
-                t.contains("完成任務") ||
-                t.contains("即可獲得") ||
-                t.contains("大量金幣") ||
                 (t.contains("5張") && !t.contains("15張") && !t.contains("25張")) ||
                 t.contains("50張") ||
                 t.contains("免費抽")
@@ -565,8 +589,7 @@ class LotteryTask {
 
         return ocrItems.any { item ->
             val t = item.text.replace(" ", "")
-            if (t.contains("完成任務") || t.contains("即可獲得") || t.contains("大量金幣") ||
-                t.contains("最多") || t.contains("查看獎項") || t.contains("獎項一覽") ||
+            if (t.contains("最多") || t.contains("查看獎項") || t.contains("獎項一覽") ||
                 t.contains("回復") || t.contains("還需") || (t.contains("5張") && !t.contains("15張") && !t.contains("25張")) ||
                 t.contains("50張") || t.contains("抽1次")
             ) {

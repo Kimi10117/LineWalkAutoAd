@@ -942,6 +942,23 @@ class OcrRecognizer {
         }
     }
 
+    fun detectRewardPendingCountdownSeconds(items: List<OcrItem>, screenHeight: Int): Int? {
+        val topThreshold = (screenHeight * 0.25f).toInt()
+        val regex = Regex("""(\d{1,2})\s*秒(?:後)?(?:可獲|發放|獲得|可獲得)?(?:獎勵)?""")
+        for (item in items) {
+            if (item.bounds.centerY() > topThreshold) continue
+            val t = item.text.replace(" ", "")
+            val match = regex.find(t)
+            if (match != null) {
+                val sec = match.groupValues[1].toIntOrNull()
+                if (sec != null && sec in 1..60) {
+                    return sec
+                }
+            }
+        }
+        return null
+    }
+
     fun detectAdCountdownSeconds(items: List<OcrItem>, screenHeight: Int, screenWidth: Int = 0): Int? {
         val topBarThreshold = (screenHeight * 0.22f).toInt()
         val hasLongPeriodTimer = items.any { item ->
@@ -992,7 +1009,7 @@ class OcrRecognizer {
         private const val TAG = "OcrRecognizer"
 
         private val COUNTDOWN_REGEX = Regex(
-            "(?:還有|剩餘|倒數|あと)?\\s*(\\d{1,2})\\s*(?:秒|s|S|sec)|(?:in|remaining)\\s*(\\d{1,2})\\s*s",
+            "(?:還有|剩餘|倒數|あと)?\s*(\d{1,2})\s*(?:秒(?:後)?(?:可獲|發放|獲得|可獲得)?(?:獎勵)?|s|S|sec)|(?:in|remaining)\s*(\d{1,2})\s*s",
             RegexOption.IGNORE_CASE
         )
 
@@ -1134,6 +1151,9 @@ class OcrRecognizer {
             "商店",
             "隱私權",
             "條款",
+            "關閉廣告",
+            "無法獲得",
+            "放棄獎勵",
             "玩遊戲",
             "完成任務",
             "雙重獎勵",

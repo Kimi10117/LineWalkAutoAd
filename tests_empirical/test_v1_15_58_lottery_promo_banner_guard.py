@@ -4,12 +4,10 @@ SRC_DIR = Path("app/src/main/java/com/linewalk/autoad")
 
 
 def test_v1_15_58_lottery_win_result_screen_strict_veto():
-    """Verify isLotteryWinResultScreen vetoes main lottery panel promo banner ('完成任務 即可獲得 大量金幣!!')."""
+    """Verify isLotteryWinResultScreen checks main panel features without vetoing 8-prize dialogs."""
     lt_code = (SRC_DIR / "tasks/LotteryTask.kt").read_text(encoding="utf-8")
     assert "fun isLotteryWinResultScreen(" in lt_code  # v1.15.70: 新增 screenBitmap 參數
-    assert 't.contains("完成任務")' in lt_code
-    assert 't.contains("即可獲得")' in lt_code
-    assert 't.contains("大量金幣")' in lt_code
+    # v1.15.71: 移除「完成任務/即可獲得/大量金幣」一票否決，防止抽抽樂 8 獎彈窗中間配圖被誤判否決
     assert 't.contains("查看獎項")' in lt_code
     # Ensure bare t.contains("獲得") is removed from Strategy B in findLotteryRewardAdButton
     assert '(t.contains("x1", ignoreCase = true) || t.contains("1張") || t.contains("獲得"))' not in lt_code
