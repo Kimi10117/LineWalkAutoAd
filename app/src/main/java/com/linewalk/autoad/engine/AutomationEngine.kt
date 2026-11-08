@@ -183,6 +183,7 @@ class AutomationEngine private constructor(private val context: Context) {
     private var lotteryFiveDrawAttempts = 0
     var isMissionCompleted = false
         internal set
+    internal var missionOpenCycleCount = 0
     var isReceiveGiftCompleted = false
         internal set
     var isFriendGiftCompleted = false
@@ -332,6 +333,7 @@ class AutomationEngine private constructor(private val context: Context) {
         lotteryFiveDrawAttempts = 0
         timeTask.hasTriedBonusBerryInCurrentStay = false
         isMissionCompleted = false
+        missionOpenCycleCount = 0
         isReceiveGiftCompleted = false
         isFriendGiftCompleted = false
         checkedMissionTabs.clear()
@@ -872,7 +874,13 @@ class AutomationEngine private constructor(private val context: Context) {
         // 1) 若中獎視窗背後露出了廣告特徵（如「還沒有邀請好友 實在太可惜了！」或頂部廣告關閉鈕）：
         //    只能點擊中獎彈窗底部的 [關閉] 按鈕關閉中獎視窗！等中獎視窗關閉後，下一個 Tick 再點擊廣告右上角 (X) 退出！
         // 2) 若背後無廣告（正常中獎）：維持最佳策略，交由 handleLotteryDialog 點擊綠色 [▶ x1 獲得] 看廣告多賺彩券！
-        if (lotteryTask.isLotteryWinResultScreen(ocrItems, sh, screenBitmap)) {
+        // 嚴格安全互斥：若畫面處於任務彈窗、賓果彈窗或好友彈窗，絕對不可被抽抽樂結果攔截！
+        val isOtherSubDialogOpenForLottery = missionTask.isMissionDialogOpen(ocrItems, sh, screenBitmap) ||
+                bingoTask.isBingoDialogOpen(ocrItems, sh, screenBitmap) ||
+                friendGiftTask.isFriendsListOpen(ocrItems, sh, screenBitmap) ||
+                receiveGiftTask.isReceiveGiftDialogOpen(ocrItems, sh, screenBitmap)
+
+        if (!isOtherSubDialogOpenForLottery && lotteryTask.isLotteryWinResultScreen(ocrItems, sh, screenBitmap)) {
             nonGameScreenTicks = 0
             subDialogOpenAttempts = 0
             val hasBgAd = lotteryTask.hasBackgroundAdBehindLotteryResult(ocrItems, sh) || ocrRecognizer.isLineInHousePromoAd(ocrItems)
@@ -1057,6 +1065,7 @@ class AutomationEngine private constructor(private val context: Context) {
             nonGameScreenTicks = 0
             subDialogOpenAttempts = 0
             if (isMissionCompleted) {
+                missionOpenCycleCount = 0
                 missionDialogCloseAttempts++
                 if (missionDialogCloseAttempts >= 6) {
                     appendLog("[任務] 任務視窗連續嘗試關閉達 $missionDialogCloseAttempts 次，點擊底部【集點】強制重置回主畫面並推進下一階段！")
@@ -1257,7 +1266,7 @@ class AutomationEngine private constructor(private val context: Context) {
                     t.contains("coupang") || t.contains("酷澎")
                 }
                 if (isCoupang && closeNodeConsecutiveClicks == 3) {
-                    // Coupang 備援策略：點擊無效 Node[txt=✖] 正下方 (y 偏移 75~120px) 真正的圓形灰底 (X)
+                    // Coupang 備援策略：點擊無效 Node[txt=X] 正下方 (y 偏移 75~120px) 真正的圓形灰底 (X)
                     val coupangAltX = Rect(
                         closeNode.bounds.left,
                         closeNode.bounds.bottom + (sh * 0.015f).toInt(),
@@ -1650,6 +1659,14 @@ class AutomationEngine private constructor(private val context: Context) {
         // 徹底防止因廣告異常返回或關閉延遲而重複點擊同一張 [x1 獲得] 10 次以上！
         if (hasLotteryResultContext && hasClickedLotteryAdReward) {
             lotteryResultCloseAttempts++
+            if (lotteryResultCloseAttempts >= 6) {
+                appendLog("[抽獎斷路器] 抽抽樂結果視窗關閉連續嘗試達 $lotteryResultCloseAttempts 次無效，重設狀態並發送系統返回鍵！")
+                hasClickedLotteryAdReward = false
+                lotteryResultCloseAttempts = 0
+                service.performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_BACK)
+                delay(500)
+                return
+            }
             val resultCloseBtn = if (lotteryResultCloseAttempts >= 4) {
                 lotteryTask.getCloseButtonBounds(sw, sh, ocrItems, screenBitmap, attempt = lotteryResultCloseAttempts - 3)
             } else {
@@ -1802,6 +1819,7 @@ class AutomationEngine private constructor(private val context: Context) {
 
         // 4. 所有現存分頁皆已檢查完畢，確實標記完成並關閉視窗！
         isMissionCompleted = true
+        missionOpenCycleCount = 0
         checkedMissionTabs.clear()
         appendLog("[完成]【任務】所有現存分頁（${availableTabs.joinToString()}）皆已檢查完畢，關閉視窗並推進至下一階段！")
         val closeBtn = missionTask.getCloseButtonBounds(sw, sh, ocrItems, screenBitmap)
@@ -2517,6 +2535,16 @@ class AutomationEngine private constructor(private val context: Context) {
             PatrolPhase.MISSION -> {
                 if (!config.enableDailyMissionTask || isMissionCompleted) {
                     subDialogOpenAttempts = 0
+                    missionOpenCycleCount = 0
+                    currentPhase = getNextPhase(PatrolPhase.MISSION)
+                    return
+                }
+                missionOpenCycleCount++
+                if (missionOpenCycleCount >= 6) {
+                    appendLog("[任務斷路器] 任務視窗單輪重複開啟達 $missionOpenCycleCount 次未能順利完結，觸發防死鎖斷路保護，強制推進至下一階段！")
+                    subDialogOpenAttempts = 0
+                    missionOpenCycleCount = 0
+                    isMissionCompleted = true
                     currentPhase = getNextPhase(PatrolPhase.MISSION)
                     return
                 }
@@ -2531,12 +2559,13 @@ class AutomationEngine private constructor(private val context: Context) {
                 }
                 if (subDialogOpenAttempts >= 6) {
                     subDialogOpenAttempts = 0
+                    missionOpenCycleCount = 0
                     isMissionCompleted = true
                     currentPhase = getNextPhase(PatrolPhase.MISSION)
                     appendLog("[提示] 連續嘗試開啟【任務】無回應，推進至下一階段")
                     return
                 }
-                appendLog("[目標] 點擊主畫面【任務】圖示按鈕...")
+                appendLog("[目標] 點擊主畫面【任務】圖示按鈕 (第 ${missionOpenCycleCount} 次)...")
                 val iconRect = missionTask.getMainScreenMissionIconRect(sw, sh, ocrItems)
                 FloatingOverlayService.clickWithOverlayPassthrough(iconRect) {
                     service.clickRect(iconRect)
@@ -2721,7 +2750,20 @@ class AutomationEngine private constructor(private val context: Context) {
         )
     }
 
+    internal fun resetLotterySessionState() {
+        hasClickedLotteryAdReward = false
+        lotteryResultRewardWaitTicks = 0
+        lotteryResultCloseAttempts = 0
+        lotteryDialogCloseAttempts = 0
+        lotteryFiftyDrawAttempts = 0
+        lotteryFreeDrawAttempts = 0
+        lotteryFiveDrawAttempts = 0
+    }
+
     private fun getNextPhase(after: PatrolPhase): PatrolPhase {
+        if (after == PatrolPhase.LOTTERY) {
+            resetLotterySessionState()
+        }
         val phaseList = listOf(
             PatrolPhase.MAIN_TABS,
             PatrolPhase.BINGO,

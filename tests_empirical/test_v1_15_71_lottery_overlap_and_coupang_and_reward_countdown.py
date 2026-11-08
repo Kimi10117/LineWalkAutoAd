@@ -1,7 +1,7 @@
 """
 v1.15.71 回歸測試：
 1. 抽抽樂 8 獎結果畫面與背景廣告重疊 Bug（重疊時只點底部關閉，背後無廣告點 x1 獲得）
-2. 酷澎 Coupang 廣告 Node[txt=✖] 連點 1135 次死循環斷路器與圓形 (X) 備援
+2. 酷澎 Coupang 廣告 Node[txt=X] 連點 1135 次死循環斷路器與圓形 (X) 備援
 3. 糖果傳奇「秒後可獲獎勵」提早點 X 防護與中斷確認彈窗優先點 [繼續]
 4. 三星瀏覽器 (sbrowser) 極速拉回散步趣
 5. 版本號、0 Emoji 與繁體中文審計
@@ -81,7 +81,7 @@ def test_engine_handles_lottery_overlap_bug_priority():
 
 
 # ---------------------------------------------------------------------------
-# 2. 酷澎 Coupang 廣告 Node[txt=✖] 連點斷路器
+# 2. 酷澎 Coupang 廣告 Node[txt=X] 連點斷路器
 # ---------------------------------------------------------------------------
 
 def test_engine_has_close_node_circuit_breaker():
@@ -196,7 +196,7 @@ EMOJI_PATTERN = re.compile(
 def test_zero_emoji_audit(rel_path: str):
     text = read(rel_path)
     matches = EMOJI_PATTERN.findall(text)
-    # 過濾特殊數學符號或幾何字符（如 ✖）如果包含在內
+    # 過濾特殊數學符號或幾何字符（如 X）如果包含在內
     real_emojis = [m for m in matches if ord(m) > 0x1F000 or ord(m) in range(0x1F600, 0x1F650)]
     assert len(real_emojis) == 0, f"{rel_path} 發現 Emoji: {real_emojis}"
 

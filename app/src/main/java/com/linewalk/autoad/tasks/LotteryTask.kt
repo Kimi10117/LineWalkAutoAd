@@ -512,17 +512,45 @@ class LotteryTask {
         sh: Int,
         screenBitmap: Bitmap? = null
     ): Boolean {
+        // 0. 嚴格否定排除：若目前處於日常任務、每日賓果或好友列表子視窗，絕對不是抽抽樂中獎結果！
+        val isMissionDialog = ocrItems.any { item ->
+            val cy = item.bounds.centerY()
+            val inTopHeader = if (sh > 0) cy < sh * 0.25f else cy < 600
+            val t = item.text.replace(" ", "")
+            inTopHeader && t.contains("任務")
+        } || ocrItems.any { item ->
+            val cy = item.bounds.centerY()
+            val inTabs = if (sh > 0) cy in (sh * 0.10f).toInt()..(sh * 0.32f).toInt() else cy in 200..800
+            val t = item.text.replace(" ", "")
+            inTabs && (t.contains("特別") || t.contains("每日") || t.contains("每週"))
+        }
+        if (isMissionDialog) {
+            return false
+        }
+
+        val isBingoOrFriendDialog = ocrItems.any { item ->
+            val t = item.text.replace(" ", "")
+            t.contains("每日賓果") || t.contains("連線達成") ||
+            t.contains("好友清單") || t.contains("也送給自己") || t.contains("贈送金幣") ||
+            (t.contains("排行榜") && !t.contains("BIG"))
+        }
+        if (isBingoOrFriendDialog) {
+            return false
+        }
+
         val hasRankHeader = ocrItems.any { item ->
             val t = item.text.replace(" ", "")
             val inTopModalArea = if (sh > 0) {
-                item.bounds.centerY() in (sh * 0.10f).toInt()..(sh * 0.38f).toInt()
+                item.bounds.centerY() in (sh * 0.10f).toInt()..(sh * 0.40f).toInt()
             } else {
-                item.bounds.centerY() in 150..950
+                item.bounds.centerY() in 150..1000
             }
             inTopModalArea && (
                 Regex("""([1-9]|10|特|頭)獎""").containsMatchIn(t) ||
-                t.contains("枚金幣") ||
-                (t.contains("獎") && !t.contains("獎項"))
+                t.contains("BIG") ||
+                t.contains("枚金幣中獎") ||
+                t.contains("中獎囉") ||
+                t.contains("恭喜中獎")
             )
         }
 
@@ -535,7 +563,8 @@ class LotteryTask {
             }
             inMidLower &&
                 (t.contains("x1", ignoreCase = true) || t.contains("×1") || t.contains("1張")) &&
-                !t.contains("5張") && !t.contains("50張") && !t.contains("抽1次")
+                !t.contains("5張") && !t.contains("50張") && !t.contains("抽1次") &&
+                !t.contains("挑戰") && !t.contains("已領取")
         }
 
         val hasModalCloseButtonOcr = ocrItems.any { item ->
@@ -545,7 +574,8 @@ class LotteryTask {
             } else {
                 item.bounds.centerY() in 1500..2200
             }
-            inBottomModal && (t == "關閉" || t.contains("關閉"))
+            inBottomModal && (t == "關閉" || t.contains("關閉")) &&
+                !t.contains("挑戰") && !t.contains("已領取")
         }
 
         val hasExplicitWinTitle = ocrItems.any { item ->
@@ -553,7 +583,7 @@ class LotteryTask {
             t.contains("中獎囉") ||
             t.contains("恭喜中獎") ||
             t.contains("恭喜獲得") ||
-            t.contains("分享給好友") ||
+            (t.contains("分享給好友") && !t.contains("發送")) ||
             (t.contains("中獎") && (t.contains("金幣") || t.contains("枚") || t.contains("囉") || t.contains("！") || t.contains("!")))
         } || (hasRankHeader && (hasRewardX1ButtonOcr || hasModalCloseButtonOcr)) ||
             (hasRewardX1ButtonOcr && hasModalCloseButtonOcr)
@@ -595,10 +625,10 @@ class LotteryTask {
             ) {
                 return@any false
             }
-            t.contains("中獎囉") || (t.contains("中獎") && !t.contains("好友")) ||
+            t.contains("中獎囉") || (t.contains("中獎") && !t.contains("好友") && !t.contains("發送") && !t.contains("邀請")) ||
             t.contains("恭喜獲得") || t.contains("恭喜中獎") ||
-            (item.bounds.centerY() > sh * 0.65f && (t.contains("分享給好友") || t.contains("分享"))) ||
-            (item.bounds.centerY() in (sh * 0.50f).toInt()..(sh * 0.78f).toInt() &&
+            (item.bounds.centerY() > sh * 0.65f && (t.contains("分享給好友") || (t.contains("分享") && !t.contains("發送") && !t.contains("邀請")))) ||
+            (hasRankHeader && item.bounds.centerY() in (sh * 0.50f).toInt()..(sh * 0.78f).toInt() &&
                 (t.contains("x1", ignoreCase = true) || t.contains("×1") || t.contains("1張")) &&
                 !t.contains("金幣") && !t.contains("票券"))
         }
@@ -796,6 +826,7 @@ class LotteryTask {
             !t.contains("完成任務") && !t.contains("即可獲得") && !t.contains("大量") &&
             !t.contains("5張") && !t.contains("50張") && !t.contains("抽1次") &&
             !t.contains("分享") && !t.contains("關閉") &&
+            !t.contains("任務") && !t.contains("挑戰") && !t.contains("領取") &&
             (t.contains("x1", ignoreCase = true) || t.contains("×1") || t.contains("1張"))
         }
         if (ocrMatch != null) {
