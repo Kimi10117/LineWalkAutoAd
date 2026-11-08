@@ -97,7 +97,7 @@ def test_engine_has_subdialog_mutual_exclusion_in_a1():
     # 必須檢查其他子視窗
     assert "isOtherSubDialogOpenForLottery" in a1_code
     assert "missionTask.isMissionDialogOpen(ocrItems, sh, screenBitmap)" in a1_code
-    assert "bingoTask.isBingoDialogOpen(ocrItems, sh, screenBitmap)" in a1_code
+    assert "bingoTask.isBingoDialogOpen(ocrItems, sh)" in a1_code
     assert "!isOtherSubDialogOpenForLottery && lotteryTask.isLotteryWinResultScreen(ocrItems, sh, screenBitmap)" in a1_code
 
 

@@ -876,9 +876,9 @@ class AutomationEngine private constructor(private val context: Context) {
         // 2) 若背後無廣告（正常中獎）：維持最佳策略，交由 handleLotteryDialog 點擊綠色 [▶ x1 獲得] 看廣告多賺彩券！
         // 嚴格安全互斥：若畫面處於任務彈窗、賓果彈窗或好友彈窗，絕對不可被抽抽樂結果攔截！
         val isOtherSubDialogOpenForLottery = missionTask.isMissionDialogOpen(ocrItems, sh, screenBitmap) ||
-                bingoTask.isBingoDialogOpen(ocrItems, sh, screenBitmap) ||
-                friendGiftTask.isFriendsListOpen(ocrItems, sh, screenBitmap) ||
-                receiveGiftTask.isReceiveGiftDialogOpen(ocrItems, sh, screenBitmap)
+                bingoTask.isBingoDialogOpen(ocrItems, sh) ||
+                friendGiftTask.isFriendsPage(ocrItems, sh) ||
+                receiveGiftTask.isReceiveGiftDialogOpen(ocrItems, sh)
 
         if (!isOtherSubDialogOpenForLottery && lotteryTask.isLotteryWinResultScreen(ocrItems, sh, screenBitmap)) {
             nonGameScreenTicks = 0
