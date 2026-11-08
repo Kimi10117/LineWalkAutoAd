@@ -1009,7 +1009,7 @@ class OcrRecognizer {
         private const val TAG = "OcrRecognizer"
 
         private val COUNTDOWN_REGEX = Regex(
-            "(?:還有|剩餘|倒數|あと)?\s*(\d{1,2})\s*(?:秒(?:後)?(?:可獲|發放|獲得|可獲得)?(?:獎勵)?|s|S|sec)|(?:in|remaining)\s*(\d{1,2})\s*s",
+            """(?:還有|剩餘|倒數|あと)?\s*(\d{1,2})\s*(?:秒(?:後)?(?:可獲|發放|獲得|可獲得)?(?:獎勵)?|s|S|sec)|(?:in|remaining)\s*(\d{1,2})\s*s""",
             RegexOption.IGNORE_CASE
         )
 
