@@ -160,8 +160,9 @@ def test_external_guard_marks_redirect_from_external_app():
 
 def test_line_promo_close_click_limit():
     src = closer_src()
-    assert "linePromoCloseClicks < 2 && ocrRecognizer.isLineInHousePromoAd(ocrItems)" in src
-    assert "if (!isInvalidOrBlacklisted(promoCloseRect.centerX(), promoCloseRect.centerY()))" in src
+    assert "ocrRecognizer.isLineInHousePromoAd(ocrItems)" in src
+    assert "findLineInHousePromoCloseButton" in src
+    assert "service.safeNavigateBack(minIntervalMs = 600L, allowInGame = true)" in src
 
 
 # ---------------------------------------------------------------------------

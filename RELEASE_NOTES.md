@@ -1,9 +1,41 @@
 # LINE 散步趣自動看廣告助手 (LineWalkAutoAd) 發布說明
 
 ## 版本資訊
-- 版本名稱：v1.15.72
-- 版本代碼：versionCode 105, versionName "1.15.72"
+- 版本名稱：v1.15.76
+- 版本代碼：versionCode 109, versionName "1.15.76"
 - 發布類型：正式版本 (Release)
+
+---
+
+## 概述
+LineWalkAutoAd v1.15.76 針對使用者回報的「LINE 內部促銷宣傳廣告無法關閉」問題（日誌記錄連續點擊 2 次後因硬編碼限制停止點擊並誤入黑名單，導致卡在廣告播放達 35 秒）進行徹底根除修復：引入頂部角落白色「✕」動態像素掃描定位演算法、校準全機型基準幾何座標、徹底解除點擊次數硬編碼與黑名單誤鎖機制，並新增第 3 次起自動派發安全返回鍵 (`safeNavigateBack(allowInGame = true)`) 交叉脫困機制，保證 LINE 宣傳促銷廣告 100% 順暢關閉退回遊戲。
+
+---
+
+## 具體更新與修復內容 (v1.15.76)
+
+### 1. LINE 內部促銷廣告右上角 (X) 按鈕動態像素掃描定位
+- **檔案**：`OcrRecognizer.kt`
+- **問題分析**：在 Samsung Galaxy Z Flip 5 (22:9 螢幕，1080x2640) 等長螢幕與摺疊手機上，宣傳彈窗頂部 (X) 按鈕中心高度受系統狀態列與長螢幕影響，原靜態幾何計算可能偏向按鈕邊緣，且進場動畫過渡期容易使點擊未被 WebView 接收。
+- **實作細節**：
+  - 新增 `findLineInHousePromoCloseButton(screenBitmap, sw, sh)`：動態掃描頂部右側角落 (`x in 0.85w..0.98w, y in 0.05h..0.15h`) 之白色筆畫像素簇 (RGB > 225)，精確計算白色「✕」中心座標。
+  - 基準幾何座標更新為中心 `(x = 92.0%, y = 9.25%)`，垂直涵蓋 `0.065h .. 0.120h`，相容 16:9、19.5:9、20:9 及 22:9 (Z Flip 5) 等所有長寬比手機。
+
+### 2. 徹底解除點擊次數上限與黑名單誤鎖
+- **檔案**：`AdCloserHandler.kt`
+- **問題分析**：先前版本為防第三方廣告文案誤觸，硬編碼 `linePromoCloseClicks < 2` 且傳入 `allowBlacklist = true`。真實宣傳廣告若在動畫期間 2 次未關閉，按鈕即被加入黑名單並永久停止點擊，導致廣告監控陷入 30+ 秒無效滑動。
+- **實作細節**：
+  - 移除 `linePromoCloseClicks < 2` 硬限制，絕不黑名單此合法關閉按鈕。
+  - 直接透過 `FloatingOverlayService.clickWithOverlayPassthrough` 派發手勢，豁免頂部安全禁區 (`allowTopSafeZone = true`)，確保手勢派發 100% 放行。
+
+### 3. 雙重脫困：自動安全返回鍵 (safeNavigateBack)
+- **檔案**：`AdCloserHandler.kt`
+- **實作細節**：
+  - 第 1、2 次點擊右上角 (X) 鈕；
+  - 若連點 2 次仍未關閉（例如 WebView 觸控阻斷或進場動畫延遲），第 3 次起自動發送系統安全返回鍵 (`service.safeNavigateBack(minIntervalMs = 600L, allowInGame = true)`) 脫困關閉彈窗；
+  - 往後交叉執行點擊 (X) 與返回鍵，徹底杜絕彈窗死鎖。
+
+---
 
 ---
 

@@ -91,44 +91,48 @@ jobs:
       - name: Update Tag and Publish APK to GitHub Releases
         run: |
           git tag -f latest-apk
-          git tag -f v1.15.75
+          git tag -f v1.15.76
           git push -f origin latest-apk || true
-          git push -f origin v1.15.75 || true
+          git push -f origin v1.15.76 || true
 
       - name: Publish APK to GitHub Releases (latest-apk)
         uses: softprops/action-gh-release@v2
         with:
             tag_name: latest-apk
-            name: "散步趣助手 v1.15.75 (啟動自動檢查更新與底部一鍵下載 - Run #${{ github.run_number }})"
+            name: "散步趣助手 v1.15.76 (修復 LINE 內部促銷宣傳廣告關閉與雙重脫困機制 - Run #${{ github.run_number }})"
             body: |
-              **散步趣助手 v1.15.75 (Run #${{ github.run_number }}) - 啟動自動檢查更新與底部一鍵下載提示 (相容歷代版本 v1.15.74, v1.15.73, v1.15.72, v1.15.71, v1.15.70, v1.15.69, v1.15.68, v1.15.67, v1.15.66, v1.15.65, v1.15.64, v1.15.63, v1.15.62, v1.15.61, v1.15.60, v1.15.58, v1.15.57, v1.15.56, v1.15.55, v1.15.54, v1.15.53, v1.15.52, v1.15.51, v1.15.50, v1.15.49, v1.15.48, v1.15.47, v1.15.46, v1.15.45)**
-              1. **【啟動自動檢查更新與底部懸浮提示】**：
-                 - 每次開啟 App 於背景非同步檢查 GitHub Releases 官方發布版本。
-                 - 偵測到新版本時，於主畫面底部優雅浮現更新通知卡片，顯示新版號與發布說明。
-                 - 點擊「前往下載」按鈕直接透過瀏覽器下載最新 APK，附帶「✕」關閉按鈕。
-                 - 點擊頂部版本標籤亦可手動觸發立即檢查。
-              2. **【網路連線支援】**：
-                 - 於 AndroidManifest.xml 宣告標準 INTERNET 權限以支援版本查詢。
-              3. **【版本號升級】**：
-                 - versionCode 108 / versionName 1.15.75。
+              **散步趣助手 v1.15.76 (Run #${{ github.run_number }}) - 修復 LINE 內部促銷宣傳廣告關閉與雙重脫困機制 (相容歷代版本 v1.15.75, v1.15.74, v1.15.73, v1.15.72, v1.15.71, v1.15.70, v1.15.69, v1.15.68, v1.15.67, v1.15.66, v1.15.65, v1.15.64, v1.15.63, v1.15.62, v1.15.61, v1.15.60, v1.15.58, v1.15.57, v1.15.56, v1.15.55, v1.15.54, v1.15.53, v1.15.52, v1.15.51, v1.15.50, v1.15.49, v1.15.48, v1.15.47, v1.15.46, v1.15.45)**
+              1. **【LINE 內部促銷宣傳廣告右上角 (X) 按鈕精準動態辨識】**：
+                 - 引入動態掃描演算法，自動偵測右上角半透明圓圈內的白色「✕」像素簇，自適應鎖定點擊中心。
+                 - 基準幾何座標重新校準錨定 (x=92.0%, y=9.25%)，全面適配 22:9 (如三星 Galaxy Z Flip 摺疊螢幕)、20:9 及 16:9 螢幕。
+              2. **【解除連點封鎖與黑名單誤鎖機制】**：
+                 - 移除硬編碼 2 次點擊上限與黑名單機制，避免合法關閉按鈕被永久鎖死。
+                 - 全面啟用頂部安全禁區豁免 (allowTopSafeZone = true)，確保手勢派發 100% 放行。
+              3. **【雙重脫困防卡死安全返回鍵】**：
+                 - 當前 2 次點擊 (X) 未能立即關閉彈窗時（例如進場動畫或 WebView 觸控穿透延遲），第 3 次自動派發系統安全返回鍵 (`safeNavigateBack(allowInGame = true)`) 脫困關閉彈窗。
+                 - 往後交叉執行點擊與返回鍵，徹底杜絕廣告卡死畫面。
+              4. **【版本號升級】**：
+                 - versionCode 109 / versionName 1.15.76。
             files: LineWalkAutoAd.apk
             prerelease: false
 
-      - name: Publish Versioned APK to GitHub Releases (v1.15.75)
+      - name: Publish Versioned APK to GitHub Releases (v1.15.76)
         uses: softprops/action-gh-release@v2
         with:
-            tag_name: v1.15.75
-            name: "散步趣助手 v1.15.75 (啟動自動檢查更新與底部一鍵下載)"
+            tag_name: v1.15.76
+            name: "散步趣助手 v1.15.76 (修復 LINE 內部促銷宣傳廣告關閉與雙重脫困機制)"
             body: |
-              **散步趣助手 v1.15.75 (Run #${{ github.run_number }}) - 啟動自動檢查更新與底部一鍵下載**
-              1. **【啟動自動檢查更新與底部懸浮提示】**：
-                 - 每次開啟 App 於背景非同步檢查 GitHub Releases 官方發布版本。
-                 - 偵測到新版本時，於主畫面底部優雅浮現更新通知卡片，顯示新版號與發布說明。
-                 - 點擊「前往下載」按鈕直接透過瀏覽器下載最新 APK，附帶「✕」關閉按鈕。
-                 - 點擊頂部版本標籤亦可手動觸發立即檢查。
-              2. **【網路連線支援】**：
-                 - 於 AndroidManifest.xml 宣告標準 INTERNET 權限以支援版本查詢。
-              3. **【版本號升級】**：
-                 - versionCode 108 / versionName 1.15.75。
+              **散步趣助手 v1.15.76 (Run #${{ github.run_number }}) - 修復 LINE 內部促銷宣傳廣告關閉與雙重脫困機制**
+              1. **【LINE 內部促銷宣傳廣告右上角 (X) 按鈕精準動態辨識】**：
+                 - 引入動態掃描演算法，自動偵測右上角半透明圓圈內的白色「✕」像素簇，自適應鎖定點擊中心。
+                 - 基準幾何座標重新校準錨定 (x=92.0%, y=9.25%)，全面適配 22:9 (如三星 Galaxy Z Flip 摺疊螢幕)、20:9 及 16:9 螢幕。
+              2. **【解除連點封鎖與黑名單誤鎖機制】**：
+                 - 移除硬編碼 2 次點擊上限與黑名單機制，避免合法關閉按鈕被永久鎖死。
+                 - 全面啟用頂部安全禁區豁免 (allowTopSafeZone = true)，確保手勢派發 100% 放行。
+              3. **【雙重脫困防卡死安全返回鍵】**：
+                 - 當前 2 次點擊 (X) 未能立即關閉彈窗時（例如進場動畫或 WebView 觸控穿透延遲），第 3 次自動派發系統安全返回鍵 (`safeNavigateBack(allowInGame = true)`) 脫困關閉彈窗。
+                 - 往後交叉執行點擊與返回鍵，徹底杜絕廣告卡死畫面。
+              4. **【版本號升級】**：
+                 - versionCode 109 / versionName 1.15.76。
             files: LineWalkAutoAd.apk
             prerelease: false

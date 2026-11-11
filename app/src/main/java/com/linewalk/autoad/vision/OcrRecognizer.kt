@@ -531,15 +531,60 @@ class OcrRecognizer {
     }
 
     /**
-     * LINE 內部宣傳廣告右上角的圓形關閉按鈕 (X) 區域 (中心約 x=91.8%, y=9.1%)。
+     * LINE 內部宣傳廣告右上角的圓形關閉按鈕 (X) 區域：
+     * - 優先動態掃描頂部角落 (x: 85%~98%, y: 5%~15%) 內白色 "X" 像素簇，自動精準定位中心；
+     * - 基準幾何座標：中心錨定 (x=92.0%, y=9.25%)，包覆半徑充足之可點擊熱區，相容 16:9、20:9、22:9 (摺疊螢幕) 等全機型。
      */
-    fun getLineInHousePromoCloseButton(sw: Int, sh: Int): Rect {
+    fun findLineInHousePromoCloseButton(screenBitmap: Bitmap?, sw: Int, sh: Int): Rect {
+        if (screenBitmap != null && sw >= 100 && sh >= 100) {
+            val xMin = (sw * 0.85f).toInt().coerceIn(0, sw - 1)
+            val xMax = (sw * 0.98f).toInt().coerceIn(0, sw)
+            val yMin = (sh * 0.05f).toInt().coerceIn(0, sh - 1)
+            val yMax = (sh * 0.15f).toInt().coerceIn(0, sh)
+
+            var sumX = 0L
+            var sumY = 0L
+            var count = 0
+
+            for (y in yMin until yMax) {
+                for (x in xMin until xMax) {
+                    val p = screenBitmap.getPixel(x, y)
+                    val r = (p shr 16) and 0xFF
+                    val g = (p shr 8) and 0xFF
+                    val b = p and 0xFF
+                    // 偵測白色 "X" 筆畫 (RGB 皆 > 225)
+                    if (r > 225 && g > 225 && b > 225) {
+                        sumX += x
+                        sumY += y
+                        count++
+                    }
+                }
+            }
+
+            // 白色像素點數量落在合適範圍 (通常約 10 ~ 200 像素)
+            if (count in 10..200) {
+                val cx = (sumX / count).toInt()
+                val cy = (sumY / count).toInt()
+                val halfW = (sw * 0.045f).toInt().coerceAtLeast(24)
+                val halfH = (sh * 0.025f).toInt().coerceAtLeast(24)
+                return Rect(cx - halfW, cy - halfH, cx + halfW, cy + halfH)
+            }
+        }
+
+        // 基準幾何座標 (中心錨定 x=92.0%, y=9.25% 且涵蓋 y in 0.065..0.120)
         return Rect(
             (sw * 0.875f).toInt(),
             (sh * 0.065f).toInt(),
-            (sw * 0.960f).toInt(),
-            (sh * 0.118f).toInt()
+            (sw * 0.965f).toInt(),
+            (sh * 0.120f).toInt()
         )
+    }
+
+    /**
+     * LINE 內部宣傳廣告右上角的圓形關閉按鈕 (X) 區域。
+     */
+    fun getLineInHousePromoCloseButton(sw: Int, sh: Int): Rect {
+        return findLineInHousePromoCloseButton(null, sw, sh)
     }
 
     /**

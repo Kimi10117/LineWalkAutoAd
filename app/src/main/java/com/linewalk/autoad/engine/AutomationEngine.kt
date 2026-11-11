@@ -905,11 +905,11 @@ class AutomationEngine private constructor(private val context: Context) {
         val onMainScreenForPromo = ocrRecognizer.isLineWalkMainScreenVisible(screenBitmap, ocrItems, templateMatcher)
         if (!onMainScreenForPromo && ocrRecognizer.isLineInHousePromoAd(ocrItems) && !lotteryTask.isLotteryWinResultScreen(ocrItems, sh, screenBitmap)) {
             nonGameScreenTicks = 0
-            val closeBtn = ocrRecognizer.getLineInHousePromoCloseButton(sw, sh)
+            val closeBtn = ocrRecognizer.findLineInHousePromoCloseButton(screenBitmap, sw, sh)
             appendLog("[廣告] 偵測到 LINE 宣傳廣告/促銷彈窗，點擊右上角 (X) 關閉視窗")
             updateDetail("[關閉] 正在關閉宣傳廣告視窗...", "[巡邏] 關閉宣傳視窗中...")
             FloatingOverlayService.clickWithOverlayPassthrough(closeBtn) {
-                service.clickRect(closeBtn)
+                service.clickRect(closeBtn, maxJitterPx = 2, allowTopSafeZone = true)
             }
             delay(500)
             return
@@ -2987,10 +2987,10 @@ class AutomationEngine private constructor(private val context: Context) {
 
         // 檢查是否彈出 LINE 內部宣傳促銷廣告 (如『還沒有邀請好友 實在太可惜了！』)
         if (ocrRecognizer.isLineInHousePromoAd(ocrItems)) {
-            val closeBtn = ocrRecognizer.getLineInHousePromoCloseButton(sw, sh)
+            val closeBtn = ocrRecognizer.findLineInHousePromoCloseButton(screenBitmap, sw, sh)
             appendLog("[廣告] 彈窗觸發期間偵測到 LINE 宣傳廣告/促銷彈窗，點擊右上角 (X) 關閉")
             FloatingOverlayService.clickWithOverlayPassthrough(closeBtn) {
-                service.clickRect(closeBtn)
+                service.clickRect(closeBtn, maxJitterPx = 2, allowTopSafeZone = true)
             }
             delay(500)
             transitionTo(EngineState.IN_GAME_SCAN, "已關閉宣傳廣告，繼續巡邏...", "[巡邏] 巡邏畫面目標中...")
@@ -3311,10 +3311,10 @@ class AutomationEngine private constructor(private val context: Context) {
 
         // 檢查是否彈出 LINE 內部宣傳促銷全螢幕廣告 (如『還沒有邀請好友 實在太可惜了！』)
         if (ocrRecognizer.isLineInHousePromoAd(ocrItems)) {
-            val closeBtn = ocrRecognizer.getLineInHousePromoCloseButton(sw, sh)
+            val closeBtn = ocrRecognizer.findLineInHousePromoCloseButton(screenBitmap, sw, sh)
             appendLog("[廣告] 領獎確認期間偵測到 LINE 宣傳廣告/促銷彈窗，點擊右上角 (X) 關閉")
             FloatingOverlayService.clickWithOverlayPassthrough(closeBtn) {
-                service.clickRect(closeBtn)
+                service.clickRect(closeBtn, maxJitterPx = 2, allowTopSafeZone = true)
             }
             delay(500)
             return

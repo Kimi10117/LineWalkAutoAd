@@ -327,17 +327,29 @@ class AdCloserHandler(
             return AdStepResult.ReturnedToGame(null, "已發送安全返回鍵退出選單回到散步趣介面")
         }
 
-        // 1A-4. LINE 內部促銷宣傳全螢幕廣告 (如『還沒有邀請好友 實在太可惜了！』『獲得金幣的流程』)：
-        // 屬於帶點廣告時可能彈出的促銷全螢幕廣告，絕不等待 30 秒倒數，立即點擊右上角圓形白底 (X) 關閉退回遊戲！
-        if (isGame && !isAd && linePromoCloseClicks < 2 && ocrRecognizer.isLineInHousePromoAd(ocrItems)) {
-            val promoCloseRect = ocrRecognizer.getLineInHousePromoCloseButton(sw, sh)
-            if (!isInvalidOrBlacklisted(promoCloseRect.centerX(), promoCloseRect.centerY())) {
-                // 最多嘗試 2 次：若仍未關閉，代表並非 LINE 內部宣傳頁（第三方廣告文案碰巧命中），放行給後續標準廣告關閉流程
-                linePromoCloseClicks++
-                hasAdActuallyShown = true
-                recordAndClick(service, promoCloseRect, allowBlacklist = true)
-                return AdStepResult.ClickedCloseOrSkip("LINE宣傳廣告關閉(X)", promoCloseRect)
+        // 1A-4. LINE 內部促銷宣傳全螢幕廣告 (如『還沒有邀請好友 實在太可惜了！』『獲得金幣的流程』『邀請好友 最高可獲 10000 金幣 快來領取吧!!』)：
+        // 屬於帶點廣告時可能彈出的促銷全螢幕廣告，絕不等待 30 秒倒數！
+        // 雙重脫困機制：
+        // 1. 動態高精確辨識右上角圓形 (X) 鈕位置，立即點擊關閉（不列入黑名單，避免鎖死）
+        // 2. 若連點兩次仍未關閉（如因進場動畫延遲或 WebView 觸控阻斷），立即派發 safeNavigateBack(allowInGame = true) 安全返回鍵退回遊戲！
+        // 3. 往後奇數次（第3, 5, 7次）派發返回鍵、偶數次（第4, 6, 8次）點擊 (X) 鈕，交叉脫困，直至徹底關閉彈窗回到遊戲。
+        if (isGame && !isAd && ocrRecognizer.isLineInHousePromoAd(ocrItems)) {
+            val promoCloseRect = ocrRecognizer.findLineInHousePromoCloseButton(screenBitmap, sw, sh)
+            hasAdActuallyShown = true
+            linePromoCloseClicks++
+
+            if (linePromoCloseClicks == 1 || linePromoCloseClicks == 2 || linePromoCloseClicks % 2 == 0) {
+                closeClickCount++
+                FloatingOverlayService.clickWithOverlayPassthrough(promoCloseRect) {
+                    service.clickRect(promoCloseRect, maxJitterPx = 2, allowTopSafeZone = true)
+                }
+                return AdStepResult.ClickedCloseOrSkip("LINE宣傳廣告關閉(X)[第${linePromoCloseClicks}次]", promoCloseRect)
+            } else {
+                service.safeNavigateBack(minIntervalMs = 600L, allowInGame = true)
+                return AdStepResult.ClickedCloseOrSkip("LINE宣傳廣告安全返回鍵[第${linePromoCloseClicks}次]", promoCloseRect)
             }
+        } else if (!ocrRecognizer.isLineInHousePromoAd(ocrItems)) {
+            linePromoCloseClicks = 0
         }
 
         // 1A-3. Meta 輪播廣告 / 外部跳轉安全防死循環返回機制：
@@ -599,7 +611,7 @@ class AdCloserHandler(
             return AdStepResult.ClickedCloseOrSkip(explicitSkipNode.label, explicitSkipNode.bounds)
         }
 
-        // 4A-1. 【全畫面 ▶| / >| / >> / >>| 略過符號精準秒點】
+        // 4A-1. 【全畫面 ▶| / >| / >> / >>| 略過符號全域放行秒點】
         // 僅允許獨立短標籤 (長度 <= 6) 且位於畫面邊角區域，嚴格排除購物廣告內文之「雙11必買>>」等促銷按鈕！
         val fastSkipSymbols = listOf("▶|", ">|", ">>|", ">>")
         val promoBaitWords = listOf(
