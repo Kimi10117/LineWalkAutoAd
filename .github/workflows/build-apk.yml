@@ -91,47 +91,45 @@ jobs:
       - name: Update Tag and Publish APK to GitHub Releases
         run: |
           git tag -f latest-apk
-          git tag -f v1.15.76
+          git tag -f v1.15.77
           git push -f origin latest-apk || true
-          git push -f origin v1.15.76 || true
+          git push -f origin v1.15.77 || true
 
       - name: Publish APK to GitHub Releases (latest-apk)
         uses: softprops/action-gh-release@v2
         with:
             tag_name: latest-apk
-            name: "散步趣助手 v1.15.76 (修復 LINE 內部促銷宣傳廣告關閉與雙重脫困機制 - Run #${{ github.run_number }})"
+            name: "散步趣助手 v1.15.77 (修復每日賓果開格按鈕優先點擊與冷卻判定 - Run #${{ github.run_number }})"
             body: |
-              **散步趣助手 v1.15.76 (Run #${{ github.run_number }}) - 修復 LINE 內部促銷宣傳廣告關閉與雙重脫困機制 (相容歷代版本 v1.15.75, v1.15.74, v1.15.73, v1.15.72, v1.15.71, v1.15.70, v1.15.69, v1.15.68, v1.15.67, v1.15.66, v1.15.65, v1.15.64, v1.15.63, v1.15.62, v1.15.61, v1.15.60, v1.15.58, v1.15.57, v1.15.56, v1.15.55, v1.15.54, v1.15.53, v1.15.52, v1.15.51, v1.15.50, v1.15.49, v1.15.48, v1.15.47, v1.15.46, v1.15.45)**
-              1. **【LINE 內部促銷宣傳廣告右上角 (X) 按鈕精準動態辨識】**：
-                 - 引入動態掃描演算法，自動偵測右上角半透明圓圈內的白色「✕」像素簇，自適應鎖定點擊中心。
-                 - 基準幾何座標重新校準錨定 (x=92.0%, y=9.25%)，全面適配 22:9 (如三星 Galaxy Z Flip 摺疊螢幕)、20:9 及 16:9 螢幕。
-              2. **【解除連點封鎖與黑名單誤鎖機制】**：
-                 - 移除硬編碼 2 次點擊上限與黑名單機制，避免合法關閉按鈕被永久鎖死。
-                 - 全面啟用頂部安全禁區豁免 (allowTopSafeZone = true)，確保手勢派發 100% 放行。
-              3. **【雙重脫困防卡死安全返回鍵】**：
-                 - 當前 2 次點擊 (X) 未能立即關閉彈窗時（例如進場動畫或 WebView 觸控穿透延遲），第 3 次自動派發系統安全返回鍵 (`safeNavigateBack(allowInGame = true)`) 脫困關閉彈窗。
-                 - 往後交叉執行點擊與返回鍵，徹底杜絕廣告卡死畫面。
-              4. **【版本號升級】**：
-                 - versionCode 109 / versionName 1.15.76。
+              **散步趣助手 v1.15.77 (Run #${{ github.run_number }}) - 修復每日賓果開格按鈕優先點擊與冷卻判定 (相容歷代版本 v1.15.76, v1.15.75, v1.15.74, v1.15.73, v1.15.72, v1.15.71, v1.15.70, v1.15.69, v1.15.68, v1.15.67, v1.15.66, v1.15.65, v1.15.64, v1.15.63, v1.15.62, v1.15.61, v1.15.60, v1.15.58, v1.15.57, v1.15.56, v1.15.55, v1.15.54, v1.15.53, v1.15.52, v1.15.51, v1.15.50, v1.15.49, v1.15.48, v1.15.47, v1.15.46, v1.15.45)**
+              1. **【每日賓果亮橘色「立即開啟賓果格」按鈕絕對優先點擊】**：
+                 - 修正 handleBingoDialog 先前因頂部綠色橫幅倒數計時誤將 isCoolingDown 判為 true，進而跳過按鈕搜尋直接秒關視窗之邏輯漏洞。
+                 - 改為以畫面上是否存在實體亮橘色開格按鈕為第一判定基準，只要按鈕就緒即優先點擊開格。
+              2. **【連線獎勵 Get 領取與彈窗關閉流程完善】**：
+                 - 僅在確定畫面上已無橘色開格按鈕可按時，才檢查連線獎勵 [Get]；
+                 - 無開格按鈕且無 Get 可領時，才判定賓果完成並關閉視窗推進至抽抽樂。
+              3. **【版本號升級】**：
+                 - versionCode 110 / versionName 1.15.77。
             files: LineWalkAutoAd.apk
             prerelease: false
 
-      - name: Publish Versioned APK to GitHub Releases (v1.15.76)
+      - name: Publish Versioned APK to GitHub Releases (v1.15.77)
         uses: softprops/action-gh-release@v2
         with:
-            tag_name: v1.15.76
-            name: "散步趣助手 v1.15.76 (修復 LINE 內部促銷宣傳廣告關閉與雙重脫困機制)"
+            tag_name: v1.15.77
+            name: "散步趣助手 v1.15.77 (修復每日賓果開格按鈕優先點擊與冷卻判定)"
             body: |
-              **散步趣助手 v1.15.76 (Run #${{ github.run_number }}) - 修復 LINE 內部促銷宣傳廣告關閉與雙重脫困機制**
-              1. **【LINE 內部促銷宣傳廣告右上角 (X) 按鈕精準動態辨識】**：
-                 - 引入動態掃描演算法，自動偵測右上角半透明圓圈內的白色「✕」像素簇，自適應鎖定點擊中心。
-                 - 基準幾何座標重新校準錨定 (x=92.0%, y=9.25%)，全面適配 22:9 (如三星 Galaxy Z Flip 摺疊螢幕)、20:9 及 16:9 螢幕。
-              2. **【解除連點封鎖與黑名單誤鎖機制】**：
-                 - 移除硬編碼 2 次點擊上限與黑名單機制，避免合法關閉按鈕被永久鎖死。
-                 - 全面啟用頂部安全禁區豁免 (allowTopSafeZone = true)，確保手勢派發 100% 放行。
-              3. **【雙重脫困防卡死安全返回鍵】**：
-                 - 當前 2 次點擊 (X) 未能立即關閉彈窗時（例如進場動畫或 WebView 觸控穿透延遲），第 3 次自動派發系統安全返回鍵 (`safeNavigateBack(allowInGame = true)`) 脫困關閉彈窗。
-                 - 往後交叉執行點擊與返回鍵，徹底杜絕廣告卡死畫面。
+              **散步趣助手 v1.15.77 (Run #${{ github.run_number }}) - 修復每日賓果開格按鈕優先點擊與冷卻判定**
+              1. **【每日賓果亮橘色「立即開啟賓果格」按鈕絕對優先點擊】**：
+                 - 修正 handleBingoDialog 先前因頂部綠色橫幅倒數計時誤將 isCoolingDown 判為 true，進而跳過按鈕搜尋直接秒關視窗之邏輯漏洞。
+                 - 改為以畫面上是否存在實體亮橘色開格按鈕為第一判定基準，只要按鈕就緒即優先點擊開格。
+              2. **【連線獎勵 Get 領取與彈窗關閉流程完善】**：
+                 - 僅在確定畫面上已無橘色開格按鈕可按時，才檢查連線獎勵 [Get]；
+                 - 無開格按鈕且無 Get 可領時，才判定賓果完成並關閉視窗推進至抽抽樂。
+              3. **【版本號升級】**：
+                 - versionCode 110 / versionName 1.15.77。
+            files: LineWalkAutoAd.apk
+            prerelease: false
               4. **【版本號升級】**：
                  - versionCode 109 / versionName 1.15.76。
             files: LineWalkAutoAd.apk

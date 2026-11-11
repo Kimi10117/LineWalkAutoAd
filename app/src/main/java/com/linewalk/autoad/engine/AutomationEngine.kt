@@ -1500,13 +1500,14 @@ class AutomationEngine private constructor(private val context: Context) {
             return
         }
 
-        // 1. 【使用者指示第 1 步】：檢查是否處於冷卻中（距離下次抽選還有）；若冷卻中或已達 5 次上限，絕不再點開格！
-        val isCoolingDown = bingoTask.isBingoCoolingDown(ocrItems)
-        val openCellBtn = if (!isCoolingDown && bingoOpenCellRetryCount < 5) {
+        // 1. 【開格按鈕絕對優先】：只要畫面上存在未禁用的橘色「立即開啟賓果格」按鈕，一律優先點擊開格！
+        // 頂部綠色橫幅 (距離下次抽選還有 XX 分鐘) 為下一張票券倒數計時器，絕不可阻擋當前已亮起之開格按鈕！
+        val openCellBtn = if (bingoOpenCellRetryCount < 5) {
             bingoTask.findOpenCellButton(screenBitmap, ocrItems, templateMatcher)
         } else {
             null
         }
+        val isCoolingDown = openCellBtn == null && bingoTask.isBingoCoolingDown(ocrItems)
         if (openCellBtn != null && bingoOpenCellRetryCount < 5) {
             currentPhaseEmptyTicks = 0
             bingoOpenCellRetryCount++
@@ -1521,7 +1522,7 @@ class AutomationEngine private constructor(private val context: Context) {
         }
 
         if (isCoolingDown) {
-            appendLog("[賓果]「每日賓果」頂部顯示冷卻中 (距離下次抽選)，跳過開格直接檢查連線獎勵！")
+            appendLog("[賓果]「每日賓果」已無可開格（頂部冷卻中），跳過開格直接檢查連線獎勵！")
         } else if (bingoOpenCellRetryCount >= 5) {
             appendLog("[賓果]「立即開啟賓果格」已達點擊上限 (5/5，處於冷卻或已無格可開)，跳過開格直接檢查連線獎勵！")
         }
