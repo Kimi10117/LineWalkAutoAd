@@ -91,38 +91,44 @@ jobs:
       - name: Update Tag and Publish APK to GitHub Releases
         run: |
           git tag -f latest-apk
-          git tag -f v1.15.74
+          git tag -f v1.15.75
           git push -f origin latest-apk || true
-          git push -f origin v1.15.74 || true
+          git push -f origin v1.15.75 || true
 
       - name: Publish APK to GitHub Releases (latest-apk)
         uses: softprops/action-gh-release@v2
         with:
             tag_name: latest-apk
-            name: "散步趣助手 v1.15.74 (正式 Release 簽名封裝 - 提升 Google Play 安全防護信任度 - Run #${{ github.run_number }})"
+            name: "散步趣助手 v1.15.75 (啟動自動檢查更新與底部一鍵下載 - Run #${{ github.run_number }})"
             body: |
-              **散步趣助手 v1.15.74 (Run #${{ github.run_number }}) - 正式 Release 簽名封裝與 V1/V2 憑證加固 (相容歷代版本 v1.15.73, v1.15.72, v1.15.71, v1.15.70, v1.15.69, v1.15.68, v1.15.67, v1.15.66, v1.15.65, v1.15.64, v1.15.63, v1.15.62, v1.15.61, v1.15.60, v1.15.58, v1.15.57, v1.15.56, v1.15.55, v1.15.54, v1.15.53, v1.15.52, v1.15.51, v1.15.50, v1.15.49, v1.15.48, v1.15.47, v1.15.46, v1.15.45)**
-              1. **【正式 Release 簽名與憑證加固】**：
-                 - 啟用正式 Release 模式打包 (`assembleRelease`)，關閉除錯標記 (`isDebuggable = false`)。
-                 - 啟用 Android V1 (Jar) 與 V2 (Full APK Signature) 雙重憑證加密驗證。
-                 - 消除 Android 系統將 APK 視為 Debug 測試包的啟發式安全警告。
-              2. **【版本號升級】**：
-                 - versionCode 107 / versionName 1.15.74。
+              **散步趣助手 v1.15.75 (Run #${{ github.run_number }}) - 啟動自動檢查更新與底部一鍵下載提示 (相容歷代版本 v1.15.74, v1.15.73, v1.15.72, v1.15.71, v1.15.70, v1.15.69, v1.15.68, v1.15.67, v1.15.66, v1.15.65, v1.15.64, v1.15.63, v1.15.62, v1.15.61, v1.15.60, v1.15.58, v1.15.57, v1.15.56, v1.15.55, v1.15.54, v1.15.53, v1.15.52, v1.15.51, v1.15.50, v1.15.49, v1.15.48, v1.15.47, v1.15.46, v1.15.45)**
+              1. **【啟動自動檢查更新與底部懸浮提示】**：
+                 - 每次開啟 App 於背景非同步檢查 GitHub Releases 官方發布版本。
+                 - 偵測到新版本時，於主畫面底部優雅浮現更新通知卡片，顯示新版號與發布說明。
+                 - 點擊「前往下載」按鈕直接透過瀏覽器下載最新 APK，附帶「✕」關閉按鈕。
+                 - 點擊頂部版本標籤亦可手動觸發立即檢查。
+              2. **【網路連線支援】**：
+                 - 於 AndroidManifest.xml 宣告標準 INTERNET 權限以支援版本查詢。
+              3. **【版本號升級】**：
+                 - versionCode 108 / versionName 1.15.75。
             files: LineWalkAutoAd.apk
             prerelease: false
 
-      - name: Publish Versioned APK to GitHub Releases (v1.15.74)
+      - name: Publish Versioned APK to GitHub Releases (v1.15.75)
         uses: softprops/action-gh-release@v2
         with:
-            tag_name: v1.15.74
-            name: "散步趣助手 v1.15.74 (正式 Release 簽名封裝 - 提升 Google Play 安全防護信任度)"
+            tag_name: v1.15.75
+            name: "散步趣助手 v1.15.75 (啟動自動檢查更新與底部一鍵下載)"
             body: |
-              **散步趣助手 v1.15.74 (Run #${{ github.run_number }}) - 正式 Release 簽名封裝與 V1/V2 憑證加固**
-              1. **【正式 Release 簽名與憑證加固】**：
-                 - 啟用正式 Release 模式打包 (`assembleRelease`)，關閉除錯標記 (`isDebuggable = false`)。
-                 - 啟用 Android V1 (Jar) 與 V2 (Full APK Signature) 雙重憑證加密驗證。
-                 - 消除 Android 系統將 APK 視為 Debug 測試包的啟發式安全警告。
-              2. **【版本號升級】**：
-                 - versionCode 107 / versionName 1.15.74。
+              **散步趣助手 v1.15.75 (Run #${{ github.run_number }}) - 啟動自動檢查更新與底部一鍵下載**
+              1. **【啟動自動檢查更新與底部懸浮提示】**：
+                 - 每次開啟 App 於背景非同步檢查 GitHub Releases 官方發布版本。
+                 - 偵測到新版本時，於主畫面底部優雅浮現更新通知卡片，顯示新版號與發布說明。
+                 - 點擊「前往下載」按鈕直接透過瀏覽器下載最新 APK，附帶「✕」關閉按鈕。
+                 - 點擊頂部版本標籤亦可手動觸發立即檢查。
+              2. **【網路連線支援】**：
+                 - 於 AndroidManifest.xml 宣告標準 INTERNET 權限以支援版本查詢。
+              3. **【版本號升級】**：
+                 - versionCode 108 / versionName 1.15.75。
             files: LineWalkAutoAd.apk
             prerelease: false

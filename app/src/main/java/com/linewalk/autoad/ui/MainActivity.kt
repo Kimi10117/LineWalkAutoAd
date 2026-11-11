@@ -52,6 +52,7 @@ class MainActivity : AppCompatActivity() {
         setupTaskCheckboxes()
         setupClickListeners()
         observeEngineStatus()
+        checkAppUpdateOnLaunch()
     }
 
     override fun onResume() {
@@ -116,6 +117,19 @@ class MainActivity : AppCompatActivity() {
                 "請點選畫面最右上角的「⋮」選單 -> 點擊「允許受限制的設定」",
                 Toast.LENGTH_LONG
             ).show()
+        }
+
+        binding.tvAppVersionBadge.setOnClickListener {
+            Toast.makeText(this, "正在檢查版本更新...", Toast.LENGTH_SHORT).show()
+            lifecycleScope.launch {
+                val currentVersion = com.linewalk.autoad.BuildConfig.VERSION_NAME
+                val updateInfo = com.linewalk.autoad.util.UpdateChecker.checkForUpdate(currentVersion, forceRefresh = true)
+                if (updateInfo != null && updateInfo.hasUpdate && !isFinishing && !isDestroyed) {
+                    showUpdateBanner(updateInfo)
+                } else if (!isFinishing && !isDestroyed) {
+                    Toast.makeText(this@MainActivity, "目前已是最新版本 (v$currentVersion)", Toast.LENGTH_SHORT).show()
+                }
+            }
         }
 
         binding.btnEnableAccessibility.setOnClickListener {
@@ -300,6 +314,45 @@ class MainActivity : AppCompatActivity() {
         } catch (e: Exception) {
             Toast.makeText(this, "複製日誌失敗：${e.message ?: "未知錯誤"}", Toast.LENGTH_SHORT).show()
             false
+        }
+    }
+
+    private fun checkAppUpdateOnLaunch() {
+        lifecycleScope.launch {
+            try {
+                val currentVersion = com.linewalk.autoad.BuildConfig.VERSION_NAME
+                val updateInfo = com.linewalk.autoad.util.UpdateChecker.checkForUpdate(currentVersion)
+                if (updateInfo != null && updateInfo.hasUpdate && !isFinishing && !isDestroyed) {
+                    showUpdateBanner(updateInfo)
+                }
+            } catch (e: Exception) {
+                // 背景檢查失敗靜默忽略，不影響主功能
+            }
+        }
+    }
+
+    private fun showUpdateBanner(info: com.linewalk.autoad.util.UpdateChecker.UpdateInfo) {
+        binding.tvUpdateTitle.text = "發現新版本！"
+        binding.tvUpdateVersionBadge.text = info.latestVersion
+        binding.tvUpdateSubtitle.text = if (info.releaseTitle.isNotEmpty()) {
+            "${info.releaseTitle}，點擊立即前往下載。"
+        } else {
+            "已有最新版本，點擊立即前往下載。"
+        }
+        binding.cardUpdateBanner.visibility = View.VISIBLE
+
+        binding.btnDownloadUpdate.setOnClickListener {
+            try {
+                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(info.downloadUrl))
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                startActivity(intent)
+            } catch (e: ActivityNotFoundException) {
+                Toast.makeText(this, "找不到可用的瀏覽器開啟下載連結", Toast.LENGTH_SHORT).show()
+            }
+        }
+
+        binding.btnCloseUpdateBanner.setOnClickListener {
+            binding.cardUpdateBanner.visibility = View.GONE
         }
     }
 

@@ -2,6 +2,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <!-- 檢查 GitHub Releases 官方版本更新所需網路權限 -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <!-- 懸浮控制窗與手機端即時框選取樣所需權限 -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
