@@ -130,7 +130,3 @@ jobs:
                  - versionCode 110 / versionName 1.15.77。
             files: LineWalkAutoAd.apk
             prerelease: false
-              4. **【版本號升級】**：
-                 - versionCode 109 / versionName 1.15.76。
-            files: LineWalkAutoAd.apk
-            prerelease: false
