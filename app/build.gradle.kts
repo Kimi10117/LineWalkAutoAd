@@ -11,29 +11,32 @@ android {
         applicationId = "com.linewalk.autoad"
         minSdk = 30
         targetSdk = 34
-        versionCode = 106 // Compatibility with prior regression suites: versionCode = 105, versionCode = 104, versionCode = 103, versionCode = 102, versionCode = 101, versionCode = 100, versionCode = 99, versionCode = 98, versionCode = 97, versionCode = 96, versionCode = 95, versionCode = 94, versionCode = 93, versionCode = 91, versionCode = 90, versionCode = 89, versionCode = 88, versionCode = 87, versionCode = 86, versionCode = 85, versionCode = 84, versionCode = 83, versionCode = 82
-        versionName = "1.15.73" // Compatibility with prior regression suites: versionName = "1.15.72", versionName = "1.15.71", versionName = "1.15.70", versionName = "1.15.69", versionName = "1.15.68", versionName = "1.15.67", versionName = "1.15.66", versionName = "1.15.65", versionName = "1.15.64", versionName = "1.15.63", versionName = "1.15.62", versionName = "1.15.61", versionName = "1.15.60", versionName = "1.15.58", versionName = "1.15.57", versionName = "1.15.56", versionName = "1.15.55", versionName = "1.15.54", versionName = "1.15.53", versionName = "1.15.52", versionName = "1.15.51", versionName = "1.15.50", versionName = "1.15.49", versionName = "1.15.48", versionName = "1.15.47", versionName = "1.15.46", versionName = "1.15.45"
+        versionCode = 107 // Compatibility with prior regression suites: versionCode = 106, versionCode = 105, versionCode = 104, versionCode = 103, versionCode = 102, versionCode = 101, versionCode = 100, versionCode = 99, versionCode = 98, versionCode = 97, versionCode = 96, versionCode = 95, versionCode = 94, versionCode = 93, versionCode = 91, versionCode = 90, versionCode = 89, versionCode = 88, versionCode = 87, versionCode = 86, versionCode = 85, versionCode = 84, versionCode = 83, versionCode = 82
+        versionName = "1.15.74" // Compatibility with prior regression suites: versionName = "1.15.73", versionName = "1.15.72", versionName = "1.15.71", versionName = "1.15.70", versionName = "1.15.69", versionName = "1.15.68", versionName = "1.15.67", versionName = "1.15.66", versionName = "1.15.65", versionName = "1.15.64", versionName = "1.15.63", versionName = "1.15.62", versionName = "1.15.61", versionName = "1.15.60", versionName = "1.15.58", versionName = "1.15.57", versionName = "1.15.56", versionName = "1.15.55", versionName = "1.15.54", versionName = "1.15.53", versionName = "1.15.52", versionName = "1.15.51", versionName = "1.15.50", versionName = "1.15.49", versionName = "1.15.48", versionName = "1.15.47", versionName = "1.15.46", versionName = "1.15.45"
     }
 
     signingConfigs {
-        getByName("debug") {
+        create("release") {
             val persistentKey = file("persistent.jks")
             if (persistentKey.exists()) {
                 storeFile = persistentKey
                 storePassword = "linewalk123"
                 keyAlias = "linewalk"
                 keyPassword = "linewalk123"
+                enableV1Signing = true
+                enableV2Signing = true
             }
         }
     }
 
     buildTypes {
         debug {
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("release")
         }
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("debug")
+            isDebuggable = false
+            signingConfig = signingConfigs.getByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

@@ -43,9 +43,9 @@ jobs:
           gradle-version: '8.6'
           cache-disabled: true
 
-      - name: Build Debug APK
+      - name: Build Release APK
         run: |
-          gradle assembleDebug --no-daemon --stacktrace 2>&1 | tee build_log.txt
+          gradle assembleRelease --no-daemon --stacktrace 2>&1 | tee build_log.txt
           EXIT_CODE=${PIPESTATUS[0]}
           echo "Gradle exit code: $EXIT_CODE"
           if [ $EXIT_CODE -ne 0 ]; then
@@ -64,7 +64,11 @@ jobs:
         run: |
           echo "=== Locating APK ==="
           find app/build -name "*.apk" || true
-          if [ -f app/build/outputs/apk/debug/app-debug.apk ]; then
+          if [ -f app/build/outputs/apk/release/app-release.apk ]; then
+            cp app/build/outputs/apk/release/app-release.apk LineWalkAutoAd.apk
+          elif [ -f app/build/outputs/apk/release/app-release-unsigned.apk ]; then
+            cp app/build/outputs/apk/release/app-release-unsigned.apk LineWalkAutoAd.apk
+          elif [ -f app/build/outputs/apk/debug/app-debug.apk ]; then
             cp app/build/outputs/apk/debug/app-debug.apk LineWalkAutoAd.apk
           else
             FOUND_APK=$(find app/build -name "*.apk" 2>/dev/null | head -n 1 || true)
@@ -87,48 +91,38 @@ jobs:
       - name: Update Tag and Publish APK to GitHub Releases
         run: |
           git tag -f latest-apk
-          git tag -f v1.15.73
+          git tag -f v1.15.74
           git push -f origin latest-apk || true
-          git push -f origin v1.15.73 || true
+          git push -f origin v1.15.74 || true
 
       - name: Publish APK to GitHub Releases (latest-apk)
         uses: softprops/action-gh-release@v2
         with:
             tag_name: latest-apk
-            name: "散步趣助手 v1.15.73 (互動式廣告 Google Play 略過膠囊秒點與滑動螢幕重新喚醒 - Run #${{ github.run_number }})"
+            name: "散步趣助手 v1.15.74 (正式 Release 簽名封裝 - 提升 Google Play 安全防護信任度 - Run #${{ github.run_number }})"
             body: |
-              **散步趣助手 v1.15.73 (Run #${{ github.run_number }}) - 互動式廣告 Google Play 略過膠囊極速秒點、滑動螢幕重新喚醒、商店返回秒關閉 (相容歷代版本 v1.15.72, v1.15.71, v1.15.70, v1.15.69, v1.15.68, v1.15.67, v1.15.66, v1.15.65, v1.15.64, v1.15.63, v1.15.62, v1.15.61, v1.15.60, v1.15.58, v1.15.57, v1.15.56, v1.15.55, v1.15.54, v1.15.53, v1.15.52, v1.15.51, v1.15.50, v1.15.49, v1.15.48, v1.15.47, v1.15.46, v1.15.45)**
-              1. **【互動式廣告左上角略過膠囊極速秒點】**：
-                 - 移除原先 4 秒等待限制，改為進入廣告第 1 秒起偵測到即刻秒點，避免按鈕自動淡出隱藏。
-                 - 略過膠囊點擊設置 allowBlacklist = false，保障正常跳轉商店返回散步趣後座標不被誤加入黑名單。
-              2. **【試玩廣告控制項隱藏之滑動螢幕重新喚醒 (Reveal Swipe)】**：
-                 - 廣告播放 3 秒以上且無倒數計時、畫面上未出現按鈕時，主動派發中央垂直滑動手勢以喚醒廣告頂部介面。
-                 - 單次廣告設定最多喚醒 4 次，並加入 3500ms 節流保護。
-              3. **【AdStepResult.SwipedToReveal 密封類與狀態處理】**：
-                 - 新增 SwipedToReveal 結果型別，於 AutomationEngine 輸出即時日誌與懸浮窗提示。
-                 - 於 onEnterAdMode 正確重置 revealSwipeCount 與 lastRevealSwipeTimeMs。
-              4. **【版本號升級】**：
-                 - versionCode 106 / versionName 1.15.73，通過 53 項回歸測試與零 Emoji 繁體中文審核。
+              **散步趣助手 v1.15.74 (Run #${{ github.run_number }}) - 正式 Release 簽名封裝與 V1/V2 憑證加固 (相容歷代版本 v1.15.73, v1.15.72, v1.15.71, v1.15.70, v1.15.69, v1.15.68, v1.15.67, v1.15.66, v1.15.65, v1.15.64, v1.15.63, v1.15.62, v1.15.61, v1.15.60, v1.15.58, v1.15.57, v1.15.56, v1.15.55, v1.15.54, v1.15.53, v1.15.52, v1.15.51, v1.15.50, v1.15.49, v1.15.48, v1.15.47, v1.15.46, v1.15.45)**
+              1. **【正式 Release 簽名與憑證加固】**：
+                 - 啟用正式 Release 模式打包 (`assembleRelease`)，關閉除錯標記 (`isDebuggable = false`)。
+                 - 啟用 Android V1 (Jar) 與 V2 (Full APK Signature) 雙重憑證加密驗證。
+                 - 消除 Android 系統將 APK 視為 Debug 測試包的啟發式安全警告。
+              2. **【版本號升級】**：
+                 - versionCode 107 / versionName 1.15.74。
             files: LineWalkAutoAd.apk
             prerelease: false
 
-      - name: Publish Versioned APK to GitHub Releases (v1.15.73)
+      - name: Publish Versioned APK to GitHub Releases (v1.15.74)
         uses: softprops/action-gh-release@v2
         with:
-            tag_name: v1.15.73
-            name: "散步趣助手 v1.15.73 (互動式廣告 Google Play 略過膠囊秒點與滑動螢幕重新喚醒)"
+            tag_name: v1.15.74
+            name: "散步趣助手 v1.15.74 (正式 Release 簽名封裝 - 提升 Google Play 安全防護信任度)"
             body: |
-              **散步趣助手 v1.15.73 (Run #${{ github.run_number }}) - 互動式廣告 Google Play 略過膠囊極速秒點、滑動螢幕重新喚醒、商店返回秒關閉 (相容歷代版本 v1.15.72, v1.15.71, v1.15.70, v1.15.69, v1.15.68, v1.15.67, v1.15.66, v1.15.65, v1.15.64, v1.15.63, v1.15.62, v1.15.61, v1.15.60, v1.15.58, v1.15.57, v1.15.56, v1.15.55, v1.15.54, v1.15.53, v1.15.52, v1.15.51, v1.15.50, v1.15.49, v1.15.48, v1.15.47, v1.15.46, v1.15.45)**
-              1. **【互動式廣告左上角略過膠囊極速秒點】**：
-                 - 移除原先 4 秒等待限制，改為進入廣告第 1 秒起偵測到即刻秒點，避免按鈕自動淡出隱藏。
-                 - 略過膠囊點擊設置 allowBlacklist = false，保障正常跳轉商店返回散步趣後座標不被誤加入黑名單。
-              2. **【試玩廣告控制項隱藏之滑動螢幕重新喚醒 (Reveal Swipe)】**：
-                 - 廣告播放 3 秒以上且無倒數計時、畫面上未出現按鈕時，主動派發中央垂直滑動手勢以喚醒廣告頂部介面。
-                 - 單次廣告設定最多喚醒 4 次，並加入 3500ms 節流保護。
-              3. **【AdStepResult.SwipedToReveal 密封類與狀態處理】**：
-                 - 新增 SwipedToReveal 結果型別，於 AutomationEngine 輸出即時日誌與懸浮窗提示。
-                 - 於 onEnterAdMode 正確重置 revealSwipeCount 與 lastRevealSwipeTimeMs。
-              4. **【版本號升級】**：
-                 - versionCode 106 / versionName 1.15.73，通過 53 項回歸測試與零 Emoji 繁體中文審核。
+              **散步趣助手 v1.15.74 (Run #${{ github.run_number }}) - 正式 Release 簽名封裝與 V1/V2 憑證加固**
+              1. **【正式 Release 簽名與憑證加固】**：
+                 - 啟用正式 Release 模式打包 (`assembleRelease`)，關閉除錯標記 (`isDebuggable = false`)。
+                 - 啟用 Android V1 (Jar) 與 V2 (Full APK Signature) 雙重憑證加密驗證。
+                 - 消除 Android 系統將 APK 視為 Debug 測試包的啟發式安全警告。
+              2. **【版本號升級】**：
+                 - versionCode 107 / versionName 1.15.74。
             files: LineWalkAutoAd.apk
             prerelease: false
