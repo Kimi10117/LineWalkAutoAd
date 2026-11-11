@@ -44,8 +44,8 @@ class AutoAdAccessibilityService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
         val pkg = event.packageName?.toString()
-        if (!pkg.isNullOrBlank() && pkg != packageName) {
-            // 忽略我們自己的懸浮窗套件名稱，紀錄底層真實前景 App 包名
+        if (!pkg.isNullOrBlank() && pkg != packageName && pkg != "com.android.systemui") {
+            // 忽略我們自己的懸浮窗套件名稱與系統狀態列 SystemUI，紀錄底層真實前景 App 包名
             lastEventPackageName = pkg
         }
     }

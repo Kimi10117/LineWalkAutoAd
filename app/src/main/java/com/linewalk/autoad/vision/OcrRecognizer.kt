@@ -531,6 +531,35 @@ class OcrRecognizer {
     }
 
     /**
+     * 偵測全螢幕廣告中下方控制欄的「關閉 / 关闭」藥丸按鈕 (如 Google 聯播網、何基鼎台股分析廣告)：
+     * - ROI 範圍：中下方偏左 (x in 4%..52% sw, y in 76%..92% sh)
+     * - 文字特徵：包含「关闭」、「關閉」、「Close」
+     * - 排除文字：包含跳轉字樣「開啟」、「下載」、「安裝」、「前往」、「查看」
+     */
+    fun findBottomBarCloseButton(
+        items: List<OcrItem>,
+        screenWidth: Int,
+        screenHeight: Int
+    ): Pair<String, Rect>? {
+        if (screenWidth <= 0 || screenHeight <= 0) return null
+        val targetItem = items.firstOrNull { item ->
+            val cx = item.bounds.centerX().toFloat() / screenWidth
+            val cy = item.bounds.centerY().toFloat() / screenHeight
+            val t = item.text.replace(" ", "")
+            val inBottomZone = cx in 0.04f..0.52f && cy in 0.76f..0.92f
+            val hasCloseKeyword = t.contains("关闭") || t.contains("關閉") || t.contains("Close", ignoreCase = true)
+            val hasJumpKeyword = t.contains("開啟") || t.contains("开启") || t.contains("下載") ||
+                t.contains("下载") || t.contains("安裝") || t.contains("安装") || t.contains("前往")
+            inBottomZone && hasCloseKeyword && !hasJumpKeyword
+        }
+        return if (targetItem != null) {
+            "中下方廣告[${targetItem.text}]按鈕" to targetItem.bounds
+        } else {
+            null
+        }
+    }
+
+    /**
      * LINE 內部宣傳廣告右上角的圓形關閉按鈕 (X) 區域：
      * - 優先動態掃描頂部角落 (x: 85%~98%, y: 5%~15%) 內白色 "X" 像素簇，自動精準定位中心；
      * - 基準幾何座標：中心錨定 (x=92.0%, y=9.25%)，包覆半徑充足之可點擊熱區，相容 16:9、20:9、22:9 (摺疊螢幕) 等全機型。
@@ -1229,11 +1258,16 @@ class OcrRecognizer {
             "略過廣告",
             "跳過廣告",
             "關閉廣告",
+            "关闭廣告",
+            "关闭广告",
             "離開廣告",
             "退出廣告",
             "跳過",
+            "跳过",
+            "跳过广告",
             "略過",
             "關閉",
+            "关闭",
             "スキップ",
             "閉じる",
             "広告をスキップ",

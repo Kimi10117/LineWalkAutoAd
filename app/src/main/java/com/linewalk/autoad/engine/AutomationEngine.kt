@@ -512,6 +512,18 @@ class AutomationEngine private constructor(private val context: Context) {
             overlaySafeDetail = "[外部保護] 非散步趣App ($safePkgLabel)"
         )
 
+        // 系統桌面極速復原：若前景為桌面 (Samsung Launcher 或原生 Launcher)，返回鍵無效，立即在第 1 次 tick 強制喚醒散步趣！
+        val isLauncher = externalPkg == "com.sec.android.app.launcher" ||
+            externalPkg.contains("launcher", ignoreCase = true)
+        if (isLauncher) {
+            appendLog("[防護] 前景為系統桌面 ($externalPkg)，立即強制喚醒散步趣拉回前景！")
+            val targetPkg = config.targetGamePackages.firstOrNull { it != "jp.naver.line.android" } ?: "com.linecorp.LGWKTW"
+            service.bringAppToFront(targetPkg)
+            externalAppTicks = 0
+            transitionTo(EngineState.IN_GAME_SCAN, "已從桌面拉回散步趣，恢復遊戲巡邏...", "[巡邏] 巡邏畫面目標中...")
+            return
+        }
+
         // 外部工具與瀏覽器極速復原：連續 2 個 tick (約 2.5 秒) 前景仍為三星瀏覽器/Chrome/Play 商店，立即強制喚醒散步趣拉回前景！
         val isBrowserOrStore = externalPkg == "com.android.vending" ||
             externalPkg == "com.sec.android.app.sbrowser" ||

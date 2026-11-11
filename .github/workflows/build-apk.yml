@@ -91,42 +91,44 @@ jobs:
       - name: Update Tag and Publish APK to GitHub Releases
         run: |
           git tag -f latest-apk
-          git tag -f v1.15.77
+          git tag -f v1.15.78
           git push -f origin latest-apk || true
-          git push -f origin v1.15.77 || true
+          git push -f origin v1.15.78 || true
 
       - name: Publish APK to GitHub Releases (latest-apk)
         uses: softprops/action-gh-release@v2
         with:
             tag_name: latest-apk
-            name: "散步趣助手 v1.15.77 (修復每日賓果開格按鈕優先點擊與冷卻判定 - Run #${{ github.run_number }})"
+            name: "散步趣助手 v1.15.78 (修復 Meta Sponsored 左上角關閉與中下方關閉按鈕偵測 - Run #${{ github.run_number }})"
             body: |
-              **散步趣助手 v1.15.77 (Run #${{ github.run_number }}) - 修復每日賓果開格按鈕優先點擊與冷卻判定 (相容歷代版本 v1.15.76, v1.15.75, v1.15.74, v1.15.73, v1.15.72, v1.15.71, v1.15.70, v1.15.69, v1.15.68, v1.15.67, v1.15.66, v1.15.65, v1.15.64, v1.15.63, v1.15.62, v1.15.61, v1.15.60, v1.15.58, v1.15.57, v1.15.56, v1.15.55, v1.15.54, v1.15.53, v1.15.52, v1.15.51, v1.15.50, v1.15.49, v1.15.48, v1.15.47, v1.15.46, v1.15.45)**
-              1. **【每日賓果亮橘色「立即開啟賓果格」按鈕絕對優先點擊】**：
-                 - 修正 handleBingoDialog 先前因頂部綠色橫幅倒數計時誤將 isCoolingDown 判為 true，進而跳過按鈕搜尋直接秒關視窗之邏輯漏洞。
-                 - 改為以畫面上是否存在實體亮橘色開格按鈕為第一判定基準，只要按鈕就緒即優先點擊開格。
-              2. **【連線獎勵 Get 領取與彈窗關閉流程完善】**：
-                 - 僅在確定畫面上已無橘色開格按鈕可按時，才檢查連線獎勵 [Get]；
-                 - 無開格按鈕且無 Get 可領時，才判定賓果完成並關閉視窗推進至抽抽樂。
-              3. **【版本號升級】**：
-                 - versionCode 110 / versionName 1.15.77。
+              **散步趣助手 v1.15.78 (Run #${{ github.run_number }}) - 修復 Meta Sponsored 左上角關閉與中下方關閉按鈕偵測 (相容歷代版本 v1.15.77, v1.15.76, v1.15.75, v1.15.74, v1.15.73, v1.15.72, v1.15.71, v1.15.70, v1.15.69, v1.15.68, v1.15.67, v1.15.66, v1.15.65, v1.15.64, v1.15.63, v1.15.62, v1.15.61, v1.15.60, v1.15.58, v1.15.57, v1.15.56, v1.15.55, v1.15.54, v1.15.53, v1.15.52, v1.15.51, v1.15.50, v1.15.49, v1.15.48, v1.15.47, v1.15.46, v1.15.45)**
+              1. **【Meta Sponsored (Trip.com) 頂部左上角關閉與死鎖修復】**：
+                 - 修正 Sponsored 標題中心點計算偏移問題，左上角獨立關閉欄放行幾何 X 偵測，精確點擊叉叉中心。
+                 - 解除外部跳轉後的左上角永久封鎖死鎖，改為冷卻重試機制。
+              2. **【畫面中下方廣告關閉按鈕專屬偵測與秒關】**：
+                 - OCR 關鍵字擴充簡體關閉詞彙；新增畫面中下方廣告控制欄藥丸按鈕偵測，立即秒關何基鼎等聯播網廣告。
+              3. **【防護與滑動機制健全化】**：
+                 - 移除普通廣告滿 6 秒無條件滑動之誤觸發；無障礙服務過濾 com.android.systemui 偽事件；桌面環境禁止發送無效返回鍵並即時拉回前景。
+              4. **【版本號升級】**：
+                 - versionCode 111 / versionName 1.15.78。
             files: LineWalkAutoAd.apk
             prerelease: false
 
-      - name: Publish Versioned APK to GitHub Releases (v1.15.77)
+      - name: Publish Versioned APK to GitHub Releases (v1.15.78)
         uses: softprops/action-gh-release@v2
         with:
-            tag_name: v1.15.77
-            name: "散步趣助手 v1.15.77 (修復每日賓果開格按鈕優先點擊與冷卻判定)"
+            tag_name: v1.15.78
+            name: "散步趣助手 v1.15.78 (修復 Meta Sponsored 左上角關閉與中下方關閉按鈕偵測)"
             body: |
-              **散步趣助手 v1.15.77 (Run #${{ github.run_number }}) - 修復每日賓果開格按鈕優先點擊與冷卻判定**
-              1. **【每日賓果亮橘色「立即開啟賓果格」按鈕絕對優先點擊】**：
-                 - 修正 handleBingoDialog 先前因頂部綠色橫幅倒數計時誤將 isCoolingDown 判為 true，進而跳過按鈕搜尋直接秒關視窗之邏輯漏洞。
-                 - 改為以畫面上是否存在實體亮橘色開格按鈕為第一判定基準，只要按鈕就緒即優先點擊開格。
-              2. **【連線獎勵 Get 領取與彈窗關閉流程完善】**：
-                 - 僅在確定畫面上已無橘色開格按鈕可按時，才檢查連線獎勵 [Get]；
-                 - 無開格按鈕且無 Get 可領時，才判定賓果完成並關閉視窗推進至抽抽樂。
-              3. **【版本號升級】**：
-                 - versionCode 110 / versionName 1.15.77。
+              **散步趣助手 v1.15.78 (Run #${{ github.run_number }}) - 修復 Meta Sponsored 左上角關閉與中下方關閉按鈕偵測**
+              1. **【Meta Sponsored (Trip.com) 頂部左上角關閉與死鎖修復】**：
+                 - 修正 Sponsored 標題中心點計算偏移問題，左上角獨立關閉欄放行幾何 X 偵測，精確點擊叉叉中心。
+                 - 解除外部跳轉後的左上角永久封鎖死鎖，改為冷卻重試機制。
+              2. **【畫面中下方廣告關閉按鈕專屬偵測與秒關】**：
+                 - OCR 關鍵字擴充簡體關閉詞彙；新增畫面中下方廣告控制欄藥丸按鈕偵測，立即秒關何基鼎等聯播網廣告。
+              3. **【防護與滑動機制健全化】**：
+                 - 移除普通廣告滿 6 秒無條件滑動之誤觸發；無障礙服務過濾 com.android.systemui 偽事件；桌面環境禁止發送無效返回鍵並即時拉回前景。
+              4. **【版本號升級】**：
+                 - versionCode 111 / versionName 1.15.78。
             files: LineWalkAutoAd.apk
             prerelease: false

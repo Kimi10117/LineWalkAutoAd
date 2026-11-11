@@ -66,6 +66,7 @@ class AdCloserHandler(
     private var fallbackCornerCycle: Int = 0
     private var fastForwardSkipClicks: Int = 0
     private var leftCornerGeoXClicks: Int = 0
+    private var leftCornerRedirectCount: Int = 0
     private var disableLeftCornerForCurrentAd: Boolean = false
     private var linePromoCloseClicks: Int = 0
     private var lastLeftCornerClickTimeMs: Long = 0L
@@ -73,12 +74,9 @@ class AdCloserHandler(
     private val blacklistedPoints = mutableListOf<Point>()
 
     fun onEnterAdMode(preserveRedirectState: Boolean = false) {
-        if (!preserveRedirectState) {
-            adStartTimeMs = System.currentTimeMillis()
-            closeClickCount = 0
-            adChoicesDismissCount = 0
-            redirectCount = 0
-            hasRecentRedirect = false
+        val now = System.currentTimeMillis()
+        if (!preserveRedirectState || adStartTimeMs == 0L || now - adStartTimeMs > 120_000L) {
+            adStartTimeMs = now
             socialLandingPageTicks = 0
             socialLandingPageTotalRecoveries = 0
             googlePlayPillClickCount = 0
@@ -94,11 +92,18 @@ class AdCloserHandler(
             fallbackCornerCycle = 0
             fastForwardSkipClicks = 0
             leftCornerGeoXClicks = 0
-            disableLeftCornerForCurrentAd = false
+            leftCornerRedirectCount = 0
             linePromoCloseClicks = 0
             lastLeftCornerClickTimeMs = 0L
             clickedHistory.clear()
             blacklistedPoints.clear()
+        }
+        if (!preserveRedirectState) {
+            closeClickCount = 0
+            adChoicesDismissCount = 0
+            redirectCount = 0
+            hasRecentRedirect = false
+            disableLeftCornerForCurrentAd = false
         }
     }
 
@@ -122,7 +127,11 @@ class AdCloserHandler(
         val recentLeftCornerClick = lastLeftCornerClickTimeMs > 0L &&
             System.currentTimeMillis() - lastLeftCornerClickTimeMs < leftCornerWindowMs
         if (clickedLeftCorner || recentLeftCornerClick) {
-            disableLeftCornerForCurrentAd = true
+            leftCornerRedirectCount++
+            // 允許冷卻後重試 1 次精確幾何 X，若累積達 2 次跳轉則永久封鎖左上角
+            if (leftCornerRedirectCount >= 2) {
+                disableLeftCornerForCurrentAd = true
+            }
         }
         hasRecentRedirect = true
         redirectCount++
@@ -168,15 +177,21 @@ class AdCloserHandler(
             }
             if (isCurrentAdTopSponsored) {
                 // Meta Sponsored 頂部白底橫幅模式 (同時支援 3M y≈0.029h 與 Trip.com y≈0.067h)：
-                // 1) 放行左側獨立 X 關閉欄 (x in 2.5%..11.6% sw, y in 1.5%..sponsoredBottom+0.6% sh)
-                // 2) 嚴格封鎖品牌圓形頭像 (Trip. / 3M) 與標題區 (x in 11.8%..85.0% sw 且 y < 15.0% sh)
-                // 3) 嚴格封鎖 Sponsored 下方之網址列 (y in (sponsoredBottom+0.6% sh)..15.0% sh 且 x < 85% sw)
-                // 4) 嚴格封鎖右上角靜音喇叭與 AdChoices 圖示 (x > 78% sw 且 y < 12.0% sh)
+                // 1) 頂部系統狀態列邊界保護
                 if (y < (sh * 0.015f).toInt()) return true
-                val safeLeftHeaderBottom = (topSponsoredBottomY + (sh * 0.006f).toInt()).coerceAtLeast((sh * 0.048f).toInt())
-                if (x in (sw * 0.118f).toInt()..(sw * 0.850f).toInt() && y < (sh * 0.150f).toInt()) return true
-                if (x < (sw * 0.118f).toInt() && y in safeLeftHeaderBottom..(sh * 0.150f).toInt()) return true
-                if (x > (sw * 0.78f).toInt() && y < (sh * 0.120f).toInt()) return true
+                // 2) 放行左側獨立 X 關閉欄 (x in 2.5%..12.0% sw, y in 3.5%..10.0% sh)
+                val isLeftCloseZone = x in (sw * 0.025f).toInt()..(sw * 0.120f).toInt() &&
+                    y in (sh * 0.035f).toInt()..(sh * 0.100f).toInt()
+                if (isLeftCloseZone) {
+                    // 放行，不列入靜態黑名單禁區
+                } else {
+                    // 3) 嚴格封鎖品牌圓形頭像 (Trip. / 3M) 與標題文字跳轉區 (x in 12.0%..85.0% sw 且 y < 15.0% sh)
+                    if (x in (sw * 0.120f).toInt()..(sw * 0.850f).toInt() && y < (sh * 0.150f).toInt()) return true
+                    // 4) 嚴格封鎖左側過深區域 (避免點到廣告主卡片頂端)
+                    if (x < (sw * 0.120f).toInt() && y in (sh * 0.105f).toInt()..(sh * 0.150f).toInt()) return true
+                    // 5) 嚴格封鎖右上角靜音喇叭與 AdChoices 圖示 (x > 78% sw 且 y < 12.0% sh)
+                    if (x > (sw * 0.78f).toInt() && y < (sh * 0.120f).toInt()) return true
+                }
             } else {
                 if (y < (sh * 0.024f).toInt()) return true
             }
@@ -217,9 +232,9 @@ class AdCloserHandler(
         }
         topSponsoredBottomY = topSponsoredItem?.bounds?.bottom ?: (sh * 0.085f).toInt()
         topSponsoredCenterY = if (topSponsoredItem != null) {
-            (topSponsoredItem.bounds.top - (sh * 0.004f).toInt()).coerceIn((sh * 0.024f).toInt(), (sh * 0.080f).toInt())
+            topSponsoredItem.bounds.centerY().coerceIn((sh * 0.045f).toInt(), (sh * 0.075f).toInt())
         } else {
-            (sh * 0.065f).toInt()
+            (sh * 0.067f).toInt()
         }
         val elapsedSec = getElapsedSeconds()
 
@@ -879,6 +894,17 @@ class AdCloserHandler(
             return AdStepResult.ClickedCloseOrSkip("OCR[${fullScreenCloseOcr.text}]", fullScreenCloseOcr.bounds)
         }
 
+        // 7B. 第二層辨識 B：中下方廣告控制欄「关闭 / 關閉」藥丸按鈕偵測 (如 Google 聯播網、何基鼎台股分析廣告)
+        val bottomBarClose = ocrRecognizer.findBottomBarCloseButton(ocrItems, sw, sh)
+        if (bottomBarClose != null &&
+            !isInvalidOrBlacklisted(bottomBarClose.second.centerX(), bottomBarClose.second.centerY())
+        ) {
+            lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
+            hasAdActuallyShown = true
+            recordAndClick(service, bottomBarClose.second, allowBlacklist = true)
+            return AdStepResult.ClickedCloseOrSkip(bottomBarClose.first, bottomBarClose.second)
+        }
+
         // 7. 第三層辨識 A：比對使用者在懸浮窗框選儲存的「廣告 X / >> 範本 (AD_CLOSE_ICON)」
         val userCloseTemplates = templateStorage.getTemplates(TemplateCategory.AD_CLOSE_ICON).map { it.bitmap }
         if (userCloseTemplates.isNotEmpty()) {
@@ -908,9 +934,10 @@ class AdCloserHandler(
 
         if (shouldCheckGeoX) {
             val isRelaxed = elapsedSec >= 14 || rewardGrantedOcr != null || isCurrentAdTopSponsored
-            // 左上角掃描防護：若本支廣告已因點擊左上角觸發外部跳轉 (立即封鎖)，或非 Meta 廣告已嘗試 2 次左上角幾何 X 仍未關閉，永久封鎖左上角
+            // 左上角掃描防護：若本支廣告已累積 2 次左上角外部跳轉 (永久封鎖)，或非 Meta 廣告已嘗試 2 次左上角幾何 X 仍未關閉，封鎖左上角；並加入冷卻防止連擊
             val leftCornerAllowedForAd = !disableLeftCornerForCurrentAd && (isMetaAd || leftCornerGeoXClicks < 2)
-            val enableLeftCornerScan = leftCornerAllowedForAd &&
+            val leftCornerCooldownOk = System.currentTimeMillis() - lastLeftCornerClickTimeMs >= 2500L
+            val enableLeftCornerScan = leftCornerAllowedForAd && leftCornerCooldownOk &&
                 (isMetaAd || (noActiveCountdown && elapsedSec >= 5) || rewardGrantedOcr != null)
             val geoMatch = templateMatcher.detectCornerGeometricX(
                 screenBitmap = screenBitmap,
@@ -923,6 +950,7 @@ class AdCloserHandler(
             if (geoMatch != null) {
                 if (isInLeftCornerZone(geoMatch.bounds.centerX(), geoMatch.bounds.centerY())) {
                     leftCornerGeoXClicks++
+                    lastLeftCornerClickTimeMs = System.currentTimeMillis()
                 }
                 lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
                 recordAndClick(service, geoMatch.bounds, allowBlacklist = true)
@@ -937,7 +965,8 @@ class AdCloserHandler(
                     (sw * 0.098f).toInt(),
                     (topSponsoredCenterY + halfH).coerceAtMost((sh * 0.092f).toInt())
                 )
-                if (!disableLeftCornerForCurrentAd && !isInvalidOrBlacklisted(sponsoredLeftTopX.centerX(), sponsoredLeftTopX.centerY())) {
+                if (!disableLeftCornerForCurrentAd && !isInvalidOrBlacklisted(sponsoredLeftTopX.centerX(), sponsoredLeftTopX.centerY()) && leftCornerCooldownOk) {
+                    lastLeftCornerClickTimeMs = System.currentTimeMillis()
                     lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
                     recordAndClick(service, sponsoredLeftTopX, allowBlacklist = true)
                     return AdStepResult.ClickedCloseOrSkip("Sponsored頂部左上角X", sponsoredLeftTopX)
@@ -1075,7 +1104,7 @@ class AdCloserHandler(
                 t.contains("立即遊玩") || t.contains("遊玩") || t.contains("Play") ||
                     t.contains("Level") || t.contains("港口") || t.contains("關卡")
             }
-            if (hasPlayableKeywords || elapsedSec >= 6) {
+            if (hasPlayableKeywords || (googlePlayPillClickCount > 0 && elapsedSec >= 6)) {
                 revealSwipeCount++
                 lastRevealSwipeTimeMs = now
                 hasAdActuallyShown = true
