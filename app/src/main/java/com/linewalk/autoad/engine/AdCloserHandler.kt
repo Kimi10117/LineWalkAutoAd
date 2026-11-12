@@ -70,6 +70,8 @@ class AdCloserHandler(
     private var disableLeftCornerForCurrentAd: Boolean = false
     private var linePromoCloseClicks: Int = 0
     private var lastLeftCornerClickTimeMs: Long = 0L
+    private var lastRedirectReturnTimeMs: Long = 0L
+    private val redirectPointCounts = mutableListOf<Point>()
     private val clickedHistory = mutableListOf<Point>()
     private val blacklistedPoints = mutableListOf<Point>()
 
@@ -95,6 +97,8 @@ class AdCloserHandler(
             leftCornerRedirectCount = 0
             linePromoCloseClicks = 0
             lastLeftCornerClickTimeMs = 0L
+            lastRedirectReturnTimeMs = 0L
+            redirectPointCounts.clear()
             clickedHistory.clear()
             blacklistedPoints.clear()
         }
@@ -104,6 +108,7 @@ class AdCloserHandler(
             redirectCount = 0
             hasRecentRedirect = false
             disableLeftCornerForCurrentAd = false
+            lastRedirectReturnTimeMs = 0L
         }
     }
 
@@ -135,7 +140,19 @@ class AdCloserHandler(
         }
         hasRecentRedirect = true
         redirectCount++
-        resetClickBlacklist()
+        lastRedirectReturnTimeMs = System.currentTimeMillis()
+
+        // 依使用者指導：部分互動廣告必須跳轉商店/瀏覽器並返回才能略過，因此不盲目清空亦不隨意永久封鎖！
+        // 僅當同一個座標區域 (半徑 65px) 連續累積達 3 次無效跳轉時，才暫時加入黑名單進行節流保護
+        if (pt != null) {
+            redirectPointCounts.add(pt)
+            val nearbyRedirects = redirectPointCounts.count { p ->
+                hypot((p.x - pt.x).toDouble(), (p.y - pt.y).toDouble()) < BLACKLIST_RADIUS_PX
+            }
+            if (nearbyRedirects >= 3) {
+                blacklistedPoints.add(pt)
+            }
+        }
         lastClickedPoint = null
     }
 
@@ -196,6 +213,15 @@ class AdCloserHandler(
                 if (y < (sh * 0.024f).toInt()) return true
             }
         }
+        val now = System.currentTimeMillis()
+        // 重定向冷卻節流緩衝 (3500ms)：若剛從外部重定向返回，且目標點為最近引發跳轉之座標，暫時抑制點擊以留出畫面渲染時間
+        if (now - lastRedirectReturnTimeMs < 3500L) {
+            val isRecentRedirectPt = redirectPointCounts.any { pt ->
+                hypot((pt.x - x).toDouble(), (pt.y - y).toDouble()) < BLACKLIST_RADIUS_PX
+            }
+            if (isRecentRedirectPt) return true
+        }
+
         return blacklistedPoints.any { pt ->
             hypot((pt.x - x).toDouble(), (pt.y - y).toDouble()) < BLACKLIST_RADIUS_PX
         }
@@ -843,29 +869,33 @@ class AdCloserHandler(
         }
 
         // 4D. 【Meta 網頁預覽 (Web Preview) 秒速關閉】
-        // 應對廣告跳轉或滑動觸發之內嵌網頁預覽層 (如 Preview of meganeichiba.com.tw)，優先點擊右上角白叉 ✕
+        // 應對廣告跳轉或滑動觸發之內嵌網頁預覽層 (如 Preview of meganeichiba.com.tw 或 Trip.com)，優先點擊白叉 X
         if (isMetaWebPreview) {
             hasAdActuallyShown = true
             val geoMatch = templateMatcher.detectCornerGeometricX(
                 screenBitmap = screenBitmap,
-                blacklistedCoord = null,
+                blacklistedCoord = ::isInvalidOrBlacklisted,
                 isRelaxed = true,
-                includeLeftZone = false
+                includeLeftZone = !disableLeftCornerForCurrentAd
             )
             if (geoMatch != null) {
+                if (isInLeftCornerZone(geoMatch.bounds.centerX(), geoMatch.bounds.centerY())) {
+                    lastLeftCornerClickTimeMs = System.currentTimeMillis()
+                }
                 lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
-                recordAndClick(service, geoMatch.bounds, allowBlacklist = false)
+                recordAndClick(service, geoMatch.bounds, allowBlacklist = true)
                 return AdStepResult.ClickedCloseOrSkip("Meta預覽關閉(幾何X)", geoMatch.bounds)
             }
-            val previewCloseRect = Rect(
-                (sw * 0.860f).toInt(),
-                max((sh * 0.045f).toInt(), 45),
-                (sw * 0.965f).toInt(),
-                (sh * 0.100f).toInt()
-            )
-            lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
-            recordAndClick(service, previewCloseRect, allowBlacklist = false)
-            return AdStepResult.ClickedCloseOrSkip("Meta預覽關閉(右上角熱區)", previewCloseRect)
+            // 廢除容易誤觸『以外部瀏覽器開啟』之右上角盲點熱區！
+            // 若為網頁預覽層且畫面無幾何 X，播放達 5 秒或已有重定向紀錄時直接發送安全返回鍵關閉預覽層
+            if (elapsedSec >= 5 || redirectCount > 0) {
+                val now = System.currentTimeMillis()
+                if (now - lastBackActionTimeMs >= 2500L) {
+                    service.safeNavigateBack(allowInGame = false)
+                    lastBackActionTimeMs = now
+                    return AdStepResult.WatchdogBackTriggered(elapsedSec, "Meta預覽安全返回鍵")
+                }
+            }
         }
 
         // 6. 第一層辨識：檢查無障礙節點樹是否有一般廣告關閉節點 (非略過按鈕，如頂部角落 X 節點)

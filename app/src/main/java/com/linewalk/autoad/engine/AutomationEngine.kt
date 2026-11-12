@@ -1417,7 +1417,7 @@ class AutomationEngine private constructor(private val context: Context) {
                     geoXConsecutiveClicks++
                     if (geoXConsecutiveClicks >= 3) {
                         appendLog("[關閉] 連續點擊角落關閉鈕 (${geoX.label}) 達 3 次無效，發送安全返回鍵關閉...")
-                        service.safeNavigateBack(allowInGame = true)
+                        service.safeNavigateBack(allowInGame = !isGameScreen)
                         geoXConsecutiveClicks = 0
                         if (!isGameScreen) {
                             nonGameScreenTicks = 2
