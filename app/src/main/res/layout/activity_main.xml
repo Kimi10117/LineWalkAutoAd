@@ -51,7 +51,7 @@
                     android:background="@drawable/bg_version_pill"
                     android:paddingHorizontal="8dp"
                     android:paddingVertical="2dp"
-                    android:text="v1.15.20"
+                    android:text="v1.15.80"
                     android:textColor="#FFFFFF"
                     android:textSize="11sp"
                     android:textStyle="bold" />
@@ -173,7 +173,7 @@
                 android:textStyle="bold" />
         </LinearLayout>
 
-        <!-- 卡片 2：自動化任務模組開關 (文字精簡，杜絕換行折行) -->
+        <!-- 卡片 2：自動化任務模組與運行參數設定 -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -186,7 +186,7 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="二、自動巡邏順序設定 (移動 -> 時間 -> 遊戲 -> 步數)"
+                android:text="二、自動巡邏順序與運行設定 (移動 -> 時間 -> 遊戲 -> 步數)"
                 android:textColor="@color/text_primary"
                 android:textSize="15sp"
                 android:textStyle="bold" />
@@ -293,77 +293,169 @@
                 android:text="自動關閉推銷彈窗 (跳過) 與無廣告一般領取"
                 android:textColor="@color/text_secondary"
                 android:textSize="12.5sp" />
-        </LinearLayout>
 
-        <!-- 卡片 3：舊版取樣範本管理 (已全面自動化，隱藏此區塊並保留 View ID 相容性) -->
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="14dp"
-            android:background="@drawable/bg_card_sleek"
-            android:elevation="1dp"
-            android:orientation="vertical"
-            android:padding="16dp"
-            android:visibility="gone">
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:layout_marginVertical="8dp"
+                android:background="#E2E8F0" />
 
+            <!-- 廣告卡死強制退回計時器 (40s ~ 90s) -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="廣告卡死強制退回計時器"
+                    android:textColor="@color/text_primary"
+                    android:textSize="13sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/tvMaxAdWaitValue"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="65 秒"
+                    android:textColor="@color/line_green_dark"
+                    android:textSize="13sp"
+                    android:textStyle="bold" />
+            </LinearLayout>
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:text="單支廣告超過此時限仍未關閉，將強制按返回並拉回遊戲 (40s ~ 90s)"
+                android:textColor="@color/text_secondary"
+                android:textSize="11.5sp" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <Button
+                    android:id="@+id/btnDecreaseAdWait"
+                    android:layout_width="48dp"
+                    android:layout_height="34dp"
+                    android:backgroundTint="#E2E8F0"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:padding="0dp"
+                    android:text="-5s"
+                    android:textAllCaps="false"
+                    android:textColor="@color/text_primary"
+                    android:textSize="12sp"
+                    android:textStyle="bold" />
+
+                <SeekBar
+                    android:id="@+id/seekBarMaxAdWait"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginHorizontal="4dp"
+                    android:layout_weight="1"
+                    android:max="50"
+                    android:progress="25" />
+
+                <Button
+                    android:id="@+id/btnIncreaseAdWait"
+                    android:layout_width="48dp"
+                    android:layout_height="34dp"
+                    android:backgroundTint="#E2E8F0"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:padding="0dp"
+                    android:text="+5s"
+                    android:textAllCaps="false"
+                    android:textColor="@color/text_primary"
+                    android:textSize="12sp"
+                    android:textStyle="bold" />
+            </LinearLayout>
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:layout_marginVertical="8dp"
+                android:background="#E2E8F0" />
+
+            <!-- 巡邏掃描速度 -->
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="三、已取樣圖示範本庫 (懸浮窗點 [取樣] 新增)"
+                android:text="巡邏掃描速度"
                 android:textColor="@color/text_primary"
-                android:textSize="15sp"
+                android:textSize="13sp"
                 android:textStyle="bold" />
 
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
-                android:lineSpacingExtra="2dp"
-                android:text="使用指引：\n1. 點上方綠色按鈕啟動懸浮窗並打開遊戲\n2. 遇滿水瓶時，點懸浮窗 [取樣] 框選並儲存\n3. 點懸浮窗 [開始]，即享全自動巡邏與領取"
+                android:layout_marginTop="2dp"
+                android:text="調整畫面偵測間隔，平衡反應速度與手機耗電"
                 android:textColor="@color/text_secondary"
-                android:textSize="12.5sp" />
-
-            <TextView
-                android:id="@+id/tvTemplateSummary"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
-                android:background="@drawable/bg_template_box"
-                android:padding="12dp"
-                android:text="載入範本統計中..."
-                android:textColor="@color/text_primary"
-                android:textSize="13sp" />
+                android:textSize="11.5sp" />
 
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="10dp"
+                android:layout_marginTop="8dp"
                 android:orientation="horizontal">
 
                 <Button
-                    android:id="@+id/btnClearBottleTemplates"
+                    android:id="@+id/btnSpeedFast"
                     android:layout_width="0dp"
-                    android:layout_height="wrap_content"
+                    android:layout_height="38dp"
                     android:layout_weight="1"
-                    android:backgroundTint="#64748B"
-                    android:text="重設水瓶範本"
-                    android:textColor="@color/card_white"
-                    android:textSize="12sp" />
+                    android:backgroundTint="#E2E8F0"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:paddingHorizontal="4dp"
+                    android:text="極速 1000ms"
+                    android:textAllCaps="false"
+                    android:textColor="@color/text_primary"
+                    android:textSize="11.5sp" />
 
                 <Button
-                    android:id="@+id/btnClearAllTemplates"
+                    android:id="@+id/btnSpeedNormal"
                     android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_marginStart="8dp"
+                    android:layout_height="38dp"
+                    android:layout_marginStart="6dp"
                     android:layout_weight="1"
-                    android:backgroundTint="@color/danger_red"
-                    android:text="清空所有範本"
+                    android:backgroundTint="@color/line_green"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:paddingHorizontal="4dp"
+                    android:text="標準 1200ms"
+                    android:textAllCaps="false"
                     android:textColor="@color/card_white"
-                    android:textSize="12sp" />
+                    android:textSize="11.5sp"
+                    android:textStyle="bold" />
+
+                <Button
+                    android:id="@+id/btnSpeedEco"
+                    android:layout_width="0dp"
+                    android:layout_height="38dp"
+                    android:layout_marginStart="6dp"
+                    android:layout_weight="1"
+                    android:backgroundTint="#E2E8F0"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:paddingHorizontal="4dp"
+                    android:text="省電 1500ms"
+                    android:textAllCaps="false"
+                    android:textColor="@color/text_primary"
+                    android:textSize="11.5sp" />
             </LinearLayout>
         </LinearLayout>
 
-        <!-- 卡片 4：即時執行日誌 -->
+        <!-- 卡片 3：即時狀態與執行日誌 -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -381,6 +473,35 @@
                 android:textColor="@color/text_primary"
                 android:textSize="15sp"
                 android:textStyle="bold" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <CheckBox
+                    android:id="@+id/cbFilterErrorStatusLogs"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="僅看異常／狀態"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="12.5sp" />
+
+                <Button
+                    android:id="@+id/btnClearLogs"
+                    android:layout_width="wrap_content"
+                    android:layout_height="34dp"
+                    android:backgroundTint="#64748B"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:paddingHorizontal="12dp"
+                    android:text="清空日誌"
+                    android:textColor="@color/card_white"
+                    android:textSize="12sp" />
+            </LinearLayout>
 
             <TextView
                 android:id="@+id/tvLiveLogs"

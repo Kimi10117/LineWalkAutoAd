@@ -55,10 +55,11 @@ class NodeInspector {
                         nodePkg == "jp.naver.line.android"
                     if (!isAllowedPackage) continue
 
-                    // 嚴格排除頂部狀態列與中央通知橫幅 (中央通知禁區 y < 8% sh，邊角狀態列 y < 4% sh)
+                    // 嚴格排除頂部狀態列與中央通知橫幅 (依裝置螢幕比例自動計算頂部安全區高度)
+                    val safeTopH = ScreenViewportCalibrator.getStatusBarSafeHeight(screenWidth, screenHeight)
                     val inTopNoticeZone = cx in (screenWidth * 0.18f).toInt()..(screenWidth * 0.82f).toInt() &&
                         cy < screenHeight * 0.08f
-                    if (inTopNoticeZone || cy < max(screenHeight * 0.040f, 40f)) continue
+                    if (inTopNoticeZone || cy < safeTopH) continue
 
                     // 排除懸浮窗本身、頂部中間 dynamicSpot 動態島
                     // 僅在非全螢幕廣告狀態 (如主畫面彈窗) 排除首頁橫幅廣告區間 (y: 12% ~ 36%)，全螢幕廣告時放行中間內容區的略過按鈕！
@@ -67,8 +68,9 @@ class NodeInspector {
                         cx in (screenWidth * 0.28f).toInt()..(screenWidth * 0.72f).toInt()
                     val inAdBannerZone = !isFullScreenAd && cy in (screenHeight * 0.12f).toInt()..(screenHeight * 0.36f).toInt()
 
-                    val validSize = rect.width() in 16..(screenWidth * 0.45f).toInt() &&
-                        rect.height() in 16..(screenHeight * 0.14f).toInt()
+                    val minCloseBoxSide = maxOf(4, (minOf(screenWidth, screenHeight) * 0.015f).toInt())
+                    val validSize = rect.width() in minCloseBoxSide..(screenWidth * 0.45f).toInt() &&
+                        rect.height() in minCloseBoxSide..(screenHeight * 0.14f).toInt()
 
                     if (!inOverlay && !inDynamicIsland && !inAdBannerZone && validSize) {
                         val viewId = node.viewIdResourceName?.lowercase().orEmpty()
@@ -174,13 +176,15 @@ class NodeInspector {
                     val cx = rect.centerX()
                     val cy = rect.centerY()
 
-                    val validSize = rect.width() in 24..(screenWidth * 0.9f).toInt() &&
-                        rect.height() in 20..(screenHeight * 0.16f).toInt()
+                    val minBoxW = maxOf(6, (screenWidth * 0.022f).toInt())
+                    val minBoxH = maxOf(6, (screenHeight * 0.008f).toInt())
+                    val validSize = rect.width() in minBoxW..(screenWidth * 0.9f).toInt() &&
+                        rect.height() in minBoxH..(screenHeight * 0.16f).toInt()
 
                     if (!FloatingOverlayService.isInsideOverlay(cx, cy) && validSize) {
                         val text = node.text?.toString()?.trim().orEmpty()
                         val desc = node.contentDescription?.toString()?.trim().orEmpty()
-                        val isExcluded = excludeKeywords.any { ex ->
+                        val isExcluded = (excludeKeywords + OcrRecognizer.AD_BAIT_PROMO_KEYWORDS).any { ex ->
                             text.contains(ex, ignoreCase = true) || desc.contains(ex, ignoreCase = true)
                         }
                         if (!isExcluded) {
@@ -248,11 +252,11 @@ class NodeInspector {
             "秒後", "還有", "seconds", "sec remaining"
         )
 
-        private val EXCLUDE_TEXTS = listOf(
+        private val EXCLUDE_TEXTS = (listOf(
             "同意並繼續", "隱私權", "條款", "不看廣告",
-            "開始遊玩", "遊玩", "輕鬆賺", "輕鬆", "adjoe", "Sponsored", "line points game",
+            "遊玩", "輕鬆", "adjoe", "Sponsored", "line points game",
             "開啟商店", "前往商店", "安裝", "下載", "立即下載", "免費下載",
             "去逛逛", "立即購買", "立即預訂", "BOOK", "SHOP", "INSTALL", "DOWNLOAD"
-        )
+        ) + OcrRecognizer.AD_BAIT_PROMO_KEYWORDS).distinct()
     }
 }

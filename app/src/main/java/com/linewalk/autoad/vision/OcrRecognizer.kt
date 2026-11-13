@@ -280,7 +280,11 @@ class OcrRecognizer {
         val hasRewardTitleOcr = items.any { item ->
             val cy = item.bounds.centerY().toFloat() / sh
             val t = item.text.replace(" ", "")
+            val hasBaitPromo = AD_BAIT_PROMO_KEYWORDS.any { k ->
+                t.contains(k.replace(" ", ""), ignoreCase = true)
+            }
             cy in 0.20f..0.42f &&
+                !hasBaitPromo &&
                 !t.contains("輕鬆") &&
                 !t.contains("簡單") &&
                 !t.contains("玩遊戲") &&
@@ -914,7 +918,11 @@ class OcrRecognizer {
         val hasBottomModalTitle = items.any { item ->
             val cy = item.bounds.centerY().toFloat() / sh
             val t = item.text.replace(" ", "")
+            val hasBaitPromo = AD_BAIT_PROMO_KEYWORDS.any { k ->
+                t.contains(k.replace(" ", ""), ignoreCase = true)
+            }
             cy in 0.52f..0.75f &&
+                !hasBaitPromo &&
                 !t.contains("輕鬆") && !t.contains("簡單") && !t.contains("遊玩") && !t.contains("Sponsored") && !t.contains("AD") &&
                 (t.contains("獲得票券！") || t.contains("獲得金幣！") || t.contains("獲得票券!") || t.contains("獲得金幣!") ||
                  (t.contains("獲得") && (t.contains("票券") || t.contains("金幣")) && (t.contains("！") || t.contains("!"))))
@@ -974,7 +982,10 @@ class OcrRecognizer {
             }
 
             // 一般分頁特徵
-            if (cy < 0.58f && (
+            val hasBaitPromo = AD_BAIT_PROMO_KEYWORDS.any { k ->
+                t.contains(k.replace(" ", ""), ignoreCase = true)
+            }
+            if (cy < 0.58f && !hasBaitPromo && t.length <= 16 && (
                     t.contains("距離下次") || t.contains("今天的步數") ||
                     t.contains("獲得票券") || t.contains("獲得金幣") ||
                     t.contains("達成條件") || t.contains("速度")
@@ -1087,6 +1098,22 @@ class OcrRecognizer {
             RegexOption.IGNORE_CASE
         )
 
+        /** 廣告常見宣傳話術與引流誘餌關鍵字共用黑名單 */
+        val AD_BAIT_PROMO_KEYWORDS = listOf(
+            "開始遊戲",
+            "開始遊玩",
+            "輕鬆賺",
+            "輕鬆賺取",
+            "簡單賺",
+            "簡單賺金幣",
+            "立即玩",
+            "馬上玩",
+            "免費試玩",
+            "下載試玩",
+            "玩遊戲賺",
+            "看影片賺"
+        )
+
         val AD_CHOICES_MENU_KEYWORDS = listOf(
             "Hide Ad",
             "Report Ad",
@@ -1145,7 +1172,7 @@ class OcrRecognizer {
             "看廣告抽"
         )
 
-        val GAME_AD_EXCLUDE_KEYWORDS = listOf(
+        val GAME_AD_EXCLUDE_KEYWORDS = (listOf(
             "跳過廣告",
             "不看廣告",
             "不用看",
@@ -1158,9 +1185,7 @@ class OcrRecognizer {
             "Amazon",
             "邀請",
             "好友",
-            "輕鬆賺",
             "輕鬆",
-            "簡單賺",
             "簡單",
             "玩遊戲",
             "LINE POINTS",
@@ -1170,7 +1195,6 @@ class OcrRecognizer {
             "挖挖哇",
             "條款",
             "服務條款",
-            "開始遊玩",
             "遊玩",
             "下載",
             "立即下載",
@@ -1194,7 +1218,7 @@ class OcrRecognizer {
             "無料",
             "IRIAM",
             "歓迎"
-        )
+        ) + AD_BAIT_PROMO_KEYWORDS).distinct()
 
         /** 遊戲內彈窗關閉、活動推銷略過與領獎確認文字（移除單字『好』以避免誤配『邀請好友』！） */
         val GAME_CLAIM_CONFIRM_KEYWORDS = listOf(
@@ -1209,7 +1233,7 @@ class OcrRecognizer {
             "不用了"
         )
 
-        val GAME_CLAIM_EXCLUDE_KEYWORDS = listOf(
+        val GAME_CLAIM_EXCLUDE_KEYWORDS = (listOf(
             "跳過廣告",
             "15 獲得",
             "15獲得",
@@ -1240,8 +1264,6 @@ class OcrRecognizer {
             "酷澎",
             "Coupang",
             "原萃",
-            "輕鬆賺",
-            "開始遊玩",
             "報名中",
             "去逛逛",
             "雙方",
@@ -1252,7 +1274,7 @@ class OcrRecognizer {
             "省電模式",
             "應用程式設定",
             "選單"
-        )
+        ) + AD_BAIT_PROMO_KEYWORDS).distinct()
 
         val AD_CLOSE_OCR_KEYWORDS = listOf(
             "略過廣告",
@@ -1290,7 +1312,7 @@ class OcrRecognizer {
             "×"
         )
 
-        val AD_CLOSE_EXCLUDE_KEYWORDS = listOf(
+        val AD_CLOSE_EXCLUDE_KEYWORDS = (listOf(
             "秒後",
             "還有",
             "剩餘",
@@ -1341,7 +1363,7 @@ class OcrRecognizer {
             "SHOP",
             "BUY",
             "ORDER"
-        )
+        ) + AD_BAIT_PROMO_KEYWORDS).distinct()
 
         val AD_REWARD_GRANTED_KEYWORDS = listOf(
             "已獲得獎勵",

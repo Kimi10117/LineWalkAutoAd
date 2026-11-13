@@ -306,7 +306,13 @@ class MissionTask {
      * - "每週": x ≈ 0.80f, y ≈ 0.188f
      * 優先比對 OCR 關鍵字，若 OCR 未抓取則使用精準相對座標熱區
      */
-    fun getTabRect(tabName: String, sw: Int, sh: Int, ocrItems: List<OcrItem> = emptyList()): Rect {
+    fun getTabRect(
+        tabName: String,
+        sw: Int,
+        sh: Int,
+        ocrItems: List<OcrItem> = emptyList(),
+        screenBitmap: Bitmap? = null
+    ): Rect {
         val effectiveSh = if (sh > 0) sh else 2400
         val ocrMatch = ocrItems.firstOrNull { item ->
             val cy = item.bounds.centerY().toFloat() / effectiveSh
@@ -316,19 +322,27 @@ class MissionTask {
             return ocrMatch.bounds
         }
 
+        val vp = ScreenViewportCalibrator.detectViewport(sw, sh, screenBitmap, ocrItems)
         val hasSpecial = hasSpecialTab(ocrItems, sw, sh)
         val xRatio = when (tabName) {
             "特別" -> 0.20f
             "每週" -> if (hasSpecial) 0.80f else 0.67f
             else -> if (hasSpecial) 0.50f else 0.33f
         }
-        val yCenter = (sh * 0.188f).toInt()
-        val halfW = (sw * 0.14f).toInt()
-        val halfH = (sh * 0.025f).toInt()
+        val effectiveAspect = vp.contentHeight.toFloat() / maxOf(1, vp.contentWidth)
+        val yRatio = if (effectiveAspect < 1.95f) {
+            0.165f + ((effectiveAspect - 1.33f).coerceIn(0f, 0.62f) / 0.62f) * (0.188f - 0.165f)
+        } else {
+            0.188f
+        }
+        val xCenter = vp.mapContentX(xRatio)
+        val yCenter = vp.mapContentY(yRatio)
+        val halfW = (vp.contentWidth * 0.14f).toInt().coerceAtLeast(4)
+        val halfH = (vp.contentHeight * 0.025f).toInt().coerceAtLeast(4)
         return Rect(
-            (sw * xRatio).toInt() - halfW,
+            xCenter - halfW,
             yCenter - halfH,
-            (sw * xRatio).toInt() + halfW,
+            xCenter + halfW,
             yCenter + halfH
         )
     }
@@ -357,18 +371,24 @@ class MissionTask {
     /**
      * 主畫面上的「任務」圖示按鈕熱區 (第 4 顆，y ≈ 0.42f)
      */
-    fun getMainScreenMissionIconRect(sw: Int, sh: Int, ocrItems: List<OcrItem>): Rect {
+    fun getMainScreenMissionIconRect(
+        sw: Int,
+        sh: Int,
+        ocrItems: List<OcrItem>,
+        screenBitmap: Bitmap? = null
+    ): Rect {
+        val vp = ScreenViewportCalibrator.detectViewport(sw, sh, screenBitmap, ocrItems)
         val match = ocrItems.firstOrNull { item ->
             val cy = item.bounds.centerY()
-            cy in (sh * 0.38f).toInt()..(sh * 0.46f).toInt() &&
-            item.bounds.centerX() > (sw * 0.75f).toInt() &&
+            cy in vp.mapContentY(0.38f)..vp.mapContentY(0.46f) &&
+            item.bounds.centerX() > vp.mapContentX(0.75f) &&
             item.text.contains("任務")
         }
         return match?.bounds ?: Rect(
-            (sw * 0.78f).toInt(),
-            (sh * 0.38f).toInt(),
-            (sw * 0.96f).toInt(),
-            (sh * 0.46f).toInt()
+            vp.mapContentX(0.78f),
+            vp.mapContentY(0.38f),
+            vp.mapContentX(0.96f),
+            vp.mapContentY(0.46f)
         )
     }
 }

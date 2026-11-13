@@ -5,8 +5,6 @@ import android.graphics.Rect
 import android.graphics.RectF
 import android.os.Build
 import com.linewalk.autoad.config.AppConfig
-import com.linewalk.autoad.config.TemplateCategory
-import com.linewalk.autoad.config.TemplateStorage
 import com.linewalk.autoad.service.AutoAdAccessibilityService
 import com.linewalk.autoad.tasks.BingoTask
 import com.linewalk.autoad.tasks.FriendGiftTask
@@ -22,6 +20,7 @@ import com.linewalk.autoad.ui.FloatingOverlayService
 import com.linewalk.autoad.vision.NodeInspector
 import com.linewalk.autoad.vision.OcrItem
 import com.linewalk.autoad.vision.OcrRecognizer
+import com.linewalk.autoad.vision.ScreenViewportCalibrator
 import com.linewalk.autoad.vision.TemplateMatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -101,17 +100,15 @@ enum class PatrolPhase(val title: String) {
 class AutomationEngine private constructor(private val context: Context) {
 
     val config = AppConfig(context)
-    val templateStorage = TemplateStorage(context)
 
     private val nodeInspector = NodeInspector()
     private val ocrRecognizer = OcrRecognizer()
     private val templateMatcher = TemplateMatcher()
     private val adCloserHandler = AdCloserHandler(
-        config = config,
-        templateStorage = templateStorage,
-        nodeInspector = nodeInspector,
         ocrRecognizer = ocrRecognizer,
-        templateMatcher = templateMatcher
+        nodeInspector = nodeInspector,
+        templateMatcher = templateMatcher,
+        config = config
     )
 
     private val stepTask = StepBottleTask()
@@ -205,6 +202,20 @@ class AutomationEngine private constructor(private val context: Context) {
     internal var nonGameScreenTicks = 0
     internal var geoXConsecutiveClicks = 0
     private var externalAppTicks = 0
+    private var lastActiveGamePackage: String? = null
+    private var legitSkipRedirectPkg: String? = null
+    private var legitSkipRedirectStartMs: Long = 0L
+
+    // 系統診斷日誌彙整計數與螢幕狀態快取 (U1)
+    internal var timeoutForceEscapeCount = 0
+    private var externalRedirectPlayCount = 0
+    private var externalRedirectBrowserCount = 0
+    private var externalRedirectOtherCount = 0
+    internal var backRejectCount = 0
+    private var lastLoggedBackRejectReason: String? = null
+    private var lastViewportMetricsCache: ScreenViewportCalibrator.ViewportMetrics? = null
+    private var lastCapturedScreenWidth: Int = 0
+    private var lastCapturedScreenHeight: Int = 0
 
     // 廣告載入錯誤與無庫存計數守護
     internal var adLoadErrorCountPerTab: MutableMap<MainTab, Int> = mutableMapOf()
@@ -308,7 +319,15 @@ class AutomationEngine private constructor(private val context: Context) {
 
         if (resetRound) {
             currentRound = 1
+            timeoutForceEscapeCount = 0
+            externalRedirectPlayCount = 0
+            externalRedirectBrowserCount = 0
+            externalRedirectOtherCount = 0
+            backRejectCount = 0
         }
+        legitSkipRedirectPkg = null
+        legitSkipRedirectStartMs = 0L
+        lastLoggedBackRejectReason = null
         popupRetryTicks = 0
         rewardClaimRetryTicks = 0
         nonGameScreenTicks = 0
@@ -378,8 +397,12 @@ class AutomationEngine private constructor(private val context: Context) {
             while (isActive) {
                 try {
                     executeSingleTick()
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
                 } catch (e: Exception) {
-                    appendLog("[錯誤] 循環發生例外: ${e.message}")
+                    appendLog("[錯誤] 循環發生例外: ${e.javaClass.simpleName}: ${e.message}")
+                    val acc = AutoAdAccessibilityService.instance.value
+                    appendLog(buildPhoneStateSnapshot("LOOP_EXCEPTION(${e.javaClass.simpleName})", acc))
                 }
                 delay(config.loopIntervalMs)
             }
@@ -399,7 +422,11 @@ class AutomationEngine private constructor(private val context: Context) {
             statusDetail = reason,
             overlaySafeDetail = "[待命] $reason"
         )
-        appendLog("[待命] $reason")
+        if (reason == "使用者手動暫停") {
+            appendLog("[控制] 使用者手動暫停巡邏（工作階段平穩停止）")
+        } else {
+            appendLog("[待命] $reason")
+        }
     }
 
     fun toggle() {
@@ -407,6 +434,49 @@ class AutomationEngine private constructor(private val context: Context) {
             stop()
         } else {
             start()
+        }
+    }
+
+    /**
+     * 動態解析使用者已安裝／偏好之《LINE 散步趣》套件名稱（支援台灣版 LGWKTW 與日版／國際版 LGWALK）。
+     */
+    internal fun resolvePreferredGamePackage(
+        service: AutoAdAccessibilityService? = AutoAdAccessibilityService.instance.value
+    ): String {
+        val candidates = mutableListOf<String>()
+        lastActiveGamePackage?.takeIf { AppConfig.isGamePackage(it) }?.let { candidates.add(it) }
+        config.lastDetectedGamePackage?.takeIf { AppConfig.isGamePackage(it) }?.let { candidates.add(it) }
+        config.targetGamePackages
+            .filter { AppConfig.isGamePackage(it) }
+            .forEach { candidates.add(it) }
+        AppConfig.GAME_PACKAGE_PRIORITY_ORDER.forEach { candidates.add(it) }
+
+        val uniqueCandidates = candidates.distinct()
+        val pm = service?.packageManager ?: context.packageManager
+        for (pkg in uniqueCandidates) {
+            try {
+                if (pm.getLaunchIntentForPackage(pkg) != null) {
+                    return pkg
+                }
+            } catch (_: Exception) {
+            }
+        }
+        return uniqueCandidates.firstOrNull() ?: "com.linecorp.LGWKTW"
+    }
+
+    private fun recordBackRejectIfAny(
+        service: AutoAdAccessibilityService,
+        contextLabel: String,
+        screenBitmap: android.graphics.Bitmap? = null,
+        ocrItems: List<OcrItem> = emptyList()
+    ) {
+        val reason = service.lastBackRejectReason
+        if (reason.isBlank()) return
+        backRejectCount++
+        if (reason != lastLoggedBackRejectReason) {
+            lastLoggedBackRejectReason = reason
+            appendLog("[返回遭拒] $contextLabel ($reason) | 累計=$backRejectCount")
+            appendLog(buildPhoneStateSnapshot("BACK_REJECT:$reason", service, screenBitmap, ocrItems))
         }
     }
 
@@ -419,6 +489,12 @@ class AutomationEngine private constructor(private val context: Context) {
 
         var currentState = _uiStatus.value.state
         val fgPkg = service.getForegroundPackageName()
+        if (AppConfig.isGamePackage(fgPkg)) {
+            lastActiveGamePackage = fgPkg
+            if (config.lastDetectedGamePackage != fgPkg) {
+                config.lastDetectedGamePackage = fgPkg
+            }
+        }
 
         // 0. 第三方官方廣告容器優先處理 (Meta Audience Network com.facebook.katana, Google AdMob, Unity, AppLovin, Chrome Custom Tabs 等)：
         // 當畫面處於任何合法廣告容器套件時，無條件判定為合法廣告播放，
@@ -440,11 +516,16 @@ class AutomationEngine private constructor(private val context: Context) {
             // 0A. 嚴格攔截非廣告容器之外部社群應用程式（如誤跳轉至獨立 Instagram / Threads / Messenger）：
             // 一旦跳出至外部社群 App，立即發送系統返回鍵退出並拉回《LINE 散步趣》！
             externalAppTicks++
+            if (externalAppTicks == 1) {
+                externalRedirectOtherCount++
+            }
             appendLog("[防護] 偵測到跳轉外部社群應用 ($fgPkg)，立即發送返回鍵回到散步趣 (連續 ${externalAppTicks} 次)")
             adCloserHandler.markRecentRedirect()
-            service.navigateBackFromExternalSocialApp(minIntervalMs = 600L)
+            if (!service.navigateBackFromExternalSocialApp(minIntervalMs = 600L)) {
+                recordBackRejectIfAny(service, "SocialAppGuard($fgPkg)")
+            }
             if (externalAppTicks >= 2) {
-                val targetPkg = config.targetGamePackages.firstOrNull { it != "jp.naver.line.android" } ?: "com.linecorp.LGWKTW"
+                val targetPkg = resolvePreferredGamePackage(service)
                 service.bringAppToFront(targetPkg)
                 externalAppTicks = 0
             }
@@ -472,6 +553,9 @@ class AutomationEngine private constructor(private val context: Context) {
             return
         } else {
             externalAppTicks = 0
+            legitSkipRedirectPkg = null
+            legitSkipRedirectStartMs = 0L
+            lastLoggedBackRejectReason = null
         }
         val screenBitmap = service.captureScreenBitmap()
         if (screenBitmap == null) {
@@ -484,6 +568,14 @@ class AutomationEngine private constructor(private val context: Context) {
             val ocrItems = rawOcrItems.filterNot { item ->
                 FloatingOverlayService.isInsideOverlay(item.bounds.centerX(), item.bounds.centerY())
             }
+            lastCapturedScreenWidth = screenBitmap.width
+            lastCapturedScreenHeight = screenBitmap.height
+            lastViewportMetricsCache = ScreenViewportCalibrator.detectViewport(
+                sw = screenBitmap.width,
+                sh = screenBitmap.height,
+                screenBitmap = screenBitmap,
+                ocrItems = ocrItems
+            )
 
             when (currentState) {
                 EngineState.IDLE -> Unit
@@ -504,6 +596,99 @@ class AutomationEngine private constructor(private val context: Context) {
         externalAppTicks++
         val externalPkg = fgPkg ?: "未知外部應用"
         val safePkgLabel = if (externalPkg.length > 20) externalPkg.takeLast(20) else externalPkg
+        if (externalAppTicks == 1) {
+            when {
+                externalPkg == "com.android.vending" -> externalRedirectPlayCount++
+                AppConfig.isBrowserPackage(externalPkg) -> externalRedirectBrowserCount++
+                else -> externalRedirectOtherCount++
+            }
+        }
+
+        // 系統桌面極速復原：若前景為桌面 (Samsung Launcher 或原生 Launcher)，返回鍵無效，立即在第 1 次 tick 強制喚醒散步趣！
+        val isLauncher = externalPkg == "com.sec.android.app.launcher" ||
+            externalPkg.contains("launcher", ignoreCase = true)
+        if (isLauncher) {
+            appendLog("[防護] 前景為系統桌面 ($externalPkg)，立即強制喚醒散步趣拉回前景！")
+            appendLog(buildPhoneStateSnapshot("LAUNCHER_RECOVERY", service))
+            val targetPkg = resolvePreferredGamePackage(service)
+            service.bringAppToFront(targetPkg)
+            externalAppTicks = 0
+            legitSkipRedirectPkg = null
+            legitSkipRedirectStartMs = 0L
+            transitionTo(EngineState.IN_GAME_SCAN, "已從桌面拉回散步趣，恢復遊戲巡邏...", "[巡邏] 巡邏畫面目標中...")
+            return
+        }
+
+        // 合法跳轉 Play 商店／瀏覽器略過與安全返回 (U3)：
+        // 若源自廣告預期略過按鈕（Google Play / 略過 / 快轉），保留約 2.0s 獎勵註冊緩衝再安全按 BACK 返回
+        val lastClickedLabel = adCloserHandler.getLastClickedAdLabel()
+        val isBrowserOrStore = externalPkg == "com.android.vending" ||
+            externalPkg == "com.sec.android.app.sbrowser" ||
+            externalPkg.startsWith("com.sec.android") ||
+            externalPkg == "com.android.chrome" ||
+            AppConfig.isPlayStoreOrBrowserPackage(externalPkg)
+        val isExpectedSkipLabel = lastClickedLabel != null && (
+            lastClickedLabel.contains("Google Play", ignoreCase = true) ||
+            lastClickedLabel.contains("略過") ||
+            lastClickedLabel.contains("快轉")
+        )
+        val isLegitSkipRedirect = AppConfig.isPlayStoreOrBrowserPackage(externalPkg) && isExpectedSkipLabel
+
+        if (isLegitSkipRedirect && externalAppTicks < 3) {
+            val now = System.currentTimeMillis()
+            if (legitSkipRedirectPkg != externalPkg || legitSkipRedirectStartMs <= 0L) {
+                legitSkipRedirectPkg = externalPkg
+                legitSkipRedirectStartMs = now
+            }
+            val elapsedMs = now - legitSkipRedirectStartMs
+            _uiStatus.value = _uiStatus.value.copy(
+                statusDetail = "[緩衝] 預期略過跳轉 ($externalPkg)，等待獎勵註冊...",
+                overlaySafeDetail = "[略過緩衝] 等待返回 ($safePkgLabel)"
+            )
+            if (elapsedMs < 2000L) {
+                val remainMs = 2000L - elapsedMs
+                if (externalAppTicks == 1 && remainMs > 1200L) {
+                    appendLog("[防護] 偵測到預期略過跳轉 ($externalPkg | 來源=$lastClickedLabel)，保留約 2.0s 獎勵註冊緩衝...")
+                    return
+                }
+                delay(remainMs.coerceIn(0L, 1400L))
+            }
+            val postWaitFg = service.getForegroundPackageName()
+            if (AppConfig.isGamePackage(postWaitFg) || AppConfig.isAdPackage(postWaitFg)) {
+                externalAppTicks = 0
+                legitSkipRedirectPkg = null
+                legitSkipRedirectStartMs = 0L
+                return
+            }
+            if (postWaitFg != null && (postWaitFg == "com.sec.android.app.launcher" || postWaitFg.contains("launcher", ignoreCase = true))) {
+                appendLog("[防護] 緩衝後前景為系統桌面 ($postWaitFg)，立即強制喚醒散步趣拉回前景！")
+                val targetPkg = resolvePreferredGamePackage(service)
+                service.bringAppToFront(targetPkg)
+                externalAppTicks = 0
+                legitSkipRedirectPkg = null
+                legitSkipRedirectStartMs = 0L
+                transitionTo(EngineState.IN_GAME_SCAN, "已從桌面拉回散步趣，恢復遊戲巡邏...", "[巡邏] 巡邏畫面目標中...")
+                return
+            }
+            appendLog("[防護] 預期略過跳轉 ($externalPkg | 來源=$lastClickedLabel) 獎勵註冊緩衝完成，發送安全返回鍵回到遊戲")
+            if (!service.safeNavigateBack(minIntervalMs = 800L)) {
+                recordBackRejectIfAny(service, "LegitSkipReturn($externalPkg)")
+            }
+            delay(350)
+            val postBackFg = service.getForegroundPackageName()
+            if (postBackFg != null && (postBackFg == "com.sec.android.app.launcher" || postBackFg.contains("launcher", ignoreCase = true))) {
+                appendLog("[防護] 安全返回後偵測系統桌面 ($postBackFg)，立即強制喚醒散步趣防退回桌面！")
+                val targetPkg = resolvePreferredGamePackage(service)
+                service.bringAppToFront(targetPkg)
+                externalAppTicks = 0
+                transitionTo(EngineState.IN_GAME_SCAN, "已從桌面拉回散步趣，恢復遊戲巡邏...", "[巡邏] 巡邏畫面目標中...")
+            } else if (AppConfig.isGamePackage(postBackFg)) {
+                externalAppTicks = 0
+            }
+            legitSkipRedirectPkg = null
+            legitSkipRedirectStartMs = 0L
+            return
+        }
 
         appendLog("[防護] 偵測到非散步趣應用 ($externalPkg)，啟動嚴格防誤點保護 (連續 ${externalAppTicks} 次)")
         adCloserHandler.markRecentRedirect(fromExternalApp = true)
@@ -512,28 +697,14 @@ class AutomationEngine private constructor(private val context: Context) {
             overlaySafeDetail = "[外部保護] 非散步趣App ($safePkgLabel)"
         )
 
-        // 系統桌面極速復原：若前景為桌面 (Samsung Launcher 或原生 Launcher)，返回鍵無效，立即在第 1 次 tick 強制喚醒散步趣！
-        val isLauncher = externalPkg == "com.sec.android.app.launcher" ||
-            externalPkg.contains("launcher", ignoreCase = true)
-        if (isLauncher) {
-            appendLog("[防護] 前景為系統桌面 ($externalPkg)，立即強制喚醒散步趣拉回前景！")
-            val targetPkg = config.targetGamePackages.firstOrNull { it != "jp.naver.line.android" } ?: "com.linecorp.LGWKTW"
-            service.bringAppToFront(targetPkg)
-            externalAppTicks = 0
-            transitionTo(EngineState.IN_GAME_SCAN, "已從桌面拉回散步趣，恢復遊戲巡邏...", "[巡邏] 巡邏畫面目標中...")
-            return
-        }
-
         // 外部工具與瀏覽器極速復原：連續 2 個 tick (約 2.5 秒) 前景仍為三星瀏覽器/Chrome/Play 商店，立即強制喚醒散步趣拉回前景！
-        val isBrowserOrStore = externalPkg == "com.android.vending" ||
-            externalPkg == "com.sec.android.app.sbrowser" ||
-            externalPkg.startsWith("com.sec.android") ||
-            externalPkg == "com.android.chrome"
         if (externalAppTicks >= 2 && isBrowserOrStore) {
             appendLog("[防護] 停留外部瀏覽器/商店 ($externalPkg) 達 2 次 tick，立即強制喚醒散步趣拉回前景！")
-            val targetPkg = config.targetGamePackages.firstOrNull { it != "jp.naver.line.android" } ?: "com.linecorp.LGWKTW"
+            val targetPkg = resolvePreferredGamePackage(service)
             service.bringAppToFront(targetPkg)
             externalAppTicks = 0
+            legitSkipRedirectPkg = null
+            legitSkipRedirectStartMs = 0L
             transitionTo(EngineState.IN_GAME_SCAN, "已拉回散步趣，恢復遊戲巡邏...", "[巡邏] 巡邏畫面目標中...")
             return
         }
@@ -541,9 +712,12 @@ class AutomationEngine private constructor(private val context: Context) {
         // 逾時復原：連續外部應用超過 3 個 tick (約 4 秒)，強制將散步趣喚醒拉回前景！
         if (externalAppTicks >= 3) {
             appendLog("[防護] 停留外部應用達 3 次 tick 逾時，嘗試強制喚醒散步趣拉回前景！")
-            val targetPkg = config.targetGamePackages.firstOrNull { it != "jp.naver.line.android" } ?: "com.linecorp.LGWKTW"
+            appendLog(buildPhoneStateSnapshot("EXTERNAL_APP_TIMEOUT($externalPkg)", service))
+            val targetPkg = resolvePreferredGamePackage(service)
             service.bringAppToFront(targetPkg)
             externalAppTicks = 0
+            legitSkipRedirectPkg = null
+            legitSkipRedirectStartMs = 0L
             transitionTo(EngineState.IN_GAME_SCAN, "已拉回散步趣，恢復遊戲巡邏...", "[巡邏] 巡邏畫面目標中...")
             return
         }
@@ -555,7 +729,9 @@ class AutomationEngine private constructor(private val context: Context) {
             externalPkg == "com.android.chrome"
         if (isSamsungOrPlay) {
             appendLog("[防護] 前景為系統工具/應用商店/瀏覽器 ($externalPkg)，直接發送安全返回鍵退出")
-            service.safeNavigateBack(minIntervalMs = 800L)
+            if (!service.safeNavigateBack(minIntervalMs = 800L)) {
+                recordBackRejectIfAny(service, "ExternalStoreOrSystem($externalPkg)")
+            }
             return
         }
 
@@ -608,7 +784,9 @@ class AutomationEngine private constructor(private val context: Context) {
 
         // 行為 3: 若無廣告關閉鈕，發送安全返回鍵退出外部應用
         appendLog("[防護] 前景非散步趣 ($externalPkg) 且無廣告關閉鈕，發送安全返回鍵退出外部 App")
-        service.safeNavigateBack()
+        if (!service.safeNavigateBack()) {
+            recordBackRejectIfAny(service, "ExternalAppFallback($externalPkg)")
+        }
         if (AppConfig.isRedirectPackage(fgPkg)) {
             adCloserHandler.markRecentRedirect()
             if (_uiStatus.value.state != EngineState.AD_WATCHING) {
@@ -1417,7 +1595,10 @@ class AutomationEngine private constructor(private val context: Context) {
                     geoXConsecutiveClicks++
                     if (geoXConsecutiveClicks >= 3) {
                         appendLog("[關閉] 連續點擊角落關閉鈕 (${geoX.label}) 達 3 次無效，發送安全返回鍵關閉...")
-                        service.safeNavigateBack(allowInGame = !isGameScreen)
+                        val backDispatched = service.safeNavigateBack(allowInGame = !isGameScreen)
+                        if (!backDispatched) {
+                            recordBackRejectIfAny(service, "GeoXConsecutiveFallback", screenBitmap, ocrItems)
+                        }
                         geoXConsecutiveClicks = 0
                         if (!isGameScreen) {
                             nonGameScreenTicks = 2
@@ -2410,7 +2591,6 @@ class AutomationEngine private constructor(private val context: Context) {
                         screenBitmap = screenBitmap,
                         ocrItems = ocrItems,
                         config = config,
-                        templateStorage = templateStorage,
                         templateMatcher = templateMatcher,
                         ocrRecognizer = ocrRecognizer
                     )
@@ -3050,7 +3230,8 @@ class AutomationEngine private constructor(private val context: Context) {
         }
 
         if (isStillInSubDialog && popupRetryTicks >= 2) {
-            transitionTo(EngineState.IN_GAME_SCAN, "已領取獎勵，繼續彈窗內部巡邏...", "[巡邏] 檢查彈窗中...")
+            appendLog("[子視窗] 領獎確認逾時（無有效目標或已領畢），退出子彈窗繼續巡邏")
+            transitionTo(EngineState.IN_GAME_SCAN, "領獎確認逾時，退出子彈窗繼續巡邏...", "[巡邏] 檢查彈窗中...")
             return
         }
 
@@ -3148,18 +3329,31 @@ class AutomationEngine private constructor(private val context: Context) {
 
 
         // 0. 全域廣告超時絕對防護 (Global Ad Timeout Watchdog)：
-        // 無論後續辨識回傳何種狀態，若單支廣告已播放達 (maxAdWaitSeconds + 4 秒，預設 36 秒) 仍未結束，
-        // 絕對強制發送返回鍵、喚醒《LINE 散步趣》拉回前景並重置引擎狀態，絕不允許任何廣告造成卡死！
+        // 依 adCloserHandler.getEffectiveWatchdogLimitSec(config.maxAdWaitSeconds) 動態取得計時上限，
+        // 超過上限先寫入 [狀態Snap] 與 OCR 摘要，再突破容器防護發送系統返回鍵；若前景仍非散步趣則強制喚醒目標套件！
+        val timerLimitSec = adCloserHandler.getEffectiveWatchdogLimitSec(config.maxAdWaitSeconds)
         val adElapsed = adCloserHandler.getElapsedSeconds()
-        if (adElapsed >= config.maxAdWaitSeconds + 4) {
-            appendLog("[警報] 廣告播放達 ${adElapsed}s 超過上限 (${config.maxAdWaitSeconds}s)，強制關閉廣告拉回散步趣！")
-            service.safeNavigateBack(minIntervalMs = 300L, allowInGame = true)
+        if (adElapsed >= timerLimitSec) {
+            timeoutForceEscapeCount++
+            appendLog("[警報] 廣告播放達 ${adElapsed}s 超過計時器上限 (${timerLimitSec}s)，準備強制關閉廣告拉回散步趣！")
+            appendLog(buildPhoneStateSnapshot("AD_WATCHDOG_TIMEOUT(${adElapsed}s/${timerLimitSec}s)", service, screenBitmap, ocrItems))
+            val ocrDigest = formatStagnationOcrDigest(ocrItems, sw, sh, maxItems = 6)
+            if (ocrDigest.isNotBlank()) {
+                appendLog("[畫面線索] 廣告停滯 OCR 摘要: $ocrDigest")
+            }
+            if (!service.safeNavigateBack(minIntervalMs = 300L, allowInGame = true, forceEscapeAdPackage = true)) {
+                recordBackRejectIfAny(service, "WatchdogEscape#1", screenBitmap, ocrItems)
+            }
             delay(500)
-            service.safeNavigateBack(minIntervalMs = 300L, allowInGame = true)
+            if (!service.safeNavigateBack(minIntervalMs = 300L, allowInGame = true, forceEscapeAdPackage = true)) {
+                recordBackRejectIfAny(service, "WatchdogEscape#2", screenBitmap, ocrItems)
+            }
             delay(600)
-            val isGameBack = adCloserHandler.isGameScreenVisible(service, screenBitmap, ocrItems)
-            if (!isGameBack) {
-                service.bringAppToFront("com.linecorp.LGWKTW")
+            val postWatchdogFg = service.getForegroundPackageName()
+            if (!AppConfig.isGamePackage(postWatchdogFg)) {
+                val targetGamePkg = resolvePreferredGamePackage(service)
+                appendLog("[計時強退] 兩次系統返回後前景仍非遊戲套件 (${postWatchdogFg ?: "unknown"})，強制喚醒散步趣 ($targetGamePkg) 拉回前景！")
+                service.bringAppToFront(targetGamePkg)
                 delay(800)
             }
             adWatchdogCooldownTicks = 4
@@ -3203,7 +3397,11 @@ class AutomationEngine private constructor(private val context: Context) {
             }
 
             is AdStepResult.ClickedCloseOrSkip -> {
-                appendLog("[點擊] 點擊關閉/略過按鈕: ${res.sourceLabel}")
+                val cx = res.bounds.centerX()
+                val cy = res.bounds.centerY()
+                val nx = if (sw > 0) String.format(Locale.US, "%.1f", cx * 100f / sw) else "0.0"
+                val ny = if (sh > 0) String.format(Locale.US, "%.1f", cy * 100f / sh) else "0.0"
+                appendLog("[點擊] 點擊關閉/略過按鈕: ${res.sourceLabel} @ ($cx, $cy | ${nx}%, ${ny}%)")
                 updateDetail(
                     "[點擊] 已點擊 ${res.sourceLabel}，確認是否回到遊戲...",
                     "[點擊] 已點關閉，確認中..."
@@ -3283,17 +3481,40 @@ class AutomationEngine private constructor(private val context: Context) {
 
             is AdStepResult.WatchdogBackTriggered -> {
                 appendLog("[監控] 廣告等待 (${res.elapsedSec}s)：嘗試發送 ${res.actionLabel} 關閉廣告")
+                recordBackRejectIfAny(service, "AdCloserWatchdog(${res.elapsedSec}s)", screenBitmap, ocrItems)
                 updateDetail(
                     "[監控] 嘗試 ${res.actionLabel} 關閉廣告 (${res.elapsedSec}s)...",
                     "[監控] 嘗試關閉 (${res.elapsedSec}s)..."
                 )
-                if (res.elapsedSec >= config.maxAdWaitSeconds + 8) {
-                    appendLog("[警報] 廣告等待達 ${res.elapsedSec}s 逾時仍未關閉，強制喚醒散步趣拉回前景！")
-                    service.bringAppToFront("com.linecorp.LGWKTW")
+                if (res.elapsedSec >= timerLimitSec) {
+                    timeoutForceEscapeCount++
+                    val targetGamePkg = resolvePreferredGamePackage(service)
+                    appendLog("[計時強退] 廣告等待達 ${res.elapsedSec}s 超過計時器上限 (${timerLimitSec}s) 仍未關閉，強制喚醒散步趣 ($targetGamePkg) 拉回前景！")
+                    appendLog(buildPhoneStateSnapshot("WATCHDOG_BACK_TIMEOUT(${res.elapsedSec}s/${timerLimitSec}s)", service, screenBitmap, ocrItems))
+                    val ocrDigest = formatStagnationOcrDigest(ocrItems, sw, sh, maxItems = 6)
+                    if (ocrDigest.isNotBlank()) {
+                        appendLog("[畫面線索] 廣告停滯 OCR 摘要: $ocrDigest")
+                    }
+                    service.bringAppToFront(targetGamePkg)
                     delay(800)
                     adWatchdogCooldownTicks = 4
                     transitionTo(EngineState.IN_GAME_SCAN, "逾時強制拉回散步趣主畫面，繼續巡邏...", "[巡邏] 重新巡邏中...")
                 }
+            }
+
+            is AdStepResult.ForceBringGameToFront -> {
+                timeoutForceEscapeCount++
+                val targetGamePkg = resolvePreferredGamePackage(service)
+                appendLog("[計時強退] ${res.reason} (耗時=${res.elapsedSec}s, 前景=${res.foregroundPkg})，強制喚醒散步趣 ($targetGamePkg) 拉回前景！")
+                appendLog(buildPhoneStateSnapshot("FORCE_BRING_FRONT(${res.reason})", service, screenBitmap, ocrItems))
+                val ocrDigest = formatStagnationOcrDigest(ocrItems, sw, sh, maxItems = 6)
+                if (ocrDigest.isNotBlank()) {
+                    appendLog("[畫面線索] 停滯畫面 OCR 摘要: $ocrDigest")
+                }
+                service.bringAppToFront(targetGamePkg)
+                delay(800)
+                adWatchdogCooldownTicks = 4
+                transitionTo(EngineState.IN_GAME_SCAN, "強制拉回散步趣主畫面，繼續巡邏...", "[巡邏] 重新巡邏中...")
             }
 
             is AdStepResult.SwipedToReveal -> {
@@ -3544,25 +3765,6 @@ class AutomationEngine private constructor(private val context: Context) {
             }
         }
 
-        // 5. 使用者框選的「看廣告按鈕圖示」範本 (AD_TRIGGER_BTN)
-        val adBtnTemplates = templateStorage.getTemplates(TemplateCategory.AD_TRIGGER_BTN).map { it.bitmap }
-        if (adBtnTemplates.isNotEmpty()) {
-            val tplMatch = templateMatcher.findBestTemplateMatch(
-                screenBitmap = screenBitmap,
-                templates = adBtnTemplates,
-                roiNormalized = TemplateCategory.AD_TRIGGER_BTN.defaultSearchRoi,
-                threshold = config.templateMatchThreshold,
-                labelPrefix = "看廣告圖示",
-                blacklistedCoord = FloatingOverlayService::isInsideOverlay
-            )
-            if (tplMatch != null &&
-                !ocrRecognizer.isAreaInCooldown(ocrItems, tplMatch.bounds.top - btnMarginY, tplMatch.bounds.bottom + btnMarginY) &&
-                !templateMatcher.isPopupButtonDisabledGray(screenBitmap, tplMatch.bounds.centerY())
-            ) {
-                candidates.add(PopupActionTarget.WatchAd(tplMatch.label, tplMatch.bounds) to 1)
-            }
-        }
-
         // 依照獲得金幣數量由大到小排序 (100 > 60 > 50 > 30 > 15 > 10 > 5 > 2 > 1 > 0)，選取金幣最高者！
         if (candidates.isNotEmpty()) {
             val bestCandidate = candidates.maxByOrNull { it.second } ?: candidates.first()
@@ -3618,6 +3820,79 @@ class AutomationEngine private constructor(private val context: Context) {
     }
 
     /**
+     * 將螢幕像素矩形格式化為 AI 友善診斷座標字串 (含絕對邊界、中心點與百分比座標)。
+     */
+    internal fun formatRectForLog(rect: Rect, sw: Int, sh: Int): String {
+        val cx = rect.centerX()
+        val cy = rect.centerY()
+        val nx = if (sw > 0) String.format(Locale.US, "%.1f", cx * 100f / sw) else "0.0"
+        val ny = if (sh > 0) String.format(Locale.US, "%.1f", cy * 100f / sh) else "0.0"
+        return "(${rect.left},${rect.top}-${rect.right},${rect.bottom}|c=$cx,$cy|${nx}%,${ny}%)"
+    }
+
+    /**
+     * 將目前畫面的 OCR 文字項目濃縮為精簡線索摘要（預設最多 6 筆、單筆文字上限 16 字）。
+     */
+    internal fun formatStagnationOcrDigest(
+        ocrItems: List<OcrItem>,
+        sw: Int,
+        sh: Int,
+        maxItems: Int = 6
+    ): String {
+        if (ocrItems.isEmpty() || maxItems <= 0) return ""
+        return ocrItems
+            .asSequence()
+            .map { item ->
+                val clean = item.text.replace("\n", " ").replace("\r", " ").trim()
+                item to clean
+            }
+            .filter { (_, clean) -> clean.isNotBlank() }
+            .take(maxItems)
+            .joinToString(" ; ") { (item, clean) ->
+                val truncated = if (clean.length > 16) clean.take(15) + "…" else clean
+                val cx = item.bounds.centerX()
+                val cy = item.bounds.centerY()
+                val nx = if (sw > 0) (cx * 100f / sw).toInt() else 0
+                val ny = if (sh > 0) (cy * 100f / sh).toInt() else 0
+                "\"$truncated\"@${nx}%,${ny}%"
+            }
+    }
+
+    /**
+     * 建立結構化手機畫面與引擎狀態快照 ([狀態Snap])，供 AI 分析逾時、例外、返回遭拒與強制復原原因。
+     */
+    internal fun buildPhoneStateSnapshot(
+        cause: String,
+        service: AutoAdAccessibilityService? = AutoAdAccessibilityService.instance.value,
+        screenBitmap: android.graphics.Bitmap? = null,
+        ocrItems: List<OcrItem> = emptyList()
+    ): String {
+        val dm = context.resources.displayMetrics
+        val sw = when {
+            screenBitmap != null && screenBitmap.width > 0 -> screenBitmap.width
+            lastCapturedScreenWidth > 0 -> lastCapturedScreenWidth
+            else -> dm.widthPixels
+        }
+        val sh = when {
+            screenBitmap != null && screenBitmap.height > 0 -> screenBitmap.height
+            lastCapturedScreenHeight > 0 -> lastCapturedScreenHeight
+            else -> dm.heightPixels
+        }
+        val vp = when {
+            screenBitmap != null -> ScreenViewportCalibrator.detectViewport(sw, sh, screenBitmap, ocrItems)
+            lastViewportMetricsCache != null -> lastViewportMetricsCache!!
+            else -> ScreenViewportCalibrator.ViewportMetrics(sw, sh, 0, sh, false, 0, sw)
+        }
+        val navMode = if (vp.hasThreeButtonNavBar) "三大按鍵" else "手勢/無按鍵"
+        val fgPkg = service?.getForegroundPackageName() ?: "unknown"
+        val rejectReason = service?.lastBackRejectReason?.ifBlank { "none" } ?: "no_service"
+        val ui = _uiStatus.value
+        val adFields = adCloserHandler.getDiagnosticsSnapshotFields()
+        val lastAdLabel = adCloserHandler.getLastClickedAdLabel() ?: "none"
+        return "[狀態Snap] cause=$cause | pkg=$fgPkg | state=${ui.state.name} | round=$currentRound | phase=${currentPhase.name} | tab=${currentTab.name} | screen=${sw}x$sh | nav=$navMode | bounds=[${vp.effectiveLeftX}..${vp.effectiveRightX},${vp.effectiveTopY}..${vp.effectiveBottomY}] | backReject=$rejectReason(累計=$backRejectCount) | adClk=$lastAdLabel | $adFields"
+    }
+
+    /**
      * 回傳安全適用於系統 Intent 分享 (IPC) 的格式化日誌。
      * 限制最大日誌筆數為 [maxLines]（預設 1,500 筆），避免 Android Binder 事務緩衝區 (1MB) 溢位觸發 TransactionTooLargeException。
      * 若日誌總量超出限制，自動截取最近 [maxLines] 筆並附帶安全提示說明。
@@ -3635,12 +3910,35 @@ class AutomationEngine private constructor(private val context: Context) {
         val isTruncated = logsSnapshot.size > maxLines
         val targetLogs = if (isTruncated) logsSnapshot.takeLast(maxLines) else logsSnapshot
 
+        val dm = context.resources.displayMetrics
+        val sw = if (lastCapturedScreenWidth > 0) lastCapturedScreenWidth else dm.widthPixels
+        val sh = if (lastCapturedScreenHeight > 0) lastCapturedScreenHeight else dm.heightPixels
+        val dpi = dm.densityDpi
+        val aspectRatioStr = if (sw > 0 && sh > 0) {
+            if (sh >= sw) {
+                String.format(Locale.US, "%.1f:9", sh * 9.0 / sw)
+            } else {
+                String.format(Locale.US, "%.2f:1", sw.toDouble() / sh)
+            }
+        } else {
+            "未知"
+        }
+        val vp = lastViewportMetricsCache ?: ScreenViewportCalibrator.ViewportMetrics(sw, sh, 0, sh, false, 0, sw)
+        val navBarMode = if (vp.hasThreeButtonNavBar) "傳統三大按鍵" else "全螢幕手勢"
+        val enabledTasksList = config.getEnabledTaskNames()
+        val enabledTasksText = if (enabledTasksList.isEmpty()) "無" else enabledTasksList.joinToString("、")
+        val claimNormalText = if (config.claimNormalWhenNoAd) "開啟" else "關閉"
+        val ui = _uiStatus.value
+
         val sb = StringBuilder()
         sb.append("========================================\n")
         sb.append("《LINE 散步趣助手》系統診斷日誌\n")
         sb.append("應用版本：$appVersion\n")
         sb.append("裝置型號：$deviceModel\n")
         sb.append("系統版本：$osVersion\n")
+        sb.append("螢幕規格：${sw}x${sh} (比例 $aspectRatioStr, ${dpi}dpi), 導覽列=$navBarMode, 有效邊界=[${vp.effectiveLeftX}..${vp.effectiveRightX}, ${vp.effectiveTopY}..${vp.effectiveBottomY}]\n")
+        sb.append("核心設定：計時器=${config.maxAdWaitSeconds}s, 掃描間隔=${config.loopIntervalMs}ms, 無廣告一般領取=$claimNormalText, 啟用任務=[$enabledTasksText]\n")
+        sb.append("工作階段摘要：輪次=${ui.currentRound}, 觸發=${ui.tasksTriggeredCount}, 廣告完成=${ui.adsCompletedCount}, 逾時強退=${timeoutForceEscapeCount}, 外部跳轉=(Play=${externalRedirectPlayCount}, 瀏覽器=${externalRedirectBrowserCount}, 其他=${externalRedirectOtherCount}), 返回遭拒=${backRejectCount}\n")
         sb.append("啟動時間：$startTimeStr\n")
         sb.append("匯出時間：$exportTimeStr\n")
         if (isTruncated) {

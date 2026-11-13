@@ -21,11 +21,17 @@ object MockFixtures {
     /**
      * Helper to create an OcrItem with specific bounding rect
      */
-    fun createOcrItem(text: String, left: Int, top: Int, right: Int, bottom: Int, confidence: Float = 0.99f): OcrItem {
+    fun createOcrItem(
+        text: String,
+        left: Int,
+        top: Int,
+        right: Int,
+        bottom: Int,
+        @Suppress("UNUSED_PARAMETER") confidence: Float = 0.99f
+    ): OcrItem {
         return OcrItem(
             text = text,
-            bounds = Rect(left, top, right, bottom),
-            confidence = confidence
+            bounds = Rect(left, top, right, bottom)
         )
     }
 

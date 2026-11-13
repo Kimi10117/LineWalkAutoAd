@@ -230,21 +230,31 @@ class FloatingOverlayAndLoggingRealTest {
         assertTrue("Attempt 2 must apply micro-calibration offset", closeAttempt2.centerY() != closeFold.centerY())
 
         // 4. Three-button navigation bar protection
-        val viewportWith3Btn = com.linewalk.autoad.vision.ScreenViewportCalibrator.ViewportMetrics(
+        val navBarOcr = listOf(
+            com.linewalk.autoad.vision.OcrItem("集點", android.graphics.Rect(80, 1660, 200, 1730))
+        )
+        val viewportWith3Btn = com.linewalk.autoad.vision.ScreenViewportCalibrator.detectViewport(
             sw = 1080,
             sh = 1920,
-            aspectRatio = 1920f / 1080f,
-            hasThreeButtonNavBar = true,
-            systemNavBarTopY = (1920 * 0.922f).toInt(),
-            effectiveBottomY = (1920 * 0.922f).toInt()
+            screenBitmap = null,
+            ocrItems = navBarOcr
         )
+        assertTrue("3-button nav bar screen must be detected", viewportWith3Btn.hasThreeButtonNavBar)
         assertTrue(
             "Click at y=1850 on 3-button nav bar screen must be blocked",
-            com.linewalk.autoad.vision.ScreenViewportCalibrator.isInsideThreeButtonNavBarZone(540, 1850, viewportWith3Btn)
+            com.linewalk.autoad.vision.ScreenViewportCalibrator.isInsideThreeButtonNavBarZone(
+                1850,
+                1920,
+                ocrItems = navBarOcr
+            )
         )
         assertFalse(
             "Click at y=1680 (in-app tab bar) must NOT be blocked",
-            com.linewalk.autoad.vision.ScreenViewportCalibrator.isInsideThreeButtonNavBarZone(540, 1680, viewportWith3Btn)
+            com.linewalk.autoad.vision.ScreenViewportCalibrator.isInsideThreeButtonNavBarZone(
+                1680,
+                1920,
+                ocrItems = navBarOcr
+            )
         )
     }
 }

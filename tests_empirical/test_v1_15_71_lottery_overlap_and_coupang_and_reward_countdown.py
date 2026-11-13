@@ -156,7 +156,12 @@ def test_sbrowser_fast_return():
     src = engine_src()
     assert "com.sec.android.app.sbrowser" in src
     assert "externalAppTicks >= 2 && isBrowserOrStore" in src
-    assert 'val targetPkg = config.targetGamePackages.firstOrNull { it != "jp.naver.line.android" } ?: "com.linecorp.LGWKTW"' in src
+    assert "val targetPkg = resolvePreferredGamePackage(service)" in src
+    idx = src.index("internal fun resolvePreferredGamePackage(")
+    end_idx = src.index("\n    }", idx) + 6
+    resolver_body = src[idx:end_idx]
+    assert "config.targetGamePackages" in resolver_body
+    assert '?: "com.linecorp.LGWKTW"' in resolver_body
 
 
 # ---------------------------------------------------------------------------

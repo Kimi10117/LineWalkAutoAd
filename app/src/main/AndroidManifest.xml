@@ -5,7 +5,7 @@
     <!-- 檢查 GitHub Releases 官方版本更新所需網路權限 -->
     <uses-permission android:name="android.permission.INTERNET" />
 
-    <!-- 懸浮控制窗與手機端即時框選取樣所需權限 -->
+    <!-- 懸浮控制窗所需權限 -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
@@ -32,7 +32,7 @@
         android:theme="@style/Theme.LineWalkAutoAd"
         tools:targetApi="34">
 
-        <!-- 主設定與範本管理畫面 -->
+        <!-- 主設定與狀態監控畫面 -->
         <activity
             android:name=".ui.MainActivity"
             android:exported="true"
@@ -57,7 +57,7 @@
                 android:resource="@xml/accessibility_service_config" />
         </service>
 
-        <!-- 遊戲內懸浮控制窗與即時框選取樣服務 -->
+        <!-- 遊戲內懸浮控制窗控制服務 -->
         <service
             android:name=".ui.FloatingOverlayService"
             android:exported="false"

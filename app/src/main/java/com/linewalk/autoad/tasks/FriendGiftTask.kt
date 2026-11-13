@@ -547,21 +547,29 @@ class FriendGiftTask {
      * 取得頂部【排行榜】子分頁標籤座標 (x ≈ 0.08f..0.32f, y ≈ 0.10f..0.145f)：
      * 當誤入【好友清單】時，點擊此處立即切換回【排行榜】進行送禮！
      */
-    fun getLeaderboardTabRect(sw: Int, sh: Int, ocrItems: List<OcrItem> = emptyList()): Rect {
+    fun getLeaderboardTabRect(
+        sw: Int,
+        sh: Int,
+        ocrItems: List<OcrItem> = emptyList(),
+        screenBitmap: Bitmap? = null
+    ): Rect {
+        val vp = ScreenViewportCalibrator.detectViewport(sw, sh, screenBitmap, ocrItems)
         val ocrTab = ocrItems.firstOrNull { item ->
-            val cy = item.bounds.centerY().toFloat() / sh
-            val cx = item.bounds.centerX().toFloat() / sw
+            val cy = item.bounds.centerY()
+            val cx = item.bounds.centerX()
             val t = item.text.trim()
-            cy in 0.08f..0.16f && cx in 0.05f..0.40f && t.contains("排行榜")
+            cy in vp.mapContentY(0.08f)..vp.mapContentY(0.16f) &&
+                cx in vp.mapContentX(0.05f)..vp.mapContentX(0.40f) &&
+                t.contains("排行榜")
         }
         if (ocrTab != null) {
             return ocrTab.bounds
         }
         return Rect(
-            (sw * 0.08f).toInt(),
-            (sh * 0.10f).toInt(),
-            (sw * 0.32f).toInt(),
-            (sh * 0.145f).toInt()
+            vp.mapContentX(0.08f),
+            vp.mapContentY(0.10f),
+            vp.mapContentX(0.32f),
+            vp.mapContentY(0.145f)
         )
     }
 
@@ -570,29 +578,19 @@ class FriendGiftTask {
      * 優先透過 OCR 鎖定文字本體，備援座標透過 ScreenViewportCalibrator 自動適應 22:9/21:9/16:9 與傳統三大金剛導覽列
      */
     fun getBottomFriendsTabRect(sw: Int, sh: Int, ocrItems: List<OcrItem> = emptyList(), screenBitmap: Bitmap? = null): Rect {
+        val vp = ScreenViewportCalibrator.detectViewport(sw, sh, screenBitmap, ocrItems)
         val ocrMatch = ocrItems.firstOrNull { item ->
-            val cy = item.bounds.centerY().toFloat() / sh
-            val cx = item.bounds.centerX().toFloat() / sw
+            val cy = item.bounds.centerY()
+            val cx = item.bounds.centerX()
             val t = item.text.replace(" ", "")
-            cy > 0.80f && cx in 0.20f..0.55f &&
-            t.contains("好友") && !t.contains("邀請") && !t.contains("被") && !t.contains("名單") && t.length <= 4
+            cy > vp.mapContentY(0.80f) &&
+                cx in vp.mapContentX(0.20f)..vp.mapContentX(0.55f) &&
+                t.contains("好友") && !t.contains("邀請") && !t.contains("被") && !t.contains("名單") && t.length <= 4
         }
         if (ocrMatch != null) {
             return ocrMatch.bounds
         }
-        val vp = ScreenViewportCalibrator.detectViewport(sw, sh, screenBitmap, ocrItems)
-        val targetX = (sw * 0.375f).toInt()
-        val aspect = vp.contentHeight.toFloat() / kotlin.math.max(1, sw)
-        val targetY = if (vp.hasThreeButtonNavBar) {
-            (vp.effectiveBottomY - sh * 0.032f).toInt()
-        } else if (aspect >= 2.15f) {
-            (sh * 0.945f).toInt()
-        } else {
-            (sh * 0.910f).toInt()
-        }
-        val halfW = (sw * 0.08f).toInt()
-        val halfH = (sh * 0.020f).toInt().coerceAtLeast(24)
-        return Rect(targetX - halfW, targetY - halfH, targetX + halfW, targetY + halfH)
+        return buildBottomNavTabRect(vp, 0.375f)
     }
 
     /**
@@ -600,27 +598,34 @@ class FriendGiftTask {
      * 優先透過 OCR 鎖定文字本體，備援座標透過 ScreenViewportCalibrator 自動適應 22:9/21:9/16:9 與傳統三大金剛導覽列
      */
     fun getBottomMainTabRect(sw: Int, sh: Int, ocrItems: List<OcrItem> = emptyList(), screenBitmap: Bitmap? = null): Rect {
+        val vp = ScreenViewportCalibrator.detectViewport(sw, sh, screenBitmap, ocrItems)
         val ocrMatch = ocrItems.firstOrNull { item ->
-            val cy = item.bounds.centerY().toFloat() / sh
-            val cx = item.bounds.centerX().toFloat() / sw
+            val cy = item.bounds.centerY()
+            val cx = item.bounds.centerX()
             val t = item.text.replace(" ", "")
-            cy > 0.80f && cx < 0.30f && (t == "集點" || (t.contains("集點") && t.length <= 4))
+            cy > vp.mapContentY(0.80f) &&
+                cx < vp.mapContentX(0.30f) &&
+                (t == "集點" || (t.contains("集點") && t.length <= 4))
         }
         if (ocrMatch != null) {
             return ocrMatch.bounds
         }
-        val vp = ScreenViewportCalibrator.detectViewport(sw, sh, screenBitmap, ocrItems)
-        val targetX = (sw * 0.125f).toInt()
-        val aspect = vp.contentHeight.toFloat() / kotlin.math.max(1, sw)
+        return buildBottomNavTabRect(vp, 0.125f)
+    }
+
+    /** 統一計算底部導覽列分頁熱區，支援三大金剛導覽列、各長寬比與摺疊機左右黑邊畫布 */
+    private fun buildBottomNavTabRect(vp: ScreenViewportCalibrator.ViewportMetrics, xRatio: Float): Rect {
+        val targetX = vp.mapContentX(xRatio)
+        val aspect = vp.contentHeight.toFloat() / kotlin.math.max(1, vp.contentWidth)
         val targetY = if (vp.hasThreeButtonNavBar) {
-            (vp.effectiveBottomY - sh * 0.032f).toInt()
+            vp.mapContentY(0.966f)
         } else if (aspect >= 2.15f) {
-            (sh * 0.945f).toInt()
+            vp.mapContentY(0.945f)
         } else {
-            (sh * 0.910f).toInt()
+            vp.mapContentY(0.910f)
         }
-        val halfW = (sw * 0.08f).toInt()
-        val halfH = (sh * 0.020f).toInt().coerceAtLeast(24)
+        val halfW = (vp.contentWidth * 0.08f).toInt().coerceAtLeast(4)
+        val halfH = (vp.contentHeight * 0.020f).toInt().coerceAtLeast(4)
         return Rect(targetX - halfW, targetY - halfH, targetX + halfW, targetY + halfH)
     }
 }

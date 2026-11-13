@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.Rect
 import com.linewalk.autoad.config.AppConfig
 import com.linewalk.autoad.vision.OcrItem
+import com.linewalk.autoad.vision.OcrRecognizer
 import com.linewalk.autoad.vision.ScreenViewportCalibrator
 import com.linewalk.autoad.vision.TemplateMatcher
 
@@ -153,7 +154,10 @@ class BingoTask {
             val cy = item.bounds.centerY().toFloat() / sh
             val cx = item.bounds.centerX().toFloat() / sw
             val t = item.text.trim()
-            cy in 0.08f..0.18f && cx > 0.80f && (
+            val hasBait = OcrRecognizer.AD_BAIT_PROMO_KEYWORDS.any { k ->
+                t.replace(" ", "").contains(k.replace(" ", ""), ignoreCase = true)
+            }
+            !hasBait && cy in 0.08f..0.18f && cx > 0.80f && (
                 t.equals("X", ignoreCase = true) ||
                 t.equals("×") ||
                 t.equals("x") ||
@@ -173,6 +177,7 @@ class BingoTask {
     ): Rect? {
         val sh = screenBitmap.height
         val sw = screenBitmap.width
+        val vp = ScreenViewportCalibrator.detectViewport(sw, sh, screenBitmap, ocrItems)
 
         // 0A. 若已出現「今日上限」、「已達到今日上限」、「9/9」，代表今日無法再開啟賓果格
         val hasReachedLimit = ocrItems.any { item ->
@@ -190,7 +195,10 @@ class BingoTask {
         val match = ocrItems.firstOrNull { item ->
             val cy = item.bounds.centerY()
             val t = item.text.replace(" ", "")
-            cy in (sh * 0.54f).toInt()..(sh * 0.74f).toInt() &&
+            val hasBait = OcrRecognizer.AD_BAIT_PROMO_KEYWORDS.any { k ->
+                t.contains(k.replace(" ", ""), ignoreCase = true)
+            }
+            !hasBait && cy in vp.mapContentY(0.54f)..vp.mapContentY(0.74f) &&
             (t.contains("立即開啟") || t.contains("開啟賓果格") || t.contains("開啟賓果") || t.contains("立即開")) &&
             !t.contains("還有") && !standardTimeRegex.containsMatchIn(t) && !chineseTimeRegex.containsMatchIn(t) &&
             !t.contains("今日上限") && !t.contains("9/9")
@@ -205,13 +213,14 @@ class BingoTask {
         // 2. 2D 亮橘色長條按鈕區塊聚類偵測 (#FF8C00 ~ #FFA500: r > 190 && g in 100..195 && b < 70)
         // 搜尋 y in 0.56f..0.72f, x in 0.16f..0.84f
         val orangePts = mutableListOf<android.graphics.Point>()
-        val yStart = (sh * 0.56f).toInt()
-        val yEnd = (sh * 0.72f).toInt()
-        val xStart = (sw * 0.16f).toInt()
-        val xEnd = (sw * 0.84f).toInt()
+        val yStart = vp.mapContentY(0.56f)
+        val yEnd = vp.mapContentY(0.72f)
+        val xStart = vp.mapContentX(0.16f)
+        val xEnd = vp.mapContentX(0.84f)
+        val scanStep = maxOf(2, vp.contentWidth / 360)
 
-        for (y in yStart..yEnd step 3) {
-            for (x in xStart..xEnd step 3) {
+        for (y in yStart..yEnd step scanStep) {
+            for (x in xStart..xEnd step scanStep) {
                 val c = screenBitmap.getPixel(x, y)
                 val r = (c shr 16) and 0xFF
                 val g = (c shr 8) and 0xFF
@@ -229,13 +238,16 @@ class BingoTask {
             val maxY = orangePts.maxOf { it.y }
             val btnW = maxX - minX
             val btnH = maxY - minY
-            if (btnW > sw * 0.35f && btnH in 15..(sh * 0.12f).toInt()) {
+            val minBtnH = maxOf(4, (vp.contentHeight * 0.006f).toInt())
+            val maxBtnH = (vp.contentHeight * 0.12f).toInt()
+            val yMargin = maxOf(2, (vp.contentHeight * 0.004f).toInt())
+            if (btnW > vp.contentWidth * 0.35f && btnH in minBtnH..maxBtnH) {
                 val cy = (minY + maxY) / 2
                 // 檢查按鈕本體區域內是否有冷卻倒數文字覆蓋
                 val hasCooldownOnButton = ocrItems.any { item ->
                     val icy = item.bounds.centerY()
                     val t = item.text.replace(" ", "")
-                    icy in (minY - 10)..(maxY + 10) && (
+                    icy in (minY - yMargin)..(maxY + yMargin) && (
                         chineseTimeRegex.containsMatchIn(t) ||
                         standardTimeRegex.containsMatchIn(t) ||
                         t.contains("還有") || t.contains("回復") || t.contains("還需")
@@ -264,24 +276,26 @@ class BingoTask {
     ): BingoRewardTarget? {
         val sh = screenBitmap.height
         val sw = screenBitmap.width
+        val vp = ScreenViewportCalibrator.detectViewport(sw, sh, screenBitmap, ocrItems)
 
         // 0. 若畫面上明確顯示「0 BINGO」（代表目前達成連線數為 0），100% 無任何連線獎勵可領！
         val isZeroBingo = ocrItems.any { item ->
             val cy = item.bounds.centerY()
             val t = item.text.replace(" ", "").uppercase()
-            cy in (sh * 0.45f).toInt()..(sh * 0.68f).toInt() && (t == "0BINGO" || t.startsWith("0BINGO"))
+            cy in vp.mapContentY(0.45f)..vp.mapContentY(0.68f) && (t == "0BINGO" || t.startsWith("0BINGO"))
         }
         if (isZeroBingo) return null
 
         val colCenters = listOf(0.18f, 0.39f, 0.61f, 0.82f)
+        val scanStep = maxOf(1, vp.contentWidth / 540)
 
         for ((colIndex, cx) in colCenters.withIndex()) {
             if (colIndex in claimedColumns) continue
 
-            val x1 = (sw * (cx - 0.10f)).toInt().coerceIn(0, sw - 1)
-            val x2 = (sw * (cx + 0.10f)).toInt().coerceIn(x1 + 1, sw)
-            val y1 = (sh * 0.74f).toInt().coerceIn(0, sh - 1)
-            val y2 = (sh * 0.90f).toInt().coerceIn(y1 + 1, sh)
+            val x1 = vp.mapContentX((cx - 0.10f).coerceAtLeast(0f))
+            val x2 = vp.mapContentX((cx + 0.10f).coerceAtMost(1f)).coerceAtLeast(x1 + 1)
+            val y1 = vp.mapContentY(0.74f)
+            val y2 = vp.mapContentY(0.90f).coerceAtLeast(y1 + 1)
 
             // 1. 檢查該欄是否有鮮紅/珊瑚粉紅 [▶ Get] 膠囊按鈕 (嚴格排除米黃色/淺粉紅糖果與金幣圖示 r≈250, g≈210, b≈160)
             val redPoints = mutableListOf<android.graphics.Point>()
@@ -296,9 +310,9 @@ class BingoTask {
                     if (r > 185 && g < 128 && b < 135 && (r - g) > 75 && (r - b) > 70) {
                         redPoints.add(android.graphics.Point(x, y))
                     }
-                    x += 2
+                    x += scanStep
                 }
-                y += 2
+                y += scanStep
             }
 
             if (redPoints.size >= 18) {
@@ -306,7 +320,9 @@ class BingoTask {
                 val maxX = redPoints.maxOf { it.x }
                 val minY = redPoints.minOf { it.y }
                 val maxY = redPoints.maxOf { it.y }
-                if (maxX - minX >= (sw * 0.06f).toInt() && maxY - minY in 8..(sh * 0.085f).toInt()) {
+                val minBtnH = maxOf(3, (vp.contentHeight * 0.0033f).toInt())
+                val maxBtnH = (vp.contentHeight * 0.085f).toInt()
+                if (maxX - minX >= (vp.contentWidth * 0.06f).toInt() && maxY - minY in minBtnH..maxBtnH) {
                     return BingoRewardTarget(colIndex, "紅色獎勵鈕(欄${colIndex + 1})", Rect(minX, minY, maxX, maxY))
                 }
             }
@@ -315,7 +331,10 @@ class BingoTask {
             val colOcr = ocrItems.firstOrNull { item ->
                 val icx = item.bounds.centerX()
                 val icy = item.bounds.centerY()
-                icx in x1..x2 && icy in y1..y2 && (
+                val hasBait = OcrRecognizer.AD_BAIT_PROMO_KEYWORDS.any { k ->
+                    item.text.replace(" ", "").contains(k.replace(" ", ""), ignoreCase = true)
+                }
+                !hasBait && icx in x1..x2 && icy in y1..y2 && (
                     item.text.contains("Get", ignoreCase = true) ||
                     item.text.contains("Cet", ignoreCase = true) ||
                     item.text.contains("Qet", ignoreCase = true) ||
@@ -367,18 +386,24 @@ class BingoTask {
     /**
      * 主畫面上的「賓果」圖示按鈕熱區 (第 1 顆，y ≈ 0.42f)
      */
-    fun getMainScreenBingoIconRect(sw: Int, sh: Int, ocrItems: List<OcrItem>): Rect {
+    fun getMainScreenBingoIconRect(
+        sw: Int,
+        sh: Int,
+        ocrItems: List<OcrItem>,
+        screenBitmap: Bitmap? = null
+    ): Rect {
+        val vp = ScreenViewportCalibrator.detectViewport(sw, sh, screenBitmap, ocrItems)
         val match = ocrItems.firstOrNull { item ->
             val cy = item.bounds.centerY()
-            cy in (sh * 0.38f).toInt()..(sh * 0.46f).toInt() &&
-            item.bounds.centerX() < (sw * 0.25f).toInt() &&
+            cy in vp.mapContentY(0.38f)..vp.mapContentY(0.46f) &&
+            item.bounds.centerX() < vp.mapContentX(0.25f) &&
             item.text.contains("賓果")
         }
         return match?.bounds ?: Rect(
-            (sw * 0.05f).toInt(),
-            (sh * 0.38f).toInt(),
-            (sw * 0.20f).toInt(),
-            (sh * 0.46f).toInt()
+            vp.mapContentX(0.05f),
+            vp.mapContentY(0.38f),
+            vp.mapContentX(0.20f),
+            vp.mapContentY(0.46f)
         )
     }
 }

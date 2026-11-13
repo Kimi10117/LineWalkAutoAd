@@ -35,6 +35,10 @@ class AutoAdAccessibilityService : AccessibilityService() {
     @Volatile
     var lastCapturedHeight: Int = 0
 
+    @Volatile
+    var lastBackRejectReason: String = ""
+        private set
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         _instance.value = this
@@ -174,9 +178,10 @@ class AutoAdAccessibilityService : AccessibilityService() {
 
             // R1: 頂部通知與即時動態安全禁區 (嚴格保護螢幕中央 x in 18%..82% 與 y < 8% 的通知/動態島區域，放行兩側角落廣告關閉/略過鈕)
             val isCenterNotificationIslandZone = targetX in (maxW * 0.18f)..(maxW * 0.82f) && targetY < maxH * 0.08f
-            val isTopStatusBarEdge = targetY < maxH * 0.038f
+            val statusBarSafeHeight = com.linewalk.autoad.vision.ScreenViewportCalibrator.getStatusBarSafeHeight(maxW, maxH)
+            val isTopStatusBarEdge = targetY < statusBarSafeHeight.toFloat()
             if (!allowTopSafeZone && (isCenterNotificationIslandZone || isTopStatusBarEdge)) {
-                Log.w(TAG, "[防護禁區] 攔截危險頂部中央通知/即時動態點擊 (targetX=$targetX, targetY=$targetY)，已拒絕派發手勢！")
+                Log.w(TAG, "[防護禁區] 攔截危險頂部中央通知/即時動態點擊 (targetX=$targetX, targetY=$targetY, safeH=$statusBarSafeHeight)，已拒絕派發手勢！")
                 if (cont.isActive) cont.resume(false)
                 return@suspendCancellableCoroutine
             }
@@ -250,18 +255,30 @@ class AutoAdAccessibilityService : AccessibilityService() {
 
     /**
      * 安全發送單次系統返回鍵：
-     * 1. 合法第三方廣告容器絕對防護：無論 allowInGame 為何，無條件嚴禁發送系統返回鍵，避免中斷廣告播放或遺失獎勵！
+     * 1. 合法第三方廣告容器常態防護：預設 forceEscapeAdPackage = false 時嚴禁發送系統返回鍵以免中斷廣告或遺失獎勵；
+     *    僅當 Watchdog 計時逾時且明確傳入 forceEscapeAdPackage = true 時，記錄 [計時強退] 警告並突破容器防護派發返回鍵。
      * 2. 散步趣遊戲本體防護：非 allowInGame 時嚴禁發送返回鍵以免退出散步趣回到手機桌面；僅在內部選單放行。
      * 3. 強制至少 minIntervalMs (預設 2000ms) 冷卻間隔，防止連續快速發送返回鍵擊穿介面。
-     * 4. 單次發送 (SINGLE BACK KEY ONLY)，杜絕退回手機桌面。
+     * 4. 單次發送 (SINGLE BACK KEY ONLY)，並於遭拒或系統派發失敗時將原因寫入 lastBackRejectReason。
      */
-    fun safeNavigateBack(minIntervalMs: Long = 2000L, allowInGame: Boolean = false): Boolean {
+    fun safeNavigateBack(
+        minIntervalMs: Long = 2000L,
+        allowInGame: Boolean = false,
+        forceEscapeAdPackage: Boolean = false
+    ): Boolean {
         val fg = getForegroundPackageName()
+        val fgLabel = fg ?: "unknown"
+        var bypassingAdContainer = false
 
-        // 1. 合法第三方廣告容器絕對防護：無論 allowInGame 為何，嚴禁發送返回鍵以免中斷廣告
+        // 1. 合法第三方廣告容器防護：預設禁止發送返回鍵以免中斷廣告；僅計時強退時放行
         if (com.linewalk.autoad.config.AppConfig.isAdPackage(fg)) {
-            Log.w(TAG, "目前前景為合法第三方廣告容器 ($fg)，絕對禁止發送系統返回鍵以免中斷廣告！")
-            return false
+            if (!forceEscapeAdPackage) {
+                lastBackRejectReason = "AD_CONTAINER_PROTECT($fgLabel)"
+                Log.w(TAG, "目前前景為合法第三方廣告容器 ($fgLabel)，絕對禁止發送系統返回鍵以免中斷廣告！")
+                return false
+            }
+            bypassingAdContainer = true
+            Log.w(TAG, "[計時強退] 廣告等待逾時突破容器防護，準備對第三方廣告容器 ($fgLabel) 強制派發系統返回鍵")
         }
 
         // 2. 遊戲本體選單防護：非 allowInGame 時嚴禁發送返回鍵
@@ -271,18 +288,32 @@ class AutoAdAccessibilityService : AccessibilityService() {
             fg == "com.linecorp.LGWALK" ||
             fg == "com.linecorp.LGWKTW"
         )) {
-            Log.w(TAG, "目前前景為散步趣 ($fg)，禁止發送系統返回鍵以免退出散步趣！")
+            lastBackRejectReason = "GAME_PROTECT($fgLabel)"
+            Log.w(TAG, "目前前景為散步趣 ($fgLabel)，禁止發送系統返回鍵以免退出散步趣！")
             return false
         }
 
         val now = System.currentTimeMillis()
-        if (now - lastBackActionTimeMs < minIntervalMs) {
-            Log.d(TAG, "返回鍵冷卻中 (${now - lastBackActionTimeMs}ms < ${minIntervalMs}ms)，跳過派發")
+        val elapsedMs = now - lastBackActionTimeMs
+        if (elapsedMs < minIntervalMs) {
+            lastBackRejectReason = "COOLDOWN(${elapsedMs}ms<${minIntervalMs}ms)"
+            Log.d(TAG, "返回鍵冷卻中 (${elapsedMs}ms < ${minIntervalMs}ms)，跳過派發")
             return false
         }
         lastBackActionTimeMs = now
-        Log.i(TAG, "派發單次安全系統返回鍵 (GLOBAL_ACTION_BACK), 前景: $fg")
-        return performGlobalAction(GLOBAL_ACTION_BACK)
+        if (bypassingAdContainer) {
+            Log.w(TAG, "[計時強退] 突破容器防護派發單次系統返回鍵 (GLOBAL_ACTION_BACK), 前景: $fgLabel")
+        } else {
+            Log.i(TAG, "派發單次安全系統返回鍵 (GLOBAL_ACTION_BACK), 前景: $fgLabel")
+        }
+        val dispatched = performGlobalAction(GLOBAL_ACTION_BACK)
+        if (!dispatched) {
+            lastBackRejectReason = "SYSTEM_GLOBAL_ACTION_FAILED($fgLabel)"
+            Log.w(TAG, "系統 performGlobalAction(GLOBAL_ACTION_BACK) 派發失敗, 前景: $fgLabel")
+        } else {
+            lastBackRejectReason = ""
+        }
+        return dispatched
     }
 
     /**
@@ -291,13 +322,22 @@ class AutoAdAccessibilityService : AccessibilityService() {
      */
     fun navigateBackFromExternalSocialApp(minIntervalMs: Long = 600L): Boolean {
         val now = System.currentTimeMillis()
-        if (now - lastBackActionTimeMs < minIntervalMs) {
+        val elapsedMs = now - lastBackActionTimeMs
+        if (elapsedMs < minIntervalMs) {
+            lastBackRejectReason = "COOLDOWN(${elapsedMs}ms<${minIntervalMs}ms)"
             return false
         }
         lastBackActionTimeMs = now
         val fg = getForegroundPackageName()
-        Log.i(TAG, "派發外部社群應用返回鍵 (GLOBAL_ACTION_BACK), 前景: $fg")
-        return performGlobalAction(GLOBAL_ACTION_BACK)
+        val fgLabel = fg ?: "unknown"
+        Log.i(TAG, "派發外部社群應用返回鍵 (GLOBAL_ACTION_BACK), 前景: $fgLabel")
+        val dispatched = performGlobalAction(GLOBAL_ACTION_BACK)
+        if (!dispatched) {
+            lastBackRejectReason = "SYSTEM_GLOBAL_ACTION_FAILED($fgLabel)"
+        } else {
+            lastBackRejectReason = ""
+        }
+        return dispatched
     }
 
     fun navigateBack(allowInGame: Boolean = false): Boolean {

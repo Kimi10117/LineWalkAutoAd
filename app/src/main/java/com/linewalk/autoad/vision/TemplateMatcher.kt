@@ -32,10 +32,14 @@ class TemplateMatcher {
     ): TemplateMatchResult? {
         val w = screenBitmap.width
         val h = screenBitmap.height
-        val startY = (h * yStartRatio).toInt().coerceIn(0, h - 1)
-        val endY = (h * yEndRatio).toInt().coerceIn(startY + 1, h - 1)
-        val startX = (w * 0.20f).toInt()
-        val endX = (w * 0.80f).toInt()
+        val vp = ScreenViewportCalibrator.detectViewport(w, h, screenBitmap)
+        val startY = vp.mapContentY(yStartRatio)
+        val endY = vp.mapContentY(yEndRatio).coerceAtLeast(startY + 1)
+        val startX = vp.mapContentX(0.20f)
+        val endX = vp.mapContentX(0.80f).coerceAtLeast(startX + 1)
+        val stepX = max(2, vp.contentWidth / 135)
+        val stepY = max(2, vp.contentHeight / 600)
+        val minMatchedRows = max(2, (vp.contentHeight * 0.0012f).toInt())
 
         var minPinkY = Int.MAX_VALUE
         var maxPinkY = Int.MIN_VALUE
@@ -55,21 +59,21 @@ class TemplateMatcher {
                     pinkPixels++
                 }
                 totalSampled++
-                x += 8
+                x += stepX
             }
             if (totalSampled > 0 && (pinkPixels.toFloat() / totalSampled) >= 0.35f) {
                 if (y < minPinkY) minPinkY = y
                 if (y > maxPinkY) maxPinkY = y
                 matchedRowCount++
             }
-            y += 4
+            y += stepY
         }
 
-        if (matchedRowCount >= 3 && maxPinkY > minPinkY) {
+        if (matchedRowCount >= minMatchedRows && maxPinkY > minPinkY) {
             val rect = Rect(
-                (w * 0.25f).toInt(),
+                vp.mapContentX(0.25f),
                 minPinkY,
-                (w * 0.75f).toInt(),
+                vp.mapContentX(0.75f),
                 maxPinkY
             )
             return TemplateMatchResult(
@@ -298,7 +302,7 @@ class TemplateMatcher {
 
         if (matchedRows >= 3 && maxPinkY > 0) {
             val targetCenterY = (maxPinkY + (h * 0.032f).toInt()).coerceAtMost((h * 0.90f).toInt())
-            val halfBtnHeight = maxOf(22, (h * 0.024f).toInt())
+            val halfBtnHeight = maxOf(4, (h * 0.024f).toInt())
             val rect = Rect(
                 (w * 0.15f).toInt(),
                 targetCenterY - halfBtnHeight,
@@ -351,7 +355,7 @@ class TemplateMatcher {
                 segCounts[tabIdx] = darkInSeg
             }
 
-            val minPointsThreshold = (quarterW / 2 * 0.35f).toInt().coerceAtLeast(8)
+            val minPointsThreshold = (quarterW / 2 * 0.35f).toInt().coerceAtLeast(max(2, (quarterW * 0.03f).toInt()))
             val maxTab = segCounts.indices.maxByOrNull { segCounts[it] } ?: -1
             if (maxTab >= 0 && segCounts[maxTab] >= minPointsThreshold) {
                 val secondMax = segCounts.indices
@@ -439,7 +443,7 @@ class TemplateMatcher {
                 segCounts[tabIdx] = darkInSeg
             }
 
-            val minPointsThreshold = (quarterW / 2 * 0.35f).toInt().coerceAtLeast(8)
+            val minPointsThreshold = (quarterW / 2 * 0.35f).toInt().coerceAtLeast(max(2, (quarterW * 0.03f).toInt()))
             val maxTab = segCounts.indices.maxByOrNull { segCounts[it] } ?: -1
             if (maxTab >= 0 && segCounts[maxTab] >= minPointsThreshold) {
                 val secondMax = segCounts.indices
@@ -658,26 +662,35 @@ class TemplateMatcher {
     ): TemplateMatchResult? = withContext(Dispatchers.Default) {
         val sw = screenBitmap.width
         val sh = screenBitmap.height
-        val r = max(5, (sw * 0.018f).toInt())
-        val rHalf = max(3, (r * 0.65f).toInt())
-        val step = max(2, sw / 240)
-        val tol = max(1, sw / 360)
+        val vp = ScreenViewportCalibrator.detectViewport(sw, sh, screenBitmap)
+        val cw = vp.contentWidth
+        val ch = vp.contentHeight
+        val statusBarSafeH = ScreenViewportCalibrator.getStatusBarSafeHeight(sw, sh, screenBitmap)
 
-        val topLimitY = max((sh * 0.082f).toInt(), 60)
+        val r = max(2, (cw * 0.018f).toInt())
+        val rHalf = max(1, (r * 0.65f).toInt())
+        val step = max(1, cw / 240)
+        val tol = max(1, cw / 360)
+
+        val topLimitY = max(vp.mapContentY(0.082f), statusBarSafeH + max(2, (ch * 0.012f).toInt()))
         val searchZones = mutableListOf(
             // 右上角 (廣告標準關閉鈕位置，避開最頂部系統狀態列與通知列 y < 8.2%，涵蓋 y in 8.2%..16%)
-            Rect((sw * 0.75f).toInt(), topLimitY, (sw * 0.98f).toInt(), (sh * 0.16f).toInt())
+            Rect(vp.mapContentX(0.75f), topLimitY, vp.mapContentX(0.98f), vp.mapContentY(0.16f))
         )
         // 右上角高位與預覽區 (專門應對 InMobi / AdMob / AppLovin / Meta Web Preview 等全螢幕廣告位於 y in 4.8%..16% 的關閉 X 鈕)
-        val rightUpperTopLimitY = max((sh * 0.048f).toInt(), 48)
-        val rightUpperBottomLimitY = max((sh * 0.16f).toInt(), topLimitY)
-        searchZones.add(Rect((sw * 0.75f).toInt(), rightUpperTopLimitY, (sw * 0.98f).toInt(), rightUpperBottomLimitY))
+        val rightUpperTopLimitY = max(vp.mapContentY(0.048f), max(1, (ch * 0.020f).toInt()))
+        val rightUpperBottomLimitY = max(vp.mapContentY(0.16f), topLimitY)
+        searchZones.add(Rect(vp.mapContentX(0.75f), rightUpperTopLimitY, vp.mapContentX(0.98f), rightUpperBottomLimitY))
 
         if (includeLeftZone) {
             // 左上角 (Meta Sponsored 頂部橫幅、CACO 輪播/插頁廣告與全比例 16:9~22:9 左上角關閉鈕位置，涵蓋 x in 2.0%..19.5% 與 y in 1.4%..16.0%)
-            val leftTopLimitY = max((sh * 0.014f).toInt(), 18)
-            val leftBottomLimitY = (sh * 0.160f).toInt()
-            searchZones.add(Rect((sw * 0.020f).toInt(), leftTopLimitY, (sw * 0.195f).toInt(), leftBottomLimitY))
+            val leftTopLimitY = max(vp.mapContentY(0.014f), max(1, (ch * 0.008f).toInt()))
+            val leftBottomLimitY = vp.mapContentY(0.160f)
+            if (vp.effectiveLeftX == 0 && vp.effectiveRightX == sw) {
+                searchZones.add(Rect((sw * 0.020f).toInt(), leftTopLimitY, (sw * 0.195f).toInt(), leftBottomLimitY))
+            } else {
+                searchZones.add(Rect(vp.mapContentX(0.020f), leftTopLimitY, vp.mapContentX(0.195f), leftBottomLimitY))
+            }
         }
 
         var bestCandidate: TemplateMatchResult? = null
@@ -736,13 +749,13 @@ class TemplateMatcher {
                         }
                     } else if (zone.left < sw / 2) {
                         // 左上角 (Meta Sponsored 橫幅與輪播廣告)：頂部限制為 1.4% sh 或 16px，覆蓋 y ≈ 2.8% 與 6.5% 的 Meta 關閉按鈕
-                        if (absY - r < max((sh * 0.014f).toInt(), 16)) {
+                        if (absY - r < max(vp.mapContentY(0.014f), max(1, (ch * 0.007f).toInt()))) {
                             cx += step
                             continue
                         }
                     } else {
                         // 右上角高位/預覽區 (InMobi / AdMob / AppLovin / Meta 網頁預覽等)：覆蓋 y >= 4.0% sh 的關閉按鈕
-                        if (absY - r < max((sh * 0.040f).toInt(), 40)) {
+                        if (absY - r < max(vp.mapContentY(0.040f), max(1, (ch * 0.018f).toInt()))) {
                             cx += step
                             continue
                         }
@@ -833,14 +846,17 @@ class TemplateMatcher {
         val sw = screenBitmap.width
         val sh = screenBitmap.height
         // 嚴格排除 y < 4.2% 之頂部系統狀態列 (Wi-Fi、電量、訊號與靜音圖示)
-        val topLimitY = max((sh * 0.042f).toInt(), 45)
-        val bottomLimitY = (sh * 0.115f).toInt()
-        val leftLimitX = (sw * 0.72f).toInt()
-        val rightLimitX = (sw * 0.965f).toInt()
+        val vp = ScreenViewportCalibrator.detectViewport(sw, sh, screenBitmap)
+        val cw = vp.contentWidth
+        val ch = vp.contentHeight
+        val topLimitY = max(vp.mapContentY(0.042f), max(2, (ch * 0.019f).toInt()))
+        val bottomLimitY = vp.mapContentY(0.115f)
+        val leftLimitX = vp.mapContentX(0.72f)
+        val rightLimitX = vp.mapContentX(0.965f)
 
-        val rInner = max(4, (sw * 0.024f).toInt())
-        val rOuter = max(7, (sw * 0.042f).toInt())
-        val step = max(2, sw / 200)
+        val rInner = max(2, (cw * 0.024f).toInt())
+        val rOuter = max(4, (cw * 0.042f).toInt())
+        val step = max(1, cw / 200)
 
         val zw = rightLimitX - leftLimitX
         val zh = bottomLimitY - topLimitY
@@ -927,7 +943,7 @@ class TemplateMatcher {
                             if (innerMax > 175f && contrast > 85f) {
                                 if (contrast > bestScore) {
                                     bestScore = contrast
-                                    val boxRadius = rOuter + 4
+                                    val boxRadius = rOuter + max(2, (cw * 0.004f).toInt())
                                     bestCandidate = TemplateMatchResult(
                                         score = (contrast / 180f).coerceIn(0.85f, 0.99f),
                                         bounds = Rect(absX - boxRadius, absY - boxRadius, absX + boxRadius, absY + boxRadius),

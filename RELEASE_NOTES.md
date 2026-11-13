@@ -1,6 +1,45 @@
 # LINE 散步趣自動看廣告助手 (LineWalkAutoAd) 發布說明
 
 ## 版本資訊
+- 版本名稱：v1.15.80
+- 版本代碼：versionCode 113, versionName "1.15.80"
+- 發布類型：正式版本 (Release)
+
+---
+
+## 概述
+LineWalkAutoAd v1.15.80 聚焦「計時強退逃脫、動態視口適配、精準領取防誤觸、診斷日誌升級與介面精簡」。本版本徹底移除低效且具學習負擔的現場框選取樣介面，將日常實用控制（廣告卡死強退秒數 `40s ~ 90s`、巡邏掃描速度與僅看異常日誌過濾）直接整合於主畫面；同時針對第三方廣告鎖死、Meta 贊助廣告左上角關閉按鈕辨識、收禮物綠色領取膠囊像素驗證、不同寬高比裝置黑邊動態視口校準，以及供分析使用的狀態快照與雙座標診斷日誌進行全面升級。
+
+---
+
+## 具體更新與修復內容 (v1.15.80)
+
+### 1. 計時器驅動強退逃脫與安全返回診斷
+- 修正使用者手動暫停巡邏時協程取消（`CancellationException`）誤觸異常日誌的問題，並清除子對話框等待逾時的假異常紀錄，改以平穩控制日誌 `[控制] 使用者手動暫停巡邏（工作階段平穩停止）` 呈現。
+- 實作計時器驅動強制逃脫第三方廣告容器機制：整合有效看門狗秒數換算（`getEffectiveWatchdogLimitSec`）、強制帶出遊戲返回（`safeNavigateBack(..., forceEscapeAdPackage = true)` 與 `[計時強退]`）以及連續強退後強制切回首選遊戲套件（`ForceBringGameToFront`、`resolvePreferredGamePackage`），並於 `handleExternalAppGuard` 為 Google Play 試玩或略過導向保留約 2 秒緩衝保護。
+- 擴充 `safeNavigateBack` 拒絕原因診斷（`lastBackRejectReason` 涵蓋 `AD_CONTAINER_PROTECT`、`GAME_PROTECT`、`COOLDOWN`、`SYSTEM_GLOBAL_ACTION_FAILED`），僅於系統實際允許並執行返回動作後才寫入 `[觸發]` 日誌，杜絕 Meta 廣告介面下的假陽性返回紀錄。
+
+### 2. 收禮物像素雙門檻驗證與 Meta 贊助廣告關閉精準化
+- `ReceiveGiftTask` 新增活躍綠色「領取」膠囊像素偵測（`hasActiveGreenClaimCapsule`）與 OCR 已領取列雙重驗證（`isRowAlreadyClaimedByOcr`），並搭配動態視口內容座標換算（`vp.mapContentX` / `vp.mapContentY`），停止重複點擊已領取之禮盒列。
+- 針對 Meta 「Sponsored」贊助廣告優先啟用左上角幾何叉叉偵測（`detectCornerGeometricX`）並限制盲試次數（`sponsoredTopLeftProbeCount`）；高信心廣告關閉目標豁免座標黑名單（`isHighConfidenceAdTarget`），一般座標則放寬至 `nearbyClicks >= 4` 並套用隨螢幕寬度縮放之動態黑名單半徑（`getBlacklistRadiusPx`），同時修正 `redirectCount > 0` 與 `leftCornerRedirectCount` 邏輯以避免誤觸外部瀏覽器迴圈。
+
+### 3. 動態視口黑邊校準與誘餌廣告文字過濾
+- 新增 `ScreenViewportCalibrator` 與 `ViewportMetrics`，支援左右黑邊與有效頂底邊界掃描（`scanEffectiveTopY`、`scanHorizontalLetterboxBounds`）、系統狀態列安全高度查詢（`getStatusBarSafeHeight`）及分段線性內插子對話框關閉比例（`interpolateSubDialogCloseYRatio`），使範本比對、任務座標計算與無障礙點擊可隨裝置長寬比自動適配。
+- 於 `OcrRecognizer` 新增 `AD_BAIT_PROMO_KEYWORDS` 誘餌廣告關鍵字清單（如「開始遊戲」、「開始遊玩」、「輕鬆賺」、「立即玩」、「免費試玩」），並串接至 `NodeInspector`、`BingoTask` 與 `GameTask`，避免誤觸試玩廣告按鈕。
+
+### 4. AI 分析診斷日誌強化與導出資訊擴充
+- 新增手機狀態快照（`[狀態Snap]` / `buildPhoneStateSnapshot`）、停滯期 OCR 濃縮摘要（`formatStagnationOcrDigest`）及點擊框雙座標顯示（`formatRectForLog` 輸出像素與螢幕百分比 `@ (x, y | nx%, ny%)`）。
+- 擴充日誌匯出檔頭（包含螢幕規格、核心設定與工作階段摘要），並提供 `clearFullLogs()` 供即時清除日誌緩衝區。
+
+### 5. 全面拆除現場取樣介面與主畫面實用控制升級
+- 完全移除現場框選取樣功能與相關程式、資源檔（刪除 `TemplateStorage.kt`、`TemplateCropOverlay.kt`、`ic_crop.xml`、主畫面取樣卡片與 `launchTemplateCropper()`），並將 `refreshPermissionAndTemplateStatus()` 更名為 `refreshPermissionStatus()`。
+- 維持懸浮膠囊原有直覺的 `+` 展開／收合與拖曳體驗（不加入高學習成本手勢或教學彈窗）；膠囊預設縱向位置改以螢幕高度比例與 `dp` 換算（`dpToPx(96)` 下限），收合狀態同步顯示清晰廣告計時進度（`[廣告監控] <階段> Xs / Ys`）。
+- 主畫面卡片二新增「廣告卡死強制退回計時器」（`40s ~ 90s` 滑桿與 `-5s`/`+5s` 微調鈕，同步 `engine.config.maxAdWaitSeconds`）及「巡邏掃描速度」（極速 `1000ms` / 標準 `1200ms` / 省電 `1500ms`，同步 `engine.config.loopIntervalMs`）；卡片三新增僅供畫面檢視的「僅看異常／狀態」過濾核取方塊（匯出與複製仍保留完整日誌）與「清空日誌」按鈕。
+- `.github/workflows/build-apk.yml` 與 `app/build.gradle.kts` 同步更新發布標籤與版本至 `v1.15.80`（`versionCode 113`）。
+
+---
+
+## 版本資訊 (歷史版本: v1.15.79)
 - 版本名稱：v1.15.79
 - 版本代碼：versionCode 112, versionName "1.15.79"
 - 發布類型：正式版本 (Release)

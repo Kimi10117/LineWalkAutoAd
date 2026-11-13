@@ -34,12 +34,13 @@ class ReceiveGiftTask {
     /**
      * 右上角「禮物盒」圖示座標 (揚聲器與齒輪設定之間，常帶有紅點通知，主頁與好友頁皆通用)
      */
-    fun getHeaderGiftBoxRect(sw: Int, sh: Int): Rect {
+    fun getHeaderGiftBoxRect(sw: Int, sh: Int, screenBitmap: Bitmap? = null): Rect {
+        val vp = ScreenViewportCalibrator.detectViewport(sw, sh, screenBitmap)
         return Rect(
-            (sw * 0.835f).toInt(),
-            (sh * 0.045f).toInt(),
-            (sw * 0.885f).toInt(),
-            (sh * 0.080f).toInt()
+            vp.mapContentX(0.835f),
+            vp.mapContentY(0.045f),
+            vp.mapContentX(0.885f),
+            vp.mapContentY(0.080f)
         )
     }
 
@@ -51,7 +52,7 @@ class ReceiveGiftTask {
             val redDotRect = findHeaderGiftBoxRedDot(screenBitmap)
             if (redDotRect != null) return redDotRect
         }
-        return getHeaderGiftBoxRect(sw, sh)
+        return getHeaderGiftBoxRect(sw, sh, screenBitmap)
     }
 
     /**
@@ -66,10 +67,12 @@ class ReceiveGiftTask {
     private fun findHeaderGiftBoxRedDot(screenBitmap: Bitmap): Rect? {
         val sw = screenBitmap.width
         val sh = screenBitmap.height
-        val xStart = (sw * 0.868f).toInt().coerceIn(0, sw - 1)
-        val xEnd = (sw * 0.902f).toInt().coerceIn(xStart, sw - 1)
-        val yStart = (sh * 0.048f).toInt().coerceIn(0, sh - 1)
-        val yEnd = (sh * 0.062f).toInt().coerceIn(yStart, sh - 1)
+        val vp = ScreenViewportCalibrator.detectViewport(sw, sh, screenBitmap)
+        val xStart = vp.mapContentX(0.868f)
+        val xEnd = vp.mapContentX(0.902f).coerceAtLeast(xStart)
+        val yStart = vp.mapContentY(0.048f)
+        val yEnd = vp.mapContentY(0.062f).coerceAtLeast(yStart)
+        val minRedPixels = maxOf(2, (vp.contentWidth * vp.contentHeight) / 500000)
 
         var redCount = 0
         for (y in yStart..yEnd) {
@@ -81,8 +84,8 @@ class ReceiveGiftTask {
                 // 亮紅點特徵 (r > 210, g < 75, b < 80)
                 if (r > 210 && g < 75 && b < 80) {
                     redCount++
-                    if (redCount >= 5) {
-                        return getHeaderGiftBoxRect(sw, sh)
+                    if (redCount >= minRedPixels) {
+                        return getHeaderGiftBoxRect(sw, sh, screenBitmap)
                     }
                 }
             }
@@ -196,12 +199,87 @@ class ReceiveGiftTask {
      * 1. 【最高優先】實心綠色按鈕 [ 領取 ] (免看廣告，直接領取)
      * 2. 【次要優先】綠框播放按鈕 [ ▶ ] (需看廣告領取)
      */
+    /**
+     * 檢查目標按鈕區域內是否確實存在有效的 LINE 亮綠色膠囊按鈕像素（實心「領取」或綠框「▶」），
+     * 避免已領完的禮物列（按鈕消失或反灰為「已領取」）因「送來的禮物」或截止時間 OCR 被重複合成點擊。
+     */
+    fun hasActiveGreenClaimCapsule(screenBitmap: Bitmap, targetRect: Rect): Boolean {
+        val sw = screenBitmap.width
+        val sh = screenBitmap.height
+        if (sw <= 0 || sh <= 0 || targetRect.width() <= 0 || targetRect.height() <= 0) {
+            return false
+        }
+        val vp = ScreenViewportCalibrator.detectViewport(sw, sh, screenBitmap)
+        val minRightX = vp.mapContentX(0.60f)
+        val maxRightX = vp.mapContentX(0.96f)
+        val padX = maxOf(2, (vp.contentWidth * 0.015f).toInt())
+        val padY = maxOf(2, (targetRect.height() * 0.30f).toInt())
+        val scanLeft = maxOf(targetRect.left - padX, minRightX).coerceIn(0, sw - 1)
+        val scanRight = minOf(targetRect.right + padX, maxRightX).coerceIn(scanLeft + 1, sw)
+        val scanTop = (targetRect.top - padY).coerceIn(0, sh - 1)
+        val scanBottom = (targetRect.bottom + padY).coerceIn(scanTop + 1, sh)
+        val scanW = scanRight - scanLeft
+        val scanH = scanBottom - scanTop
+        if (scanW <= 2 || scanH <= 2) return false
+
+        val step = maxOf(1, minOf(scanW, scanH) / 48)
+        var greenCount = 0
+        var totalSampled = 0
+        var minGx = Int.MAX_VALUE
+        var maxGx = Int.MIN_VALUE
+
+        var y = scanTop
+        while (y < scanBottom) {
+            var x = scanLeft
+            while (x < scanRight) {
+                val c = screenBitmap.getPixel(x, y)
+                val r = (c shr 16) and 0xFF
+                val g = (c shr 8) and 0xFF
+                val b = c and 0xFF
+                if (g > 135 && g > r + 25 && g > b + 25) {
+                    greenCount++
+                    if (x < minGx) minGx = x
+                    if (x > maxGx) maxGx = x
+                }
+                totalSampled++
+                x += step
+            }
+            y += step
+        }
+
+        if (totalSampled == 0 || greenCount == 0) return false
+        val minGreenSamples = maxOf(4, totalSampled / 50)
+        val minGreenSpanW = maxOf(6, (scanW * 0.20f).toInt())
+        return greenCount >= minGreenSamples && (maxGx - minGx) >= minGreenSpanW
+    }
+
+    private fun isRowAlreadyClaimedByOcr(
+        rowCenterY: Int,
+        ocrItems: List<OcrItem>,
+        vp: ScreenViewportCalibrator.ViewportMetrics
+    ): Boolean {
+        val rowTolerance = maxOf(6, (vp.contentHeight * 0.025f).toInt())
+        val rightThresholdX = vp.mapContentX(0.55f)
+        return ocrItems.any { item ->
+            kotlin.math.abs(item.bounds.centerY() - rowCenterY) <= rowTolerance &&
+                item.bounds.centerX() > rightThresholdX &&
+                item.text.replace(" ", "").contains("已領")
+        }
+    }
+
+    /**
+     * 在「接收禮物」白底抽屜內尋找下一個可領取的禮物按鈕：
+     * 優先順序：
+     * 1. 【最高優先】實心綠色按鈕 [ 領取 ] (免看廣告，直接領取)
+     * 2. 【次要優先】綠框播放按鈕 [ ▶ ] (需看廣告領取)
+     */
     fun findNextClaimGiftButton(
         screenBitmap: Bitmap,
         ocrItems: List<OcrItem>
     ): ClaimGiftTarget? {
         val sh = screenBitmap.height
         val sw = screenBitmap.width
+        val vp = ScreenViewportCalibrator.detectViewport(sw, sh, screenBitmap, ocrItems)
 
         // 若確認為空抽屜狀態（尚未收到禮物），嚴禁尋找按鈕，避免誤點底部的推廣橫幅！
         if (hasEmptyDrawer(ocrItems)) {
@@ -209,10 +287,11 @@ class ReceiveGiftTask {
         }
 
         // 嚴格限定在白底禮物抽屜內部 (y <= 0.52f)，絕不可搜尋至 y > 0.52f 的綠色底層廣告橫幅！
-        val x1 = (sw * 0.60f).toInt().coerceIn(0, sw - 1)
-        val x2 = (sw * 0.95f).toInt().coerceIn(x1 + 1, sw)
-        val y1 = (sh * 0.25f).toInt().coerceIn(0, sh - 1)
-        val y2 = (sh * 0.52f).toInt().coerceIn(y1 + 1, sh)
+        val x1 = vp.mapContentX(0.60f).coerceIn(0, sw - 1)
+        val x2 = vp.mapContentX(0.95f).coerceIn(x1 + 1, sw)
+        val y1 = vp.mapContentY(0.25f).coerceIn(0, sh - 1)
+        val y2 = vp.mapContentY(0.52f).coerceIn(y1 + 1, sh)
+        val scanStep = maxOf(1, vp.contentWidth / 540)
 
         val greenPoints = mutableListOf<android.graphics.Point>()
         var y = y1
@@ -227,9 +306,9 @@ class ReceiveGiftTask {
                 if (g > 140 && g > r + 25 && g > b + 25) {
                     greenPoints.add(android.graphics.Point(x, y))
                 }
-                x += 2
+                x += scanStep
             }
-            y += 2
+            y += scanStep
         }
 
         val solidClaims = mutableListOf<Rect>()
@@ -239,57 +318,68 @@ class ReceiveGiftTask {
             val sortedByY = greenPoints.sortedBy { it.y }
             var currentCluster = mutableListOf<android.graphics.Point>()
             var prevY = sortedByY.first().y
+            val yGapTol = maxOf(4, (vp.contentHeight * 0.0065f).toInt())
 
             for (pt in sortedByY) {
-                if (pt.y - prevY <= 15) {
+                if (pt.y - prevY <= yGapTol) {
                     currentCluster.add(pt)
                 } else {
-                    evaluateAndAddCluster(currentCluster, screenBitmap, sw, sh, solidClaims, adPlays)
+                    evaluateAndAddCluster(currentCluster, screenBitmap, vp, solidClaims, adPlays)
                     currentCluster = mutableListOf(pt)
                 }
                 prevY = pt.y
             }
-            evaluateAndAddCluster(currentCluster, screenBitmap, sw, sh, solidClaims, adPlays)
+            evaluateAndAddCluster(currentCluster, screenBitmap, vp, solidClaims, adPlays)
         }
+
+        val drawerYMin = vp.mapContentY(0.22f)
+        val drawerYMax = vp.mapContentY(0.85f)
+        val rightColMinX = vp.mapContentX(0.60f)
+        val btnHalfW = (vp.contentWidth * 0.12f).toInt().coerceAtLeast(8)
+        val btnHalfH = (vp.contentHeight * 0.020f).toInt().coerceAtLeast(4)
+        val btnCenterX = vp.mapContentX(0.785f)
 
         // 2. 【OCR 輔助搜尋】：
         // 2A. 尋找「領取」OCR 按鈕 (x > 0.60f, y in 0.22f..0.85f, 嚴格排除「已領取」)
         val directClaimOcr = ocrItems.filter { item ->
-            val cy = item.bounds.centerY().toFloat() / sh
-            val cx = item.bounds.centerX().toFloat() / sw
+            val cy = item.bounds.centerY()
+            val cx = item.bounds.centerX()
             val t = item.text.trim()
-            cy in 0.22f..0.85f && cx > 0.60f && (t == "領取" || (t.contains("領取") && !t.contains("已")))
+            cy in drawerYMin..drawerYMax && cx > rightColMinX && (t == "領取" || (t.contains("領取") && !t.contains("已")))
         }.sortedBy { it.bounds.top }
 
         for (item in directClaimOcr) {
             val b = item.bounds
-            val padX = (sw * 0.05f).toInt()
-            val padY = (sh * 0.01f).toInt()
+            val padX = (vp.contentWidth * 0.05f).toInt()
+            val padY = (vp.contentHeight * 0.01f).toInt()
             val expanded = Rect(
-                (b.left - padX).coerceAtLeast((sw * 0.65f).toInt()),
+                (b.left - padX).coerceAtLeast(vp.mapContentX(0.65f)),
                 b.top - padY,
-                (b.right + padX).coerceAtMost((sw * 0.92f).toInt()),
+                (b.right + padX).coerceAtMost(vp.mapContentX(0.92f)),
                 b.bottom + padY
             )
-            if (solidClaims.none { it.contains(expanded.centerX(), expanded.centerY()) }) {
+            if (!isRowAlreadyClaimedByOcr(expanded.centerY(), ocrItems, vp) &&
+                hasActiveGreenClaimCapsule(screenBitmap, expanded) &&
+                solidClaims.none { it.contains(expanded.centerX(), expanded.centerY()) }
+            ) {
                 solidClaims.add(expanded)
             }
         }
 
         // 2B. 尋找「一起送達的禮物」OCR 行 (按鈕就在右側)
         val togetherGiftOcr = ocrItems.filter { item ->
-            val cy = item.bounds.centerY().toFloat() / sh
+            val cy = item.bounds.centerY()
             val t = item.text.replace(" ", "")
-            cy in 0.22f..0.85f && t.contains("一起送達")
+            cy in drawerYMin..drawerYMax && t.contains("一起送達")
         }.sortedBy { it.bounds.top }
 
         for (item in togetherGiftOcr) {
             val cy = item.bounds.centerY()
-            val btnHalfW = (sw * 0.12f).toInt()
-            val btnHalfH = (sh * 0.020f).toInt()
-            val btnCenterX = (sw * 0.785f).toInt()
             val togetherRect = Rect(btnCenterX - btnHalfW, cy - btnHalfH, btnCenterX + btnHalfW, cy + btnHalfH)
-            if (solidClaims.none { it.contains(togetherRect.centerX(), togetherRect.centerY()) }) {
+            if (!isRowAlreadyClaimedByOcr(cy, ocrItems, vp) &&
+                hasActiveGreenClaimCapsule(screenBitmap, togetherRect) &&
+                solidClaims.none { it.contains(togetherRect.centerX(), togetherRect.centerY()) }
+            ) {
                 solidClaims.add(togetherRect)
             }
         }
@@ -306,22 +396,27 @@ class ReceiveGiftTask {
 
         // 2C. 尋找「▶」播放按鈕 OCR
         val playOcr = ocrItems.filter { item ->
-            val cy = item.bounds.centerY().toFloat() / sh
-            val cx = item.bounds.centerX().toFloat() / sw
-            cy in 0.22f..0.85f && cx > 0.60f && (item.text.contains("▶") || item.text.contains(">"))
+            val cy = item.bounds.centerY()
+            val cx = item.bounds.centerX()
+            cy in drawerYMin..drawerYMax && cx > rightColMinX && (item.text.contains("▶") || item.text.contains(">"))
         }.sortedBy { it.bounds.top }
 
         for (item in playOcr) {
-            if (adPlays.none { it.contains(item.bounds.centerX(), item.bounds.centerY()) }) {
+            val cy = item.bounds.centerY()
+            val probeRect = Rect(btnCenterX - btnHalfW, cy - btnHalfH, btnCenterX + btnHalfW, cy + btnHalfH)
+            if (!isRowAlreadyClaimedByOcr(cy, ocrItems, vp) &&
+                hasActiveGreenClaimCapsule(screenBitmap, probeRect) &&
+                adPlays.none { it.contains(item.bounds.centerX(), cy) }
+            ) {
                 adPlays.add(item.bounds)
             }
         }
 
         // 2D. 尋找「收到...送來的禮物」文字行 (支援跨行『送來的』『禮物囉』等，按鈕就在右側)
         val friendGiftTextOcr = ocrItems.filter { item ->
-            val cy = item.bounds.centerY().toFloat() / sh
+            val cy = item.bounds.centerY()
             val t = item.text
-            cy in 0.22f..0.85f && (
+            cy in drawerYMin..drawerYMax && (
                 t.contains("送來的禮物") ||
                 t.contains("送來的") ||
                 t.contains("禮物囉") ||
@@ -331,32 +426,35 @@ class ReceiveGiftTask {
 
         for (item in friendGiftTextOcr) {
             val cy = item.bounds.centerY()
-            val btnHalfW = (sw * 0.12f).toInt()
-            val btnHalfH = (sh * 0.020f).toInt()
-            val btnCenterX = (sw * 0.785f).toInt()
             val playRect = Rect(btnCenterX - btnHalfW, cy - btnHalfH, btnCenterX + btnHalfW, cy + btnHalfH)
-            if (adPlays.none { it.contains(playRect.centerX(), playRect.centerY()) }) {
+            if (!isRowAlreadyClaimedByOcr(cy, ocrItems, vp) &&
+                hasActiveGreenClaimCapsule(screenBitmap, playRect) &&
+                adPlays.none { it.contains(playRect.centerX(), playRect.centerY()) }
+            ) {
                 adPlays.add(playRect)
             }
         }
 
-        // 2E. 尋找「今天...止」或「剩下...天」截止文字，綠色播放按鈕就在其正上方約 30~50px
-        val deadlineItem = ocrItems.firstOrNull { item ->
-            val cy = item.bounds.centerY().toFloat() / sh
-            val cx = item.bounds.centerX().toFloat() / sw
-            cy in 0.25f..0.85f && cx > sw * 0.55f &&
+        // 2E. 尋找「今天...止」或「剩下...天」截止文字，綠色播放按鈕就在其正上方
+        val deadlineItems = ocrItems.filter { item ->
+            val cy = item.bounds.centerY()
+            val cx = item.bounds.centerX()
+            cy in vp.mapContentY(0.25f)..drawerYMax && cx > vp.mapContentX(0.55f) &&
             ((item.text.contains("今天") && item.text.contains("止")) ||
              item.text.contains("剩餘") || item.text.contains("剩下") || item.text.contains("天"))
-        }
-        if (deadlineItem != null) {
+        }.sortedBy { it.bounds.top }
+
+        for (deadlineItem in deadlineItems) {
             val cx = deadlineItem.bounds.centerX()
             val cy = deadlineItem.bounds.centerY()
-            val btnHalfW = (sw * 0.12f).toInt()
-            val btnHalfH = (sh * 0.020f).toInt()
-            val btnCenterY = cy - (sh * 0.038f).toInt()
+            val btnCenterY = cy - (vp.contentHeight * 0.038f).toInt()
             val deadlineBtn = Rect(cx - btnHalfW, btnCenterY - btnHalfH, cx + btnHalfW, btnCenterY + btnHalfH)
-            if (adPlays.none { it.contains(deadlineBtn.centerX(), deadlineBtn.centerY()) }) {
+            if (!isRowAlreadyClaimedByOcr(btnCenterY, ocrItems, vp) &&
+                hasActiveGreenClaimCapsule(screenBitmap, deadlineBtn) &&
+                adPlays.none { it.contains(deadlineBtn.centerX(), deadlineBtn.centerY()) }
+            ) {
                 adPlays.add(deadlineBtn)
+                break
             }
         }
 
@@ -376,21 +474,23 @@ class ReceiveGiftTask {
     private fun evaluateAndAddCluster(
         cluster: List<android.graphics.Point>,
         screenBitmap: Bitmap,
-        sw: Int,
-        sh: Int,
+        vp: ScreenViewportCalibrator.ViewportMetrics,
         solidClaims: MutableList<Rect>,
         adPlays: MutableList<Rect>
     ) {
-        if (cluster.size < 30) return
+        val minClusterPts = maxOf(10, (vp.contentWidth * vp.contentHeight) / 86000)
+        if (cluster.size < minClusterPts) return
+        val sw = screenBitmap.width
+        val sh = screenBitmap.height
         val minX = cluster.minOf { it.x }
         val maxX = cluster.maxOf { it.x }
         val minY = cluster.minOf { it.y }
         val maxY = cluster.maxOf { it.y }
         val width = maxX - minX
         val height = maxY - minY
-        // 驗證按鈕寬度 (約螢幕寬度的 15% ~ 38%) 與高度 (約螢幕高度的 1.8% ~ 7.0%)
-        if (width in (sw * 0.15f).toInt()..(sw * 0.38f).toInt() &&
-            height in (sh * 0.018f).toInt()..(sh * 0.070f).toInt()
+        // 驗證按鈕寬度 (約畫布寬度的 15% ~ 38%) 與高度 (約畫布高度的 1.8% ~ 7.0%)
+        if (width in (vp.contentWidth * 0.15f).toInt()..(vp.contentWidth * 0.38f).toInt() &&
+            height in (vp.contentHeight * 0.018f).toInt()..(vp.contentHeight * 0.070f).toInt()
         ) {
             val rect = Rect(minX, minY, maxX, maxY)
             val insetX = (width * 0.25f).toInt().coerceAtLeast(2)
@@ -403,9 +503,12 @@ class ReceiveGiftTask {
             val endX = (maxX - insetX).coerceIn(startX, sw - 1)
             val startY = (minY + insetY).coerceIn(0, sh - 1)
             val endY = (maxY - insetY).coerceIn(startY, sh - 1)
+            val innerStep = maxOf(1, vp.contentWidth / 540)
 
-            for (iy in startY..endY step 2) {
-                for (ix in startX..endX step 2) {
+            var iy = startY
+            while (iy <= endY) {
+                var ix = startX
+                while (ix <= endX) {
                     val c = screenBitmap.getPixel(ix, iy)
                     val r = (c shr 16) and 0xFF
                     val g = (c shr 8) and 0xFF
@@ -416,7 +519,9 @@ class ReceiveGiftTask {
                     } else if (g > 140 && g > r + 25 && g > b + 25) {
                         greenCount++
                     }
+                    ix += innerStep
                 }
+                iy += innerStep
             }
 
             val whiteRatio = if (totalInner > 0) whiteCount.toFloat() / totalInner else 0f

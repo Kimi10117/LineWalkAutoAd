@@ -225,7 +225,7 @@ def test_intent_sharing_and_resolution():
     with open(main_activity_path, "r", encoding="utf-8") as f:
         content = f.read()
     
-    export_block = content[content.find("btnExportLogs.setOnClickListener"):content.find("private fun refreshPermissionAndTemplateStatus")]
+    export_block = content[content.find("btnExportLogs.setOnClickListener"):content.find("private fun refreshPermissionStatus")]
     print(f"  [*] Inspecting MainActivity btnExportLogs block:\n{export_block.strip()}")
     
     assert "try" in export_block and "catch" in export_block, "startActivity(chooser) must be protected by try-catch"

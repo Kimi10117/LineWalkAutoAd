@@ -19,13 +19,25 @@ object ScreenViewportCalibrator {
         val screenHeight: Int,
         val effectiveTopY: Int,
         val effectiveBottomY: Int,
-        val hasThreeButtonNavBar: Boolean
+        val hasThreeButtonNavBar: Boolean,
+        val effectiveLeftX: Int = 0,
+        val effectiveRightX: Int = screenWidth
     ) {
+        val contentWidth: Int
+            get() = max(1, effectiveRightX - effectiveLeftX)
+
         val contentHeight: Int
             get() = max(1, effectiveBottomY - effectiveTopY)
 
-        /** 將基準高度比例 (0f..1f) 映射至扣除三大金剛按鍵後的實際遊戲畫布 Y 座標 */
+        /** 將基準寬度比例 (0f..1f) 映射至扣除左右黑邊後的實際遊戲畫布 X 座標 */
+        fun mapContentX(ratio: Float): Int {
+            if (screenWidth <= 0) return 0
+            return (effectiveLeftX + contentWidth * ratio).toInt().coerceIn(0, screenWidth - 1)
+        }
+
+        /** 將基準高度比例 (0f..1f) 映射至扣除頂部安全區與底部導覽列後的實際遊戲畫布 Y 座標 */
         fun mapContentY(ratio: Float): Int {
+            if (screenHeight <= 0) return 0
             return (effectiveTopY + contentHeight * ratio).toInt().coerceIn(0, screenHeight - 1)
         }
     }
@@ -42,8 +54,12 @@ object ScreenViewportCalibrator {
         ocrItems: List<OcrItem> = emptyList()
     ): ViewportMetrics {
         if (sw <= 0 || sh <= 0) {
-            return ViewportMetrics(sw, sh, 0, sh, false)
+            return ViewportMetrics(sw, sh, 0, sh, false, 0, max(0, sw))
         }
+
+        val (effectiveLeftX, effectiveRightX) = scanHorizontalLetterboxBounds(screenBitmap, sw, sh)
+        val effectiveTopY = scanEffectiveTopY(screenBitmap, sw, sh, effectiveLeftX, effectiveRightX)
+        val detectedContentWidth = max(1, effectiveRightX - effectiveLeftX)
 
         // 1. 優先根據底部導覽列四大標籤 (集點/好友/使用/精選) 的實際 OCR 座標推算真實遊戲底邊界
         val bottomNavItem = ocrItems.firstOrNull { item ->
@@ -51,15 +67,23 @@ object ScreenViewportCalibrator {
             val t = item.text.replace(" ", "")
             cyRatio in 0.80f..0.97f && (
                 t == "集點" || t == "精選" ||
-                (t == "好友" && item.bounds.width() < sw * 0.22f) ||
-                (t == "使用" && item.bounds.width() < sw * 0.22f)
+                (t == "好友" && item.bounds.width() < detectedContentWidth * 0.24f) ||
+                (t == "使用" && item.bounds.width() < detectedContentWidth * 0.24f)
             )
         }
         if (bottomNavItem != null) {
             val navBottom = (bottomNavItem.bounds.bottom + sh * 0.018f).toInt().coerceIn((sh * 0.85f).toInt(), sh)
             val hasThreeBtn = bottomNavItem.bounds.centerY() < (sh * 0.908f).toInt()
             val effectiveBot = if (hasThreeBtn) min(sh, navBottom) else sh
-            return ViewportMetrics(sw, sh, 0, effectiveBot, hasThreeBtn)
+            return ViewportMetrics(
+                sw,
+                sh,
+                effectiveTopY,
+                effectiveBot,
+                hasThreeBtn,
+                effectiveLeftX,
+                effectiveRightX
+            )
         }
 
         // 2. 像素級底部三大金剛導覽列探測 (針對無底部標籤的子視窗或廣告畫面)
@@ -105,12 +129,227 @@ object ScreenViewportCalibrator {
                 val barHeightRatio = (sh - barTopY).toFloat() / sh
                 // 標準三大金剛導覽列高度約佔螢幕 4.2% ~ 8.8%
                 if (barHeightRatio in 0.042f..0.088f) {
-                    return ViewportMetrics(sw, sh, 0, barTopY, true)
+                    return ViewportMetrics(
+                        sw,
+                        sh,
+                        effectiveTopY,
+                        barTopY,
+                        true,
+                        effectiveLeftX,
+                        effectiveRightX
+                    )
                 }
             }
         }
 
-        return ViewportMetrics(sw, sh, 0, sh, false)
+        return ViewportMetrics(sw, sh, effectiveTopY, sh, false, effectiveLeftX, effectiveRightX)
+    }
+
+    /**
+     * 計算不同螢幕比例下的頂部系統狀態列／瀏海安全防護高度。
+     * 若傳入畫面截圖，會一併納入自動掃描到的頂部暗帶高度作為下限保護。
+     */
+    fun getStatusBarSafeHeight(sw: Int, sh: Int, screenBitmap: Bitmap? = null): Int {
+        if (sw <= 0 || sh <= 0) return 0
+        val aspect = sh.toFloat() / max(1, sw)
+        val safeRatio = interpolatePiecewise(
+            aspect,
+            listOf(
+                1.33f to 0.026f,
+                1.778f to 0.034f,
+                2.00f to 0.038f,
+                2.22f to 0.040f
+            )
+        )
+        val baseSafe = max(1, (sh * safeRatio).toInt())
+        if (screenBitmap == null) return baseSafe
+        val (leftX, rightX) = scanHorizontalLetterboxBounds(screenBitmap, sw, sh)
+        val scannedTop = scanEffectiveTopY(screenBitmap, sw, sh, leftX, rightX)
+        return max(baseSafe, scannedTop).coerceAtMost(max(1, (sh * 0.085f).toInt()))
+    }
+
+    /**
+     * 依有效畫布長寬比連續分段線性插值推算子彈窗右上角關閉按鈕 Y 比例 (覆蓋 1.33f..2.45f)。
+     */
+    fun interpolateSubDialogCloseYRatio(effectiveAspect: Float): Float {
+        return interpolatePiecewise(
+            effectiveAspect,
+            listOf(
+                1.33f to 0.068f,
+                1.778f to 0.078f,
+                1.95f to 0.100f,
+                2.15f to 0.115f,
+                2.444f to 0.121f,
+                2.45f to 0.121f
+            )
+        )
+    }
+
+    private fun interpolatePiecewise(x: Float, anchors: List<Pair<Float, Float>>): Float {
+        if (anchors.isEmpty()) return 0f
+        if (x <= anchors.first().first) return anchors.first().second
+        if (x >= anchors.last().first) return anchors.last().second
+        for (i in 0 until anchors.size - 1) {
+            val (x0, y0) = anchors[i]
+            val (x1, y1) = anchors[i + 1]
+            if (x <= x1) {
+                val span = x1 - x0
+                if (span <= 0.0001f) return y0
+                val t = ((x - x0) / span).coerceIn(0f, 1f)
+                return y0 + (y1 - y0) * t
+            }
+        }
+        return anchors.last().second
+    }
+
+    private fun pixelMaxChannel(px: Int): Int {
+        val r = (px shr 16) and 0xFF
+        val g = (px shr 8) and 0xFF
+        val b = px and 0xFF
+        return max(r, max(g, b))
+    }
+
+    private fun isDarkBarPixel(px: Int): Boolean = pixelMaxChannel(px) <= 24
+
+    private fun scanEffectiveTopY(
+        screenBitmap: Bitmap?,
+        sw: Int,
+        sh: Int,
+        leftX: Int,
+        rightX: Int
+    ): Int {
+        if (screenBitmap == null || sw < 100 || sh < 100) return 0
+        return try {
+            val bw = min(sw, screenBitmap.width)
+            val bh = min(sh, screenBitmap.height)
+            if (bw < 100 || bh < 100) return 0
+            val cl = leftX.coerceIn(0, bw - 2)
+            val cr = rightX.coerceIn(cl + 1, bw)
+            val cw = max(1, cr - cl)
+            val sampleXs = listOf(0.14f, 0.22f, 0.30f, 0.38f, 0.62f, 0.70f, 0.78f, 0.86f)
+                .map { (cl + cw * it).toInt().coerceIn(0, bw - 1) }
+
+            val probeTopY = max(1, (bh * 0.003f).toInt())
+            val topDarkCount = sampleXs.count { x -> isDarkBarPixel(screenBitmap.getPixel(x, probeTopY)) }
+            if (topDarkCount.toFloat() / sampleXs.size < 0.80f) return 0
+
+            val maxScanY = min(bh - 2, (bh * 0.085f).toInt())
+            val minBandH = max(4, (bh * 0.010f).toInt())
+            val yStep = max(1, bh / 1200)
+            var foundTop = -1
+            var y = 0
+            while (y <= maxScanY) {
+                val darkCount = sampleXs.count { x -> isDarkBarPixel(screenBitmap.getPixel(x, y)) }
+                if (darkCount.toFloat() / sampleXs.size < 0.70f) {
+                    foundTop = y
+                    break
+                }
+                y += yStep
+            }
+            if (foundTop < minBandH) return 0
+
+            val checkEndY = min(bh - 1, foundTop + max(8, (bh * 0.016f).toInt()))
+            var activeHits = 0
+            var totalHits = 0
+            var cy = foundTop + 1
+            while (cy <= checkEndY) {
+                for (x in sampleXs) {
+                    totalHits++
+                    if (pixelMaxChannel(screenBitmap.getPixel(x, cy)) >= 36) activeHits++
+                }
+                cy += max(1, (checkEndY - foundTop) / 3)
+            }
+            if (totalHits == 0 || activeHits.toFloat() / totalHits < 0.40f) return 0
+            foundTop
+        } catch (_: Throwable) {
+            0
+        }
+    }
+
+    private fun scanHorizontalLetterboxBounds(
+        screenBitmap: Bitmap?,
+        sw: Int,
+        sh: Int
+    ): Pair<Int, Int> {
+        if (screenBitmap == null || sw < 100 || sh < 100) return 0 to sw
+        return try {
+            val bw = min(sw, screenBitmap.width)
+            val bh = min(sh, screenBitmap.height)
+            if (bw < 100 || bh < 100) return 0 to sw
+
+            val sampleYs = listOf(0.18f, 0.30f, 0.42f, 0.52f, 0.64f, 0.74f, 0.82f)
+                .map { (bh * it).toInt().coerceIn(0, bh - 1) }
+            val centerXs = listOf(0.42f, 0.50f, 0.58f)
+                .map { (bw * it).toInt().coerceIn(0, bw - 1) }
+            var centerBright = 0
+            for (y in sampleYs) {
+                for (x in centerXs) {
+                    if (pixelMaxChannel(screenBitmap.getPixel(x, y)) >= 36) centerBright++
+                }
+            }
+            if (centerBright < 3) return 0 to sw
+
+            val leftProbeX = max(2, (bw * 0.008f).toInt())
+            val rightProbeX = min(bw - 3, bw - 1 - leftProbeX)
+            val leftEdgeDark = sampleYs.count { y -> isDarkBarPixel(screenBitmap.getPixel(leftProbeX, y)) }
+            val rightEdgeDark = sampleYs.count { y -> isDarkBarPixel(screenBitmap.getPixel(rightProbeX, y)) }
+            if (leftEdgeDark < 6 || rightEdgeDark < 6) return 0 to sw
+
+            val xStep = max(2, bw / 240)
+            val midX = bw / 2
+            val leftEdge = findInnerContentEdge(screenBitmap, 0, midX, xStep, sampleYs, fromLeft = true) ?: return 0 to sw
+            val rightEdge = findInnerContentEdge(screenBitmap, bw - 1, midX, -xStep, sampleYs, fromLeft = false) ?: return 0 to sw
+
+            val minBarW = max(8, (bw * 0.020f).toInt())
+            val cw = rightEdge - leftEdge
+            if (leftEdge < minBarW || (bw - rightEdge) < minBarW) return 0 to sw
+            if (cw < (bw * 0.35f).toInt() || cw > (bw * 0.96f).toInt()) return 0 to sw
+            if (kotlin.math.abs(leftEdge - (bw - rightEdge)) > max(16, (bw * 0.08f).toInt())) return 0 to sw
+
+            val upperYs = sampleYs.take(3)
+            val lowerYs = sampleYs.takeLast(3)
+            val upL = findInnerContentEdge(screenBitmap, 0, midX, xStep, upperYs, fromLeft = true) ?: return 0 to sw
+            val loL = findInnerContentEdge(screenBitmap, 0, midX, xStep, lowerYs, fromLeft = true) ?: return 0 to sw
+            val upR = findInnerContentEdge(screenBitmap, bw - 1, midX, -xStep, upperYs, fromLeft = false) ?: return 0 to sw
+            val loR = findInnerContentEdge(screenBitmap, bw - 1, midX, -xStep, lowerYs, fromLeft = false) ?: return 0 to sw
+            val alignTol = max(12, (bw * 0.03f).toInt())
+            if (kotlin.math.abs(upL - loL) > alignTol || kotlin.math.abs(upR - loR) > alignTol) {
+                return 0 to sw
+            }
+            leftEdge to rightEdge
+        } catch (_: Throwable) {
+            0 to sw
+        }
+    }
+
+    private fun findInnerContentEdge(
+        bitmap: Bitmap,
+        startX: Int,
+        limitX: Int,
+        stepX: Int,
+        rows: List<Int>,
+        fromLeft: Boolean
+    ): Int? {
+        val threshold = max(1, rows.size / 3)
+        var x = startX
+        while (if (fromLeft) x < limitX else x > limitX) {
+            val active = rows.count { y -> pixelMaxChannel(bitmap.getPixel(x, y)) >= 32 }
+            if (active >= threshold) {
+                var refined = x
+                val backStep = if (fromLeft) -1 else 1
+                var steps = 0
+                while (steps < kotlin.math.abs(stepX) && refined + backStep != startX) {
+                    val nx = refined + backStep
+                    val nActive = rows.count { y -> pixelMaxChannel(bitmap.getPixel(nx, y)) >= 32 }
+                    if (nActive < threshold) break
+                    refined = nx
+                    steps++
+                }
+                return if (fromLeft) refined else refined + 1
+            }
+            x += stepX
+        }
+        return null
     }
 
     /**
@@ -186,25 +425,21 @@ object ScreenViewportCalibrator {
         }
 
         val vp = detectViewport(sw, sh, screenBitmap, ocrItems)
-        val effectiveAspect = vp.contentHeight.toFloat() / max(1, sw)
+        val effectiveAspect = vp.contentHeight.toFloat() / max(1, vp.contentWidth)
 
         val baseCenterY = when {
             strictTitleItem != null -> strictTitleItem.bounds.centerY()
             defaultYRatio22to9 > 0.18f -> vp.mapContentY(defaultYRatio22to9)
-            effectiveAspect >= 2.15f -> vp.mapContentY(0.121f)
-            effectiveAspect >= 1.95f -> vp.mapContentY(0.110f)
-            effectiveAspect >= 1.85f -> vp.mapContentY(0.100f)
-            effectiveAspect >= 1.70f -> vp.mapContentY(0.088f)
-            else -> vp.mapContentY(0.078f)
+            else -> vp.mapContentY(interpolateSubDialogCloseYRatio(effectiveAspect))
         }
 
-        val baseCenterX = (sw * 0.908f).toInt()
+        val baseCenterX = vp.mapContentX(0.908f)
         val (offsetX, offsetY) = getCalibrationOffset(sw, sh, attempt)
-        val finalCx = (baseCenterX + offsetX).coerceIn((sw * 0.84f).toInt(), (sw * 0.96f).toInt())
-        val finalCy = (baseCenterY + offsetY).coerceIn((sh * 0.055f).toInt(), (sh * 0.30f).toInt())
+        val finalCx = (baseCenterX + offsetX).coerceIn(vp.mapContentX(0.84f), vp.mapContentX(0.96f))
+        val finalCy = (baseCenterY + offsetY).coerceIn(vp.mapContentY(0.055f), vp.mapContentY(0.30f))
 
-        val halfW = max(20, (sw * 0.045f).toInt())
-        val halfH = max(20, (sh * 0.022f).toInt())
+        val halfW = max(4, (vp.contentWidth * 0.045f).toInt())
+        val halfH = max(4, (vp.contentHeight * 0.022f).toInt())
         return Rect(
             (finalCx - halfW).coerceIn(0, sw),
             (finalCy - halfH).coerceIn(0, sh),

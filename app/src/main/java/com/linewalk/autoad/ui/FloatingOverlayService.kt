@@ -24,12 +24,10 @@ import android.widget.Button
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
-import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.linewalk.autoad.R
 import com.linewalk.autoad.engine.AutomationEngine
-import com.linewalk.autoad.service.AutoAdAccessibilityService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -220,7 +218,12 @@ class FloatingOverlayService : Service() {
         }
     }
 
-    internal fun formatActiveStatusText(status: com.linewalk.autoad.engine.EngineUiStatus): String {
+    internal fun dpToPx(dp: Int): Int = (dp * resources.displayMetrics.density).toInt()
+
+    internal fun formatActiveStatusText(
+        status: com.linewalk.autoad.engine.EngineUiStatus,
+        maxAdWaitSec: Int? = if (::engine.isInitialized) engine.config.maxAdWaitSeconds else null
+    ): String {
         if (!status.isRunning) {
             return "散步趣助手 · 待命"
         }
@@ -252,8 +255,24 @@ class FloatingOverlayService : Service() {
                 "[接收禮物] 領取中"
             }
             status.state == com.linewalk.autoad.engine.EngineState.AD_WATCHING -> {
-                val secMatch = Regex("""\((\d+)s?\)""").find(safeDetail) ?: Regex("""\((\d+)s?\)""").find(detail)
-                if (secMatch != null) {
+                val secMatch = Regex("""已播\s*(\d+)s?""").find(safeDetail)
+                    ?: Regex("""\((\d+)s?(?:\s*/\s*\d+s?)?\)""").find(safeDetail)
+                    ?: Regex("""已播\s*(\d+)s?""").find(detail)
+                    ?: Regex("""\((\d+)s?(?:\s*/\s*\d+s?)?\)""").find(detail)
+                if (maxAdWaitSec != null) {
+                    val stageLabel = when {
+                        safeDetail.contains("載入") || detail.contains("載入") -> "載入中"
+                        safeDetail.contains("倒數") || detail.contains("倒數") -> "倒數中"
+                        safeDetail.contains("搜尋") || detail.contains("搜尋") -> "搜尋鈕"
+                        safeDetail.contains("監控") || detail.contains("強退") || detail.contains("嘗試") -> "強退中"
+                        else -> "播放中"
+                    }
+                    if (secMatch != null) {
+                        "[廣告監控] $stageLabel ${secMatch.groupValues[1]}s / ${maxAdWaitSec}s"
+                    } else {
+                        "[廣告監控] $stageLabel 0s / ${maxAdWaitSec}s"
+                    }
+                } else if (secMatch != null) {
                     "[廣告監控] 播放中 (${secMatch.groupValues[1]}s)"
                 } else {
                     "[廣告監控] 播放中"
@@ -449,11 +468,9 @@ class FloatingOverlayService : Service() {
             setCollapsedState(!isCollapsed)
         }
 
-        // 預設位置：靠左停靠 x = 12，垂直 y 設為螢幕高度之 29% (y ≈ 0.290f)，
-        // 嚴格避開頂部狀態列(0~8%)、資產列(8~14%)、各類分頁標籤(14~22%)、
-        // 彈窗標題與右上關閉叉叉(9~15% 及 20~26%)、主畫面圖示列(38~46%)以及底部導覽列(85~95%)，
-        // 確保 100% 絕不遮擋任何可能要判斷的地方！
-        val defaultY = (resources.displayMetrics.heightPixels * 0.290f).toInt().coerceAtLeast(420)
+        // 預設位置：靠左停靠 x = 12，垂直 y 設為螢幕高度之 25% (y ≈ 0.25f)，最低保留 96dp 安全距，
+        // 避開頂部狀態列、資產列、分頁標籤與底部導覽列，確保不遮擋重要判斷區域。
+        val defaultY = (resources.displayMetrics.heightPixels * 0.25f).toInt().coerceAtLeast(dpToPx(96))
         val wmParams = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -528,7 +545,7 @@ class FloatingOverlayService : Service() {
                 if (status.isRunning) {
                     statusDot.setImageResource(R.drawable.ic_status_dot_green)
                     bgDrawable.setStroke((2 * density).toInt(), Color.parseColor("#10B981"))
-                    titleTv.text = formatActiveStatusText(status)
+                    titleTv.text = formatActiveStatusText(status, engine.config.maxAdWaitSeconds)
 
                     val cleanDetail = status.overlaySafeDetail
                         .replace("[完成]", "")
@@ -588,49 +605,6 @@ class FloatingOverlayService : Service() {
         try {
             windowManager.updateViewLayout(v, lp)
         } catch (_: Exception) {}
-    }
-
-    private fun launchTemplateCropper() {
-        val accService = AutoAdAccessibilityService.instance.value
-        if (accService == null) {
-            Toast.makeText(this, "請先開啟無障礙服務權限才能擷取畫面！", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        if (engine.uiStatus.value.isRunning) {
-            engine.stop("進入框選取樣模式")
-        }
-
-        serviceScope.launch {
-            rootView?.visibility = View.INVISIBLE
-            overlayScreenBounds.setEmpty()
-            delay(200L)
-            val bitmap = accService.captureScreenBitmap()
-            if (bitmap == null) {
-                rootView?.visibility = View.VISIBLE
-                updateOverlayBoundsOnScreen()
-                Toast.makeText(
-                    this@FloatingOverlayService,
-                    "截圖失敗，請稍候 1 秒再試",
-                    Toast.LENGTH_SHORT
-                ).show()
-                return@launch
-            }
-
-            TemplateCropOverlay(
-                context = this@FloatingOverlayService,
-                windowManager = windowManager,
-                templateStorage = engine.templateStorage,
-                screenshot = bitmap,
-                onFinished = { savedCategory ->
-                    rootView?.visibility = View.VISIBLE
-                    rootView?.post { updateOverlayBoundsOnScreen() }
-                    if (savedCategory != null) {
-                        engine.appendLog("[取樣] 新增圖示範本: ${savedCategory.displayName}")
-                    }
-                }
-            ).show()
-        }
     }
 
     private fun startForegroundNotification() {

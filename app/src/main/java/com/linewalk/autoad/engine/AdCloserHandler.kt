@@ -6,8 +6,6 @@ import android.graphics.Rect
 import android.graphics.RectF
 import android.util.Log
 import com.linewalk.autoad.config.AppConfig
-import com.linewalk.autoad.config.TemplateCategory
-import com.linewalk.autoad.config.TemplateStorage
 import com.linewalk.autoad.service.AutoAdAccessibilityService
 import com.linewalk.autoad.ui.FloatingOverlayService
 import com.linewalk.autoad.vision.NodeInspector
@@ -30,6 +28,7 @@ sealed class AdStepResult {
     data class WatchdogBackTriggered(val elapsedSec: Int, val actionLabel: String = "返回鍵") : AdStepResult()
     data class SwipedToReveal(val attempt: Int, val elapsedSec: Int) : AdStepResult()
     data class ScanningAd(val elapsedSec: Int) : AdStepResult()
+    data class ForceBringGameToFront(val elapsedSec: Int, val foregroundPkg: String, val reason: String) : AdStepResult()
 }
 
 /**
@@ -39,11 +38,10 @@ sealed class AdStepResult {
  * - 內建升級版幾何角落 X 偵測器，支援深色圓底白 X 與細線 X，並排除 AdChoices『ⓘ ▷』圖示。
  */
 class AdCloserHandler(
-    private val config: AppConfig,
-    private val templateStorage: TemplateStorage,
-    private val nodeInspector: NodeInspector,
     private val ocrRecognizer: OcrRecognizer,
-    private val templateMatcher: TemplateMatcher
+    private val nodeInspector: NodeInspector,
+    private val templateMatcher: TemplateMatcher,
+    private val config: AppConfig
 ) {
 
     private var adStartTimeMs: Long = 0L
@@ -59,6 +57,7 @@ class AdCloserHandler(
     private var hasAdActuallyShown: Boolean = false
     private var adLoadingTicks: Int = 0
     private var lastClickedPoint: Point? = null
+    private var lastClickedAdLabel: String? = null
     private var lastBackActionTimeMs: Long = 0L
     private var lastFallbackCornerTimeMs: Long = 0L
     private var lastRevealSwipeTimeMs: Long = 0L
@@ -68,9 +67,13 @@ class AdCloserHandler(
     private var leftCornerGeoXClicks: Int = 0
     private var leftCornerRedirectCount: Int = 0
     private var disableLeftCornerForCurrentAd: Boolean = false
+    private var sponsoredTopLeftProbeCount: Int = 0
+    private var watchdogForceBackAttempts: Int = 0
     private var linePromoCloseClicks: Int = 0
     private var lastLeftCornerClickTimeMs: Long = 0L
     private var lastRedirectReturnTimeMs: Long = 0L
+    private var lastBackRejectLogTimeMs: Long = 0L
+    private var lastLoggedRejectReason: String = ""
     private val redirectPointCounts = mutableListOf<Point>()
     private val clickedHistory = mutableListOf<Point>()
     private val blacklistedPoints = mutableListOf<Point>()
@@ -87,6 +90,7 @@ class AdCloserHandler(
             hasAdActuallyShown = false
             adLoadingTicks = 0
             lastClickedPoint = null
+            lastClickedAdLabel = null
             lastBackActionTimeMs = 0L
             lastFallbackCornerTimeMs = 0L
             lastRevealSwipeTimeMs = 0L
@@ -95,9 +99,13 @@ class AdCloserHandler(
             fastForwardSkipClicks = 0
             leftCornerGeoXClicks = 0
             leftCornerRedirectCount = 0
+            sponsoredTopLeftProbeCount = 0
+            watchdogForceBackAttempts = 0
             linePromoCloseClicks = 0
             lastLeftCornerClickTimeMs = 0L
             lastRedirectReturnTimeMs = 0L
+            lastBackRejectLogTimeMs = 0L
+            lastLoggedRejectReason = ""
             redirectPointCounts.clear()
             clickedHistory.clear()
             blacklistedPoints.clear()
@@ -108,7 +116,12 @@ class AdCloserHandler(
             redirectCount = 0
             hasRecentRedirect = false
             disableLeftCornerForCurrentAd = false
+            lastClickedAdLabel = null
+            sponsoredTopLeftProbeCount = 0
+            watchdogForceBackAttempts = 0
             lastRedirectReturnTimeMs = 0L
+            lastBackRejectLogTimeMs = 0L
+            lastLoggedRejectReason = ""
         }
     }
 
@@ -143,11 +156,12 @@ class AdCloserHandler(
         lastRedirectReturnTimeMs = System.currentTimeMillis()
 
         // 依使用者指導：部分互動廣告必須跳轉商店/瀏覽器並返回才能略過，因此不盲目清空亦不隨意永久封鎖！
-        // 僅當同一個座標區域 (半徑 65px) 連續累積達 3 次無效跳轉時，才暫時加入黑名單進行節流保護
+        // 僅當同一個座標區域 (依螢幕寬度動態換算半徑，1080px 基準約 64.8px 對應原 65.0px) 連續累積達 3 次無效跳轉時，才暫時加入黑名單進行節流保護
         if (pt != null) {
             redirectPointCounts.add(pt)
+            val radiusPx = getBlacklistRadiusPx(if (sw > 0) sw else 1080)
             val nearbyRedirects = redirectPointCounts.count { p ->
-                hypot((p.x - pt.x).toDouble(), (p.y - pt.y).toDouble()) < BLACKLIST_RADIUS_PX
+                hypot((p.x - pt.x).toDouble(), (p.y - pt.y).toDouble()) < radiusPx
             }
             if (nearbyRedirects >= 3) {
                 blacklistedPoints.add(pt)
@@ -158,6 +172,48 @@ class AdCloserHandler(
 
     /** 目前廣告是否已封鎖左上角掃描（供測試與診斷使用） */
     fun isLeftCornerDisabledForCurrentAd(): Boolean = disableLeftCornerForCurrentAd
+
+    /**
+     * 取得目前廣告有效的 Watchdog 最大等待秒數（以設定值為基準，並於載入緩衝期給予安全裕度）。
+     */
+    fun getEffectiveWatchdogLimitSec(baseLimitSec: Int): Int {
+        val safeBase = baseLimitSec.coerceAtLeast(20)
+        return if (wasAdLoading) safeBase + 15 else safeBase
+    }
+
+    /**
+     * 回傳供 [狀態Snap] 診斷日誌使用的廣告關閉器內部欄位摘要。
+     */
+    fun getDiagnosticsSnapshotFields(): String {
+        val blkPreview = if (blacklistedPoints.isEmpty()) {
+            ""
+        } else {
+            val pts = blacklistedPoints.take(5).joinToString(",") { "(${it.x},${it.y})" }
+            if (blacklistedPoints.size > 5) "$pts,..." else pts
+        }
+        val lastClickStr = lastClickedPoint?.let { "(${it.x},${it.y})" } ?: "none"
+        return "redir=$redirectCount | blk=${blacklistedPoints.size}[$blkPreview] | lastClick=$lastClickStr"
+    }
+
+    /**
+     * 取得最近一次點擊的廣告關閉／略過目標標籤（供外部跳轉防護判斷是否為預期略過按鈕）。
+     */
+    fun getLastClickedAdLabel(): String? = lastClickedAdLabel
+
+    /**
+     * 依螢幕寬度動態換算點擊黑名單半徑（1080px 基準約 64.8px，對應原固定 65.0px；小螢幕保底 28.0px）。
+     */
+    fun getBlacklistRadiusPx(sw: Int): Double = kotlin.math.max(28.0, sw * 0.060)
+
+    private fun logThrottledBackReject(service: AutoAdAccessibilityService, contextLabel: String) {
+        val now = System.currentTimeMillis()
+        val reason = service.lastBackRejectReason.ifBlank { "UNKNOWN" }
+        if (reason != lastLoggedRejectReason || now - lastBackRejectLogTimeMs >= 10_000L) {
+            lastLoggedRejectReason = reason
+            lastBackRejectLogTimeMs = now
+            Log.w(TAG, "[返回攔截] $contextLabel 遭拒，原因: $reason")
+        }
+    }
 
     private fun isInLeftCornerZone(x: Int, y: Int): Boolean {
         val sw = currentScreenWidth
@@ -214,16 +270,17 @@ class AdCloserHandler(
             }
         }
         val now = System.currentTimeMillis()
+        val radiusPx = getBlacklistRadiusPx(if (currentScreenWidth > 0) currentScreenWidth else 1080)
         // 重定向冷卻節流緩衝 (3500ms)：若剛從外部重定向返回，且目標點為最近引發跳轉之座標，暫時抑制點擊以留出畫面渲染時間
         if (now - lastRedirectReturnTimeMs < 3500L) {
             val isRecentRedirectPt = redirectPointCounts.any { pt ->
-                hypot((pt.x - x).toDouble(), (pt.y - y).toDouble()) < BLACKLIST_RADIUS_PX
+                hypot((pt.x - x).toDouble(), (pt.y - y).toDouble()) < radiusPx
             }
             if (isRecentRedirectPt) return true
         }
 
         return blacklistedPoints.any { pt ->
-            hypot((pt.x - x).toDouble(), (pt.y - y).toDouble()) < BLACKLIST_RADIUS_PX
+            hypot((pt.x - x).toDouble(), (pt.y - y).toDouble()) < radiusPx
         }
     }
 
@@ -268,7 +325,7 @@ class AdCloserHandler(
         val adErrorClose = ocrRecognizer.findAdLoadErrorCloseButton(screenBitmap, ocrItems)
         if (adErrorClose != null) {
             hasAdActuallyShown = false
-            recordAndClick(service, adErrorClose.second, allowBlacklist = false)
+            recordAndClick(service, adErrorClose.second, allowBlacklist = false, label = "廣告載入失敗彈窗")
             return AdStepResult.ReturnedToGame(adErrorClose.second, "廣告載入失敗彈窗")
         }
 
@@ -326,7 +383,9 @@ class AdCloserHandler(
                 blacklistedPoints.add(badPt)
                 lastClickedPoint = null
             }
-            service.navigateBack()
+            if (!service.navigateBack()) {
+                logThrottledBackReject(service, "外部跳轉返回鍵")
+            }
             return AdStepResult.RedirectRecovered(fgPkg ?: "InAppBrowser")
         }
 
@@ -344,7 +403,9 @@ class AdCloserHandler(
                 service.bringAppToFront("com.linecorp.LGWKTW")
                 socialLandingPageTicks = 0
             } else {
-                service.navigateBack()
+                if (!service.navigateBack()) {
+                    logThrottledBackReject(service, "社群落地頁返回鍵")
+                }
             }
             return AdStepResult.RedirectRecovered("FacebookLandingPage")
         } else {
@@ -364,8 +425,11 @@ class AdCloserHandler(
             t.contains("目前版本")
         }
         if (isGame && !isAd && isMenuScreen) {
-            service.safeNavigateBack(allowInGame = true)
-            return AdStepResult.ReturnedToGame(null, "已發送安全返回鍵退出選單回到散步趣介面")
+            if (service.safeNavigateBack(allowInGame = true)) {
+                return AdStepResult.ReturnedToGame(null, "已發送安全返回鍵退出選單回到散步趣介面")
+            } else {
+                logThrottledBackReject(service, "選單退出返回鍵")
+            }
         }
 
         // 1A-4. LINE 內部促銷宣傳全螢幕廣告 (如『還沒有邀請好友 實在太可惜了！』『獲得金幣的流程』『邀請好友 最高可獲 10000 金幣 快來領取吧!!』)：
@@ -380,14 +444,20 @@ class AdCloserHandler(
             linePromoCloseClicks++
 
             if (linePromoCloseClicks == 1 || linePromoCloseClicks == 2 || linePromoCloseClicks % 2 == 0) {
+                val promoLabel = "LINE宣傳廣告關閉(X)[第${linePromoCloseClicks}次]"
+                lastClickedAdLabel = promoLabel
                 closeClickCount++
                 FloatingOverlayService.clickWithOverlayPassthrough(promoCloseRect) {
                     service.clickRect(promoCloseRect, maxJitterPx = 2, allowTopSafeZone = true)
                 }
-                return AdStepResult.ClickedCloseOrSkip("LINE宣傳廣告關閉(X)[第${linePromoCloseClicks}次]", promoCloseRect)
+                return AdStepResult.ClickedCloseOrSkip(promoLabel, promoCloseRect)
             } else {
-                service.safeNavigateBack(minIntervalMs = 600L, allowInGame = true)
-                return AdStepResult.ClickedCloseOrSkip("LINE宣傳廣告安全返回鍵[第${linePromoCloseClicks}次]", promoCloseRect)
+                val promoBackLabel = "LINE宣傳廣告安全返回鍵[第${linePromoCloseClicks}次]"
+                if (service.safeNavigateBack(minIntervalMs = 600L, allowInGame = true)) {
+                    return AdStepResult.ClickedCloseOrSkip(promoBackLabel, promoCloseRect)
+                } else {
+                    logThrottledBackReject(service, promoBackLabel)
+                }
             }
         } else if (!ocrRecognizer.isLineInHousePromoAd(ocrItems)) {
             linePromoCloseClicks = 0
@@ -400,8 +470,11 @@ class AdCloserHandler(
         if (hasRecentRedirect) {
             hasRecentRedirect = false
             if (!isAd) {
-                service.safeNavigateBack()
-                return AdStepResult.WatchdogBackTriggered(elapsedSec, "防重定向返回鍵")
+                if (service.safeNavigateBack()) {
+                    return AdStepResult.WatchdogBackTriggered(elapsedSec, "防重定向返回鍵")
+                } else {
+                    logThrottledBackReject(service, "防重定向返回鍵")
+                }
             }
         }
 
@@ -422,7 +495,9 @@ class AdCloserHandler(
                 )
                 service.clickRect(backdropRect)
             } else {
-                service.safeNavigateBack()
+                if (!service.safeNavigateBack()) {
+                    logThrottledBackReject(service, "AdChoices返回鍵")
+                }
             }
             return AdStepResult.AdChoicesDismissed
         } else {
@@ -451,7 +526,7 @@ class AdCloserHandler(
                     (sw * 0.75f).toInt(),
                     (sh * 0.93f).toInt()
                 )
-                recordAndClick(service, cancelBtn)
+                recordAndClick(service, cancelBtn, label = "廣告載入逾時取消")
                 return AdStepResult.ReturnedToGame(null, "廣告載入逾時已取消")
             }
         } else {
@@ -461,6 +536,7 @@ class AdCloserHandler(
                 // 重置計時起點，確保實際廣告享有完整的播放保護期 (Grace Period) 與倒數計時！
                 wasAdLoading = false
                 hasAdActuallyShown = true
+                watchdogForceBackAttempts = 0
                 adStartTimeMs = System.currentTimeMillis()
             }
         }
@@ -577,8 +653,9 @@ class AdCloserHandler(
             if (continueBtn != null) {
                 hasAdActuallyShown = true
                 lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
-                recordAndClick(service, continueBtn.bounds)
-                return AdStepResult.ClickedCloseOrSkip("防放棄繼續[${continueBtn.text}]", continueBtn.bounds)
+                val continueLabel = "防放棄繼續[${continueBtn.text}]"
+                recordAndClick(service, continueBtn.bounds, label = continueLabel)
+                return AdStepResult.ClickedCloseOrSkip(continueLabel, continueBtn.bounds)
             }
 
             val rootNode = service.getSafeRootNode()
@@ -592,8 +669,9 @@ class AdCloserHandler(
             if (continueNode != null && !isInvalidOrBlacklisted(continueNode.bounds.centerX(), continueNode.bounds.centerY())) {
                 hasAdActuallyShown = true
                 lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
-                recordAndClick(service, continueNode.bounds)
-                return AdStepResult.ClickedCloseOrSkip("防放棄繼續[${continueNode.label}]", continueNode.bounds)
+                val continueLabel = "防放棄繼續[${continueNode.label}]"
+                recordAndClick(service, continueNode.bounds, label = continueLabel)
+                return AdStepResult.ClickedCloseOrSkip(continueLabel, continueNode.bounds)
             }
 
             // 0% accidental close: 確認彈窗出現時，嚴格攔截所有關閉/略過行為
@@ -648,7 +726,7 @@ class AdCloserHandler(
         if (explicitSkipNode != null) {
             hasAdActuallyShown = true
             lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
-            recordAndClick(service, explicitSkipNode.bounds)
+            recordAndClick(service, explicitSkipNode.bounds, label = explicitSkipNode.label)
             return AdStepResult.ClickedCloseOrSkip(explicitSkipNode.label, explicitSkipNode.bounds)
         }
 
@@ -671,8 +749,9 @@ class AdCloserHandler(
         if (fastSkipMatch != null) {
             hasAdActuallyShown = true
             lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
-            recordAndClick(service, fastSkipMatch.bounds, allowBlacklist = true)
-            return AdStepResult.ClickedCloseOrSkip("快速略過[${fastSkipMatch.text}]", fastSkipMatch.bounds)
+            val fastSkipLabel = "快速略過[${fastSkipMatch.text}]"
+            recordAndClick(service, fastSkipMatch.bounds, allowBlacklist = true, label = fastSkipLabel)
+            return AdStepResult.ClickedCloseOrSkip(fastSkipLabel, fastSkipMatch.bounds)
         }
 
         // 4B. 全畫面 OCR 明確略過按鈕搜尋 (包含「略過廣告」、「可略過廣告」、「Skip Ad」、「略過」等)
@@ -745,8 +824,9 @@ class AdCloserHandler(
         ) {
             hasAdActuallyShown = true
             lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
-            recordAndClick(service, validSkipOcr.bounds, allowBlacklist = true)
-            return AdStepResult.ClickedCloseOrSkip("OCR[${validSkipOcr.text}]", validSkipOcr.bounds)
+            val skipOcrLabel = "OCR[${validSkipOcr.text}]"
+            recordAndClick(service, validSkipOcr.bounds, allowBlacklist = true, label = skipOcrLabel)
+            return AdStepResult.ClickedCloseOrSkip(skipOcrLabel, validSkipOcr.bounds)
         }
 
         // 4B. 檢查左上角/頂部 Google AdMob 等多段廣告之「Next Ad -> / 下一則」膠囊按鈕 (例如 Ad 1 of 2 略過按鈕)
@@ -765,8 +845,9 @@ class AdCloserHandler(
         if (nextAdMatch != null && !isInvalidOrBlacklisted(nextAdMatch.bounds.centerX(), nextAdMatch.bounds.centerY())) {
             hasAdActuallyShown = true
             lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
-            recordAndClick(service, nextAdMatch.bounds, allowBlacklist = true)
-            return AdStepResult.ClickedCloseOrSkip("OCR[${nextAdMatch.text}]", nextAdMatch.bounds)
+            val nextAdLabel = "OCR[${nextAdMatch.text}]"
+            recordAndClick(service, nextAdMatch.bounds, allowBlacklist = true, label = nextAdLabel)
+            return AdStepResult.ClickedCloseOrSkip(nextAdLabel, nextAdMatch.bounds)
         }
 
         // 5. 【倒數計時防護已於步驟 3B 優先執行完成】
@@ -786,6 +867,7 @@ class AdCloserHandler(
                 lastGooglePlayPillClickTimeMs = nowMsForPill
                 hasAdActuallyShown = true
                 lastFallbackCornerTimeMs = nowMsForPill + 4000L
+                lastClickedAdLabel = "左上角[▶| Google Play]略過鈕"
                 recordAndClick(service, topLeftGooglePlayPill, allowBlacklist = false)
                 return AdStepResult.ClickedCloseOrSkip("左上角[▶| Google Play]略過鈕", topLeftGooglePlayPill)
             }
@@ -810,7 +892,7 @@ class AdCloserHandler(
                 if (!isInvalidOrBlacklisted(closeX, closeY)) {
                     hasAdActuallyShown = true
                     lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
-                    recordAndClick(service, pillCloseRect, allowBlacklist = true)
+                    recordAndClick(service, pillCloseRect, allowBlacklist = true, label = "Reward granted [✕]")
                     return AdStepResult.ClickedCloseOrSkip("Reward granted [✕]", pillCloseRect)
                 }
             }
@@ -863,7 +945,7 @@ class AdCloserHandler(
                 fastForwardSkipClicks++
                 hasAdActuallyShown = true
                 lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
-                recordAndClick(service, skipMatch.bounds, allowBlacklist = true)
+                recordAndClick(service, skipMatch.bounds, allowBlacklist = true, label = skipMatch.label)
                 return AdStepResult.ClickedCloseOrSkip(skipMatch.label, skipMatch.bounds)
             }
         }
@@ -883,7 +965,7 @@ class AdCloserHandler(
                     lastLeftCornerClickTimeMs = System.currentTimeMillis()
                 }
                 lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
-                recordAndClick(service, geoMatch.bounds, allowBlacklist = true)
+                recordAndClick(service, geoMatch.bounds, allowBlacklist = true, label = "Meta預覽關閉(幾何X)")
                 return AdStepResult.ClickedCloseOrSkip("Meta預覽關閉(幾何X)", geoMatch.bounds)
             }
             // 廢除容易誤觸『以外部瀏覽器開啟』之右上角盲點熱區！
@@ -891,9 +973,12 @@ class AdCloserHandler(
             if (elapsedSec >= 5 || redirectCount > 0) {
                 val now = System.currentTimeMillis()
                 if (now - lastBackActionTimeMs >= 2500L) {
-                    service.safeNavigateBack(allowInGame = false)
                     lastBackActionTimeMs = now
-                    return AdStepResult.WatchdogBackTriggered(elapsedSec, "Meta預覽安全返回鍵")
+                    if (service.safeNavigateBack(allowInGame = false)) {
+                        return AdStepResult.WatchdogBackTriggered(elapsedSec, "Meta預覽安全返回鍵")
+                    } else {
+                        logThrottledBackReject(service, "Meta預覽安全返回鍵")
+                    }
                 }
             }
         }
@@ -902,7 +987,7 @@ class AdCloserHandler(
         val closeNode = nodeInspector.findAdCloseNode(rootNode, sw, sh, ::isInvalidOrBlacklisted, isFullScreenAd = true)
         if (closeNode != null) {
             lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
-            recordAndClick(service, closeNode.bounds)
+            recordAndClick(service, closeNode.bounds, label = closeNode.label)
             return AdStepResult.ClickedCloseOrSkip(closeNode.label, closeNode.bounds)
         }
 
@@ -920,8 +1005,9 @@ class AdCloserHandler(
             !isInvalidOrBlacklisted(fullScreenCloseOcr.bounds.centerX(), fullScreenCloseOcr.bounds.centerY())
         ) {
             lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
-            recordAndClick(service, fullScreenCloseOcr.bounds, allowBlacklist = true)
-            return AdStepResult.ClickedCloseOrSkip("OCR[${fullScreenCloseOcr.text}]", fullScreenCloseOcr.bounds)
+            val closeOcrLabel = "OCR[${fullScreenCloseOcr.text}]"
+            recordAndClick(service, fullScreenCloseOcr.bounds, allowBlacklist = true, label = closeOcrLabel)
+            return AdStepResult.ClickedCloseOrSkip(closeOcrLabel, fullScreenCloseOcr.bounds)
         }
 
         // 7B. 第二層辨識 B：中下方廣告控制欄「关闭 / 關閉」藥丸按鈕偵測 (如 Google 聯播網、何基鼎台股分析廣告)
@@ -931,29 +1017,11 @@ class AdCloserHandler(
         ) {
             lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
             hasAdActuallyShown = true
-            recordAndClick(service, bottomBarClose.second, allowBlacklist = true)
+            recordAndClick(service, bottomBarClose.second, allowBlacklist = true, label = bottomBarClose.first)
             return AdStepResult.ClickedCloseOrSkip(bottomBarClose.first, bottomBarClose.second)
         }
 
-        // 7. 第三層辨識 A：比對使用者在懸浮窗框選儲存的「廣告 X / >> 範本 (AD_CLOSE_ICON)」
-        val userCloseTemplates = templateStorage.getTemplates(TemplateCategory.AD_CLOSE_ICON).map { it.bitmap }
-        if (userCloseTemplates.isNotEmpty()) {
-            val tplMatch = templateMatcher.findBestTemplateMatch(
-                screenBitmap = screenBitmap,
-                templates = userCloseTemplates,
-                roiNormalized = RectF(0.0f, 0.05f, 1.0f, 0.95f),
-                threshold = config.templateMatchThreshold,
-                labelPrefix = "自訂X範本",
-                blacklistedCoord = ::isInvalidOrBlacklisted
-            )
-            if (tplMatch != null) {
-                lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
-                recordAndClick(service, tplMatch.bounds, allowBlacklist = true)
-                return AdStepResult.ClickedCloseOrSkip(tplMatch.label, tplMatch.bounds)
-            }
-        }
-
-        // 8. 第三層辨識 B：啟動「高精度免樣本幾何角落 X 偵測器」
+        // 8. 第三層辨識：啟動「高精度免樣本幾何角落 X 偵測器」（現場框選取樣已全面移除）
         // 全面支援右上角與左上角幾何 (X) 偵測（解決 CACO 雙11 等左上角白底黑邊圓形 (X) 廣告與 Meta 左上角 (X) 廣告）！
         val noActiveCountdown = remainingSec == null || remainingSec <= 1
         val shouldCheckGeoX = if (isMetaAd) {
@@ -983,11 +1051,35 @@ class AdCloserHandler(
                     lastLeftCornerClickTimeMs = System.currentTimeMillis()
                 }
                 lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
-                recordAndClick(service, geoMatch.bounds, allowBlacklist = true)
+                recordAndClick(service, geoMatch.bounds, allowBlacklist = true, label = geoMatch.label)
                 return AdStepResult.ClickedCloseOrSkip(geoMatch.label, geoMatch.bounds)
             }
-            // 若為頂部白底 Sponsored 橫幅廣告 (如 3M 或 Trip.com) 且無倒數計時，直接以 Sponsored 標題高度動態對齊點擊左上角 X
+            // 若為頂部白底 Sponsored 橫幅廣告 (如 3M 或 Trip.com) 且無倒數計時：
+            // 建構熱區前，先對 (x in 0.02..0.15, y in topSponsoredCenterY±r) 執行聚焦幾何 X 偵測，優先採用真實幾何 X；
+            // 若仍無幾何 X 才執行初次受控試探點擊。
             if (isCurrentAdTopSponsored && (elapsedSec >= 5 || rewardGrantedOcr != null) && (remainingSec == null || remainingSec <= 1)) {
+                if (!disableLeftCornerForCurrentAd && leftCornerCooldownOk) {
+                    val r = max(24, (sh * 0.025f).toInt())
+                    val focusMinX = (sw * 0.02f).toInt()
+                    val focusMaxX = (sw * 0.15f).toInt()
+                    val focusMinY = (topSponsoredCenterY - r).coerceAtLeast((sh * 0.015f).toInt())
+                    val focusMaxY = (topSponsoredCenterY + r).coerceAtMost((sh * 0.105f).toInt())
+                    val focusedGeoX = templateMatcher.detectCornerGeometricX(
+                        screenBitmap = screenBitmap,
+                        blacklistedCoord = { x, y ->
+                            x !in focusMinX..focusMaxX || y !in focusMinY..focusMaxY || isInvalidOrBlacklisted(x, y)
+                        },
+                        isRelaxed = true,
+                        includeLeftZone = true
+                    )
+                    if (focusedGeoX != null) {
+                        leftCornerGeoXClicks++
+                        lastLeftCornerClickTimeMs = System.currentTimeMillis()
+                        lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
+                        recordAndClick(service, focusedGeoX.bounds, allowBlacklist = true, label = focusedGeoX.label)
+                        return AdStepResult.ClickedCloseOrSkip(focusedGeoX.label, focusedGeoX.bounds)
+                    }
+                }
                 val halfH = max(14, (sh * 0.012f).toInt())
                 val sponsoredLeftTopX = Rect(
                     (sw * 0.048f).toInt(),
@@ -995,10 +1087,11 @@ class AdCloserHandler(
                     (sw * 0.098f).toInt(),
                     (topSponsoredCenterY + halfH).coerceAtMost((sh * 0.092f).toInt())
                 )
-                if (!disableLeftCornerForCurrentAd && !isInvalidOrBlacklisted(sponsoredLeftTopX.centerX(), sponsoredLeftTopX.centerY()) && leftCornerCooldownOk) {
+                if (!disableLeftCornerForCurrentAd && !isInvalidOrBlacklisted(sponsoredLeftTopX.centerX(), sponsoredLeftTopX.centerY()) && leftCornerCooldownOk && sponsoredTopLeftProbeCount < 1) {
+                    sponsoredTopLeftProbeCount++
                     lastLeftCornerClickTimeMs = System.currentTimeMillis()
                     lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
-                    recordAndClick(service, sponsoredLeftTopX, allowBlacklist = true)
+                    recordAndClick(service, sponsoredLeftTopX, allowBlacklist = true, label = "Sponsored頂部左上角X")
                     return AdStepResult.ClickedCloseOrSkip("Sponsored頂部左上角X", sponsoredLeftTopX)
                 }
             }
@@ -1042,8 +1135,11 @@ class AdCloserHandler(
             hasAdActuallyShown = true
             lastBackActionTimeMs = now
             lastFallbackCornerTimeMs = now + 4000L
-            service.safeNavigateBack(allowInGame = true)
-            return AdStepResult.WatchdogBackTriggered(elapsedSec, "廣告結束卡片安全返回鍵")
+            if (service.safeNavigateBack(allowInGame = true)) {
+                return AdStepResult.WatchdogBackTriggered(elapsedSec, "廣告結束卡片安全返回鍵")
+            } else {
+                logThrottledBackReject(service, "廣告結束卡片安全返回鍵")
+            }
         }
 
         // 8B. 主動安全返回策略與熱區防護：
@@ -1059,27 +1155,36 @@ class AdCloserHandler(
         if (remainingSec == null && elapsedSec >= 5) {
             // 重定向拉回後安全返回：必須在廣告播滿至少 42 秒且畫面無關閉鈕時才允許返回鍵關閉，給予充分時間掃描畫面 X 與略過標籤！
             if (redirectCount > 0 && !isGame && !isMetaWebPreview && elapsedSec >= 42 && now - lastBackActionTimeMs >= 2500L) {
-                service.safeNavigateBack(allowInGame = true)
                 lastBackActionTimeMs = now
-                return AdStepResult.WatchdogBackTriggered(elapsedSec, "重定向安全返回鍵")
+                if (service.safeNavigateBack(allowInGame = true)) {
+                    return AdStepResult.WatchdogBackTriggered(elapsedSec, "重定向安全返回鍵")
+                } else {
+                    logThrottledBackReject(service, "重定向安全返回鍵")
+                }
             }
 
             // 廣告已明確獲得獎勵：優先派發安全系統返回鍵關閉廣告回到遊戲！
             if (rewardGrantedOcr != null && !isGame && now - lastBackActionTimeMs >= 2500L) {
-                service.safeNavigateBack(allowInGame = false)
                 lastBackActionTimeMs = now
-                return AdStepResult.WatchdogBackTriggered(elapsedSec, "已獲獎勵安全返回鍵")
+                if (service.safeNavigateBack(allowInGame = false)) {
+                    return AdStepResult.WatchdogBackTriggered(elapsedSec, "已獲獎勵安全返回鍵")
+                } else {
+                    logThrottledBackReject(service, "已獲獎勵安全返回鍵")
+                }
             }
 
             // 廣告已明確獲得獎勵且已在內部嘗試過點擊（或播放超過 8 秒但畫面仍未回到散步趣主畫面）：派發返回鍵安全關閉廣告！
             if (rewardGrantedOcr != null && !isGameVisible && (closeClickCount > 0 || elapsedSec >= 8) && now - lastBackActionTimeMs >= 2500L) {
-                service.safeNavigateBack(allowInGame = true)
                 lastBackActionTimeMs = now
-                return AdStepResult.WatchdogBackTriggered(elapsedSec, "已獲獎勵內部返回鍵")
+                if (service.safeNavigateBack(allowInGame = true)) {
+                    return AdStepResult.WatchdogBackTriggered(elapsedSec, "已獲獎勵內部返回鍵")
+                } else {
+                    logThrottledBackReject(service, "已獲獎勵內部返回鍵")
+                }
             }
 
             // Meta 備援關閉熱區：在確認為 Meta 廣告且播放滿 28 秒或無倒數計時時，對頂部左上角 X 區域發送精確點擊
-            if (isMetaAd && !hasGooglePlayOnScreen && (elapsedSec >= 28 || (remainingSec == null && elapsedSec >= 25)) && !isOutsideGame && redirectCount == 0 && closeClickCount == 0 && now - lastFallbackCornerTimeMs >= 3000L) {
+            if (isMetaAd && !hasGooglePlayOnScreen && (elapsedSec >= 28 || (remainingSec == null && elapsedSec >= 25)) && !isOutsideGame && leftCornerRedirectCount < 2 && !disableLeftCornerForCurrentAd && closeClickCount == 0 && now - lastFallbackCornerTimeMs >= 3000L) {
                 val halfH = max(14, (sh * 0.012f).toInt())
                 val metaLeftTopHotZone = Rect(
                     (sw * 0.048f).toInt(),
@@ -1089,33 +1194,40 @@ class AdCloserHandler(
                 )
                 if (!isInvalidOrBlacklisted(metaLeftTopHotZone.centerX(), metaLeftTopHotZone.centerY())) {
                     lastFallbackCornerTimeMs = now
-                    recordAndClick(service, metaLeftTopHotZone, allowBlacklist = true)
+                    recordAndClick(service, metaLeftTopHotZone, allowBlacklist = true, label = "Meta備援左上角熱區")
                     return AdStepResult.WatchdogBackTriggered(elapsedSec, "Meta備援左上角熱區")
                 }
             }
 
             // 備援盲點與安全返回：僅在廣告播放超過 45 秒且無關閉鈕時觸發，防止不可略過廣告提早退出
             if (elapsedSec >= 45) {
-                // 若已經發生過外部重定向，或者在散步趣內部，嚴禁盲點角落熱區以免再度跳轉 Google Play！
+                // 若已經發生過外部重定向，嚴禁盲點角落熱區以免再度跳轉 Google Play（含遊戲內嵌廣告）！
                 // 直接使用安全系統返回鍵關閉廣告最為可靠！
-                if (redirectCount > 0 && !isGame) {
+                if (redirectCount > 0) {
                     if (now - lastBackActionTimeMs >= 2000L) {
-                        service.safeNavigateBack(allowInGame = true)
                         lastBackActionTimeMs = now
-                        return AdStepResult.WatchdogBackTriggered(elapsedSec, "末期安全返回鍵")
+                        if (service.safeNavigateBack(allowInGame = true)) {
+                            return AdStepResult.WatchdogBackTriggered(elapsedSec, "末期安全返回鍵")
+                        } else {
+                            logThrottledBackReject(service, "末期安全返回鍵")
+                        }
                     }
                 } else {
                     // 若未發生重定向，輪流嘗試角落備援熱區（右上角/右下角/內容右上角）與安全返回鍵
                     if (!isOutsideGame && now - lastFallbackCornerTimeMs >= 3000L) {
                         val (label, targetRect) = getNextFallbackTarget(sw, sh, ocrItems)
                         lastFallbackCornerTimeMs = now
-                        recordAndClick(service, targetRect, allowBlacklist = true)
-                        return AdStepResult.WatchdogBackTriggered(elapsedSec, "備援盲點[$label]")
+                        val fallbackLabel = "備援盲點[$label]"
+                        recordAndClick(service, targetRect, allowBlacklist = true, label = fallbackLabel)
+                        return AdStepResult.WatchdogBackTriggered(elapsedSec, fallbackLabel)
                     }
                     if ((!isGame || !isGameVisible) && now - lastBackActionTimeMs >= 3000L) {
-                        service.safeNavigateBack(allowInGame = true)
                         lastBackActionTimeMs = now
-                        return AdStepResult.WatchdogBackTriggered(elapsedSec, "超時安全返回鍵")
+                        if (service.safeNavigateBack(allowInGame = true)) {
+                            return AdStepResult.WatchdogBackTriggered(elapsedSec, "超時安全返回鍵")
+                        } else {
+                            logThrottledBackReject(service, "超時安全返回鍵")
+                        }
                     }
                 }
             }
@@ -1149,15 +1261,29 @@ class AdCloserHandler(
             }
         }
 
-        // 9. 防卡死 Watchdog：若單支廣告超過最大等待秒數 (預設 65 秒)，以安全返回鍵強制關閉廣告
+        // 9. 防卡死 Watchdog：若單支廣告超過最大等待秒數 (預設 65 秒)，以計時強制返回鍵突破容器防護強制退回；
+        // 若連續 2 次強制返回仍無法脫離第三方容器／卡死畫面，回傳 ForceBringGameToFront 拉回散步趣。
         if (elapsedSec >= config.maxAdWaitSeconds && now - lastBackActionTimeMs >= 2000L) {
-            if (!isOutsideGame) {
-                service.safeNavigateBack(allowInGame = true)
-            } else {
-                service.safeNavigateBack(allowInGame = true)
+            if (watchdogForceBackAttempts >= 2) {
+                lastBackActionTimeMs = now
+                val reason = service.lastBackRejectReason.ifBlank { "FORCE_BACK_2_ATTEMPTS_NO_ESCAPE" }
+                return AdStepResult.ForceBringGameToFront(elapsedSec, fgPkg ?: "unknown", reason)
             }
+            watchdogForceBackAttempts++
             lastBackActionTimeMs = now
-            return AdStepResult.WatchdogBackTriggered(elapsedSec, "超時安全返回鍵")
+            val backOk = service.safeNavigateBack(
+                minIntervalMs = 300L,
+                allowInGame = true,
+                forceEscapeAdPackage = true
+            )
+            if (backOk) {
+                return AdStepResult.WatchdogBackTriggered(elapsedSec, "計時強制返回鍵[第${watchdogForceBackAttempts}次]")
+            }
+            logThrottledBackReject(service, "計時強制返回鍵[第${watchdogForceBackAttempts}次]")
+            if (watchdogForceBackAttempts >= 2) {
+                val reason = service.lastBackRejectReason.ifBlank { "FORCE_BACK_REJECTED" }
+                return AdStepResult.ForceBringGameToFront(elapsedSec, fgPkg ?: "unknown", reason)
+            }
         }
 
         // 播放廣告期間嚴格保持靜候，禁止無差別滑動螢幕以免誤觸購物廣告商品卡或內嵌網頁！
@@ -1263,25 +1389,41 @@ class AdCloserHandler(
         return target
     }
 
+    private fun isHighConfidenceAdTarget(label: String?): Boolean {
+        if (label.isNullOrBlank()) return false
+        return label.contains("Google Play", ignoreCase = true) ||
+            label.contains("GooglePlay", ignoreCase = true) ||
+            label == "左上角幾何X" ||
+            label == "右上角幾何X" ||
+            label == "Meta預覽關閉(幾何X)" ||
+            label == "Sponsored頂部左上角X"
+    }
+
     private suspend fun recordAndClick(
         service: AutoAdAccessibilityService,
         rect: Rect,
-        allowBlacklist: Boolean = true
+        allowBlacklist: Boolean = true,
+        label: String? = null
     ) {
+        val effectiveLabel = label ?: lastClickedAdLabel
+        if (label != null) {
+            lastClickedAdLabel = label
+        }
         val pt = Point(rect.centerX(), rect.centerY())
         lastClickedPoint = pt
         // 記錄最近一次點擊是否位於左上角（若隨後觸發外部跳轉，用於封鎖本支廣告的左上角區域）
         lastLeftCornerClickTimeMs = if (isInLeftCornerZone(pt.x, pt.y)) System.currentTimeMillis() else 0L
         clickedHistory.add(pt)
+        val radiusPx = getBlacklistRadiusPx(if (currentScreenWidth > 0) currentScreenWidth else 1080)
         val nearbyClicks = clickedHistory.count { p ->
-            hypot((p.x - pt.x).toDouble(), (p.y - pt.y).toDouble()) < BLACKLIST_RADIUS_PX
+            hypot((p.x - pt.x).toDouble(), (p.y - pt.y).toDouble()) < radiusPx
         }
-        if (allowBlacklist && nearbyClicks >= 2) {
-            // 同一區域 (半徑 65px 內) 在同支廣告中已被點擊滿 2 次仍未關閉，立即加入黑名單避免重複空點
-            blacklistedPoints.add(pt)
-        } else if (!allowBlacklist && nearbyClicks >= 3) {
-            // 即使是不輕易黑名單的目標，若點擊達 3 次仍未關閉廣告，為防止死循環亦強制加入黑名單
-            blacklistedPoints.add(pt)
+        val isHighConfidence = isHighConfidenceAdTarget(effectiveLabel)
+        if (allowBlacklist) {
+            if (!isHighConfidence && nearbyClicks >= 4) {
+                // 非高可信目標／盲點類：同一區域 (依螢幕寬度動態換算半徑，1080px 基準對應原 65.0px) 點擊達 4 次仍未關閉，才加入黑名單避免重複空點
+                blacklistedPoints.add(pt)
+            }
         }
         closeClickCount++
         FloatingOverlayService.clickWithOverlayPassthrough(rect) {
@@ -1388,6 +1530,5 @@ class AdCloserHandler(
 
     companion object {
         private const val TAG = "AdCloserHandler"
-        private const val BLACKLIST_RADIUS_PX = 65.0
     }
 }

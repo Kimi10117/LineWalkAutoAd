@@ -68,7 +68,7 @@ class AppConfig(context: Context) {
 
     /** 廣告單次最長等待秒數，超過則觸發防卡死返回鍵 (預設 65 秒，確保不可略過之 30~45 秒完整影音播放與結算卡片不提早退出) */
     var maxAdWaitSeconds: Int
-        get() = prefs.getInt(KEY_MAX_AD_WAIT_SEC, 65)
+        get() = prefs.getInt(KEY_MAX_AD_WAIT_SEC, 65).coerceIn(20, 180)
         set(value) = prefs.edit().putInt(KEY_MAX_AD_WAIT_SEC, value.coerceIn(20, 180)).apply()
 
     /** 圖像模板匹配相似度門檻 (0.70f ~ 0.95f，預設 0.80f) */
@@ -80,6 +80,30 @@ class AppConfig(context: Context) {
     var targetGamePackages: Set<String>
         get() = prefs.getStringSet(KEY_TARGET_PACKAGES, DEFAULT_GAME_PACKAGES) ?: DEFAULT_GAME_PACKAGES
         set(value) = prefs.edit().putStringSet(KEY_TARGET_PACKAGES, value).apply()
+
+    /** 最近一次於前景偵測到的《LINE 散步趣》套件名稱（支援 LGWKTW 與 LGWALK 動態辨識） */
+    var lastDetectedGamePackage: String?
+        get() = prefs.getString(KEY_LAST_GAME_PKG, null)?.takeIf { isGamePackage(it) }
+        set(value) {
+            if (value != null && isGamePackage(value)) {
+                prefs.edit().putString(KEY_LAST_GAME_PKG, value).apply()
+            }
+        }
+
+    /** 回傳目前已啟用之巡邏任務繁體中文名稱清單（供診斷日誌摘要使用） */
+    fun getEnabledTaskNames(): List<String> {
+        val enabled = mutableListOf<String>()
+        if (enableStepBottleTask) enabled.add("步數水瓶")
+        if (enableMoveGaugeTask) enabled.add("移動距離")
+        if (enableIdleRewardTask) enabled.add("定時獎勵")
+        if (enableGachaTask) enabled.add("遊戲分頁")
+        if (enableBingoTask) enabled.add("每日賓果")
+        if (enableLotteryTask) enabled.add("抽抽樂")
+        if (enableDailyMissionTask) enabled.add("每日任務")
+        if (enableFriendGiftTask) enabled.add("好友送禮")
+        if (enableReceiveGiftTask) enabled.add("接收禮物")
+        return enabled
+    }
 
     companion object {
         private const val PREFS_NAME = "line_walk_auto_ad_prefs"
@@ -97,6 +121,12 @@ class AppConfig(context: Context) {
         private const val KEY_MAX_AD_WAIT_SEC = "max_ad_wait_sec_v19"
         private const val KEY_MATCH_THRESHOLD = "match_threshold"
         private const val KEY_TARGET_PACKAGES = "target_game_packages"
+        private const val KEY_LAST_GAME_PKG = "last_detected_game_pkg"
+
+        val GAME_PACKAGE_PRIORITY_ORDER = listOf(
+            "com.linecorp.LGWKTW",
+            "com.linecorp.LGWALK"
+        )
 
         val DEFAULT_GAME_PACKAGES = setOf(
             "com.linecorp.LGWKTW",     // LINE 散步趣 (台灣版 Google Play)
@@ -153,6 +183,22 @@ class AppConfig(context: Context) {
             return lower.contains("browser") ||
                 lower.contains("chrome") ||
                 lower.contains("vending")
+        }
+
+        fun isBrowserPackage(pkg: String?): Boolean {
+            if (pkg.isNullOrBlank()) return false
+            if (pkg == "com.android.vending") return false
+            if (pkg in EXTERNAL_REDIRECT_PACKAGES) return true
+            val lower = pkg.lowercase()
+            return lower.contains("browser") ||
+                lower.contains("chrome") ||
+                lower.contains("sbrowser") ||
+                lower.contains("firefox")
+        }
+
+        fun isPlayStoreOrBrowserPackage(pkg: String?): Boolean {
+            if (pkg.isNullOrBlank()) return false
+            return pkg == "com.android.vending" || isBrowserPackage(pkg)
         }
 
         /**
