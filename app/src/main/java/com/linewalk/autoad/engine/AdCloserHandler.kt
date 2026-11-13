@@ -74,6 +74,7 @@ class AdCloserHandler(
     private var disableLeftCornerForCurrentAd: Boolean = false
     private var sponsoredTopLeftProbeCount: Int = 0
     private var watchdogForceBackAttempts: Int = 0
+    private var swallowedEndCardBackAttempts: Int = 0
     private var linePromoCloseClicks: Int = 0
     private var lastLeftCornerClickTimeMs: Long = 0L
     private var lastRedirectReturnTimeMs: Long = 0L
@@ -89,6 +90,7 @@ class AdCloserHandler(
     fun clearAdSessionTimer() {
         adStartTimeMs = 0L
         watchdogForceBackAttempts = 0
+        swallowedEndCardBackAttempts = 0
     }
 
     fun onEnterAdMode(preserveRedirectState: Boolean = false) {
@@ -119,6 +121,7 @@ class AdCloserHandler(
             leftCornerRedirectCount = 0
             sponsoredTopLeftProbeCount = 0
             watchdogForceBackAttempts = 0
+            swallowedEndCardBackAttempts = 0
             linePromoCloseClicks = 0
             lastLeftCornerClickTimeMs = 0L
             lastRedirectReturnTimeMs = 0L
@@ -137,6 +140,7 @@ class AdCloserHandler(
             lastClickedAdLabel = null
             sponsoredTopLeftProbeCount = 0
             watchdogForceBackAttempts = 0
+            swallowedEndCardBackAttempts = 0
             lastRedirectReturnTimeMs = 0L
             lastBackRejectLogTimeMs = 0L
             lastLoggedRejectReason = ""
@@ -318,6 +322,20 @@ class AdCloserHandler(
                 hypot((pt.x - x).toDouble(), (pt.y - y).toDouble()) < radiusPx
             }
             if (isRecentRedirectPt) return true
+        }
+
+        // 若右上角膠囊（如 [Google Play ×]）曾觸發過外部重定向，整條同列左側膠囊區 (最高向左延伸 24% 螢幕寬) 一併封鎖，
+        // 避免 GeoX 因圓形黑名單半徑未覆蓋到左方 "Google Play" 字樣裡的 'y'/'a' 而二次跳轉商店。
+        if (currentScreenWidth > 0 && currentScreenHeight > 0) {
+            val rowHalfBandY = kotlin.math.max(radiusPx * 0.65, currentScreenHeight * 0.025)
+            val hitsTopRightRedirectPillStrip = redirectPointCounts.any { pt ->
+                pt.x >= currentScreenWidth * 0.72f &&
+                    pt.y <= currentScreenHeight * 0.16f &&
+                    x >= pt.x - currentScreenWidth * 0.24f &&
+                    x <= pt.x + radiusPx &&
+                    kotlin.math.abs(y - pt.y) <= rowHalfBandY
+            }
+            if (hitsTopRightRedirectPillStrip) return true
         }
 
         return blacklistedPoints.any { pt ->
@@ -592,6 +610,7 @@ class AdCloserHandler(
                 wasAdLoading = false
                 hasAdActuallyShown = true
                 watchdogForceBackAttempts = 0
+                swallowedEndCardBackAttempts = 0
                 adStartTimeMs = System.currentTimeMillis()
             }
         }
@@ -1048,7 +1067,9 @@ class AdCloserHandler(
             hasAdActuallyShown = true
             val geoMatch = templateMatcher.detectCornerGeometricX(
                 screenBitmap = screenBitmap,
-                blacklistedCoord = ::isInvalidOrBlacklisted,
+                blacklistedCoord = { x, y ->
+                    isInvalidOrBlacklisted(x, y) || isBlockedByCornerPillOrSurveyOcr(x, y, ocrItems, sw, sh)
+                },
                 isRelaxed = true,
                 includeLeftZone = !disableLeftCornerForCurrentAd
             )
@@ -1084,8 +1105,9 @@ class AdCloserHandler(
         }
 
         // 7. 第二層辨識：一般全畫面關閉/確定/確認 OCR 辨識 (當倒數完畢或無倒數計時時)
+        val safeCloseOcrItems = ocrItems.filterNot { isSurveyRowCloseSymbol(it, ocrItems, sw, sh) }
         val fullScreenCloseOcr = ocrRecognizer.findMatch(
-            items = ocrItems,
+            items = safeCloseOcrItems,
             keywords = OcrRecognizer.AD_CLOSE_OCR_KEYWORDS + listOf("確認", "確定"),
             screenWidth = sw,
             screenHeight = sh,
@@ -1094,7 +1116,8 @@ class AdCloserHandler(
             maxTextLength = 16
         )
         if (fullScreenCloseOcr != null &&
-            !isInvalidOrBlacklisted(fullScreenCloseOcr.bounds.centerX(), fullScreenCloseOcr.bounds.centerY())
+            !isInvalidOrBlacklisted(fullScreenCloseOcr.bounds.centerX(), fullScreenCloseOcr.bounds.centerY()) &&
+            !isBlockedByCornerPillOrSurveyOcr(fullScreenCloseOcr.bounds.centerX(), fullScreenCloseOcr.bounds.centerY(), ocrItems, sw, sh)
         ) {
             lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
             val closeOcrLabel = "OCR[${fullScreenCloseOcr.text}]"
@@ -1103,8 +1126,8 @@ class AdCloserHandler(
         }
 
         // 7A2. 角落獨立單字 X 關閉按鈕識別（如起漲K線廣告之左上角 "X"@6%,6%），僅匹配螢幕角落安全座標
-        val cornerAsciiClose = ocrRecognizer.findCornerAsciiCloseButton(ocrItems, sw, sh) { cx, cy ->
-            isInvalidOrBlacklisted(cx, cy)
+        val cornerAsciiClose = ocrRecognizer.findCornerAsciiCloseButton(safeCloseOcrItems, sw, sh) { cx, cy ->
+            isInvalidOrBlacklisted(cx, cy) || isBlockedByCornerPillOrSurveyOcr(cx, cy, ocrItems, sw, sh)
         }
         if (cornerAsciiClose != null) {
             lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
@@ -1144,7 +1167,9 @@ class AdCloserHandler(
             val geoMatch = templateMatcher.detectCornerGeometricX(
                 screenBitmap = screenBitmap,
                 blacklistedCoord = { x, y ->
-                    isInvalidOrBlacklisted(x, y) || (!leftCornerAllowedForAd && isInLeftCornerZone(x, y))
+                    isInvalidOrBlacklisted(x, y) ||
+                        isBlockedByCornerPillOrSurveyOcr(x, y, ocrItems, sw, sh) ||
+                        (!leftCornerAllowedForAd && isInLeftCornerZone(x, y))
                 },
                 isRelaxed = isRelaxed,
                 includeLeftZone = enableLeftCornerScan
@@ -1173,7 +1198,10 @@ class AdCloserHandler(
                     val focusedGeoX = templateMatcher.detectCornerGeometricX(
                         screenBitmap = screenBitmap,
                         blacklistedCoord = { x, y ->
-                            x !in focusMinX..focusMaxX || y !in focusMinY..focusMaxY || isInvalidOrBlacklisted(x, y)
+                            x !in focusMinX..focusMaxX ||
+                                y !in focusMinY..focusMaxY ||
+                                isInvalidOrBlacklisted(x, y) ||
+                                isBlockedByCornerPillOrSurveyOcr(x, y, ocrItems, sw, sh)
                         },
                         isRelaxed = true,
                         includeLeftZone = true
@@ -1241,11 +1269,7 @@ class AdCloserHandler(
             hasAdActuallyShown = true
             lastBackActionTimeMs = now
             lastFallbackCornerTimeMs = now + 4000L
-            if (service.safeNavigateBack(allowInGame = true)) {
-                return AdStepResult.WatchdogBackTriggered(elapsedSec, "廣告結束卡片安全返回鍵")
-            } else {
-                logThrottledBackReject(service, "廣告結束卡片安全返回鍵")
-            }
+            trySafeEndCardOrRedirectBack(service, elapsedSec, "廣告結束卡片安全返回鍵", "END_CARD_BACK_SWALLOWED")?.let { return it }
         }
 
         // 8B. 主動安全返回策略與熱區防護：
@@ -1262,11 +1286,7 @@ class AdCloserHandler(
             // 重定向拉回後安全返回：必須在廣告播滿至少 42 秒且畫面無關閉鈕時才允許返回鍵關閉，給予充分時間掃描畫面 X 與略過標籤！
             if (redirectCount > 0 && !isGame && !isMetaWebPreview && elapsedSec >= 42 && now - lastBackActionTimeMs >= 2500L) {
                 lastBackActionTimeMs = now
-                if (service.safeNavigateBack(allowInGame = true)) {
-                    return AdStepResult.WatchdogBackTriggered(elapsedSec, "重定向安全返回鍵")
-                } else {
-                    logThrottledBackReject(service, "重定向安全返回鍵")
-                }
+                trySafeEndCardOrRedirectBack(service, elapsedSec, "重定向安全返回鍵", "POST_REDIRECT_BACK_SWALLOWED")?.let { return it }
             }
 
             // 廣告已明確獲得獎勵：優先派發安全系統返回鍵關閉廣告回到遊戲！
@@ -1312,11 +1332,7 @@ class AdCloserHandler(
                 if (redirectCount > 0) {
                     if (now - lastBackActionTimeMs >= 2000L) {
                         lastBackActionTimeMs = now
-                        if (service.safeNavigateBack(allowInGame = true)) {
-                            return AdStepResult.WatchdogBackTriggered(elapsedSec, "末期安全返回鍵")
-                        } else {
-                            logThrottledBackReject(service, "末期安全返回鍵")
-                        }
+                        trySafeEndCardOrRedirectBack(service, elapsedSec, "末期安全返回鍵", "LATE_REDIRECT_BACK_SWALLOWED")?.let { return it }
                     }
                 } else {
                     // 若未發生重定向，輪流嘗試已過濾狀態列與黑名單的右上角備援熱區與安全返回鍵
@@ -1539,12 +1555,121 @@ class AdCloserHandler(
             label.contains("GooglePlay", ignoreCase = true)
     }
 
+    private fun trySafeEndCardOrRedirectBack(
+        service: AutoAdAccessibilityService,
+        elapsedSec: Int,
+        actionLabel: String,
+        escalateTag: String
+    ): AdStepResult? {
+        if (swallowedEndCardBackAttempts >= 2) {
+            val fgPkg = service.getForegroundPackageName() ?: "unknown"
+            return AdStepResult.ForceBringGameToFront(
+                elapsedSec,
+                fgPkg,
+                "${escalateTag}(${swallowedEndCardBackAttempts}_ATTEMPTS)"
+            )
+        }
+        if (service.safeNavigateBack(allowInGame = true)) {
+            swallowedEndCardBackAttempts++
+            return AdStepResult.WatchdogBackTriggered(elapsedSec, actionLabel)
+        }
+        logThrottledBackReject(service, actionLabel)
+        return null
+    }
+
+    private fun containsCornerStoreOrActionOcr(text: String): Boolean {
+        val lower = text.trim().lowercase()
+        if (lower.isEmpty()) return false
+        if (lower == "google" || lower == "play") return true
+        return STORE_PILL_OR_SURVEY_OCR_KEYWORDS.any { kw -> lower.contains(kw) }
+    }
+
+    private fun isSurveyRowOcr(text: String): Boolean {
+        val lower = text.trim().lowercase()
+        return lower.contains("not interested") ||
+            lower.contains("interested") ||
+            lower.contains("hide ad") ||
+            lower.contains("report ad")
+    }
+
+    private fun isSurveyRowCloseSymbol(item: OcrItem, ocrItems: List<OcrItem>, sw: Int, sh: Int): Boolean {
+        val trimmed = item.text.trim()
+        if (trimmed.length > 3) return false
+        val rowTolY = max(24, (sh * 0.03f).toInt())
+        val cx = item.bounds.centerX()
+        val cy = item.bounds.centerY()
+        return ocrItems.any { other ->
+            other !== item &&
+                isSurveyRowOcr(other.text) &&
+                kotlin.math.abs(other.bounds.centerY() - cy) <= rowTolY &&
+                other.bounds.centerX() in (cx - (sw * 0.15f).toInt())..(cx + (sw * 0.45f).toInt())
+        }
+    }
+
+    /**
+     * 排除商店膠囊文字 (如 `[Google Play ×]` 中的 `'y'`/`'a'`)、安裝/下載按鈕與問卷調查列 (`✓ Interested` / `✕ Not interested`)，
+     * 防止幾何 X 或單字元 OCR 誤點導流進商店或問卷。
+     */
+    private fun isBlockedByCornerPillOrSurveyOcr(
+        x: Int,
+        y: Int,
+        ocrItems: List<OcrItem>,
+        sw: Int,
+        sh: Int
+    ): Boolean {
+        if (ocrItems.isEmpty() || sw <= 0 || sh <= 0) return false
+        val padX = (sw * 0.008f).toInt().coerceAtLeast(6)
+        val padY = (sh * 0.006f).toInt().coerceAtLeast(8)
+        val rowTolY = max(24, (sh * 0.03f).toInt())
+
+        for (item in ocrItems) {
+            val trimmed = item.text.trim()
+            if (trimmed.isEmpty()) continue
+            val b = item.bounds
+
+            if (isSurveyRowOcr(trimmed)) {
+                val surveyLeft = (b.left - (sw * 0.09f).toInt()).coerceAtLeast(0)
+                val surveyRight = b.right + padX
+                if (x in surveyLeft..surveyRight && y in (b.top - padY)..(b.bottom + padY)) {
+                    return true
+                }
+                continue
+            }
+
+            if (containsCornerStoreOrActionOcr(trimmed)) {
+                val endsWithCloseChar = trimmed.length >= 4 &&
+                    trimmed.last() in charArrayOf('×', '✕', '✖', 'x', 'X') &&
+                    trimmed[trimmed.length - 2].let { it == ' ' || it == '|' || it == '·' || it == '•' || it == ':' }
+                val effectiveRight = if (redirectCount == 0 && endsWithCloseChar) {
+                    b.right - max(28, (b.width() * 0.22f).toInt())
+                } else {
+                    b.right + padX
+                }
+                if (x in (b.left - padX)..effectiveRight && y in (b.top - padY)..(b.bottom + padY)) {
+                    return true
+                }
+                // 若先前已在同列右側觸發過重定向，連帶封鎖該商店文字右側整段膠囊區
+                if (redirectCount > 0 && b.centerY() <= sh * 0.25f) {
+                    val hasSameRowRedirect = redirectPointCounts.any { pt ->
+                        pt.x >= b.left && kotlin.math.abs(pt.y - b.centerY()) <= rowTolY
+                    }
+                    val pillRight = (b.right + (sw * 0.14f).toInt()).coerceAtMost(sw)
+                    if (hasSameRowRedirect && x in (b.left - padX)..pillRight && kotlin.math.abs(y - b.centerY()) <= rowTolY) {
+                        return true
+                    }
+                }
+            }
+        }
+        return false
+    }
+
     private suspend fun recordAndClick(
         service: AutoAdAccessibilityService,
         rect: Rect,
         allowBlacklist: Boolean = true,
         label: String? = null
     ) {
+        swallowedEndCardBackAttempts = 0
         val effectiveLabel = label ?: lastClickedAdLabel
         if (label != null) {
             lastClickedAdLabel = label
@@ -1668,5 +1793,10 @@ class AdCloserHandler(
 
     companion object {
         private const val TAG = "AdCloserHandler"
+        private val STORE_PILL_OR_SURVEY_OCR_KEYWORDS = listOf(
+            "google play", "play store", "play 商店", "play商店",
+            "開啟商店", "前往商店", "下載", "安裝", "download", "install",
+            "not interested", "interested", "hide ad", "report ad"
+        )
     }
 }

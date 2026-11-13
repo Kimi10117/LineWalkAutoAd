@@ -3365,6 +3365,64 @@ class AutomationEngine private constructor(private val context: Context) {
         }
     }
 
+    /**
+     * 當系統返回失效或達到逾時上限仍卡在外部商店／內嵌廣告頁時，統一執行三段式主畫面恢復：
+     * 非遊戲前景直接喚醒；若前景已是散步趣套件但畫面仍被內嵌廣告 Activity 攔截，依序執行 Home -> CLEAR_TOP -> CLEAR_TASK。
+     */
+    private suspend fun recoverStuckAdToMainScreen(
+        service: AutoAdAccessibilityService,
+        sourceBitmap: android.graphics.Bitmap,
+        targetGamePkg: String,
+        nonGameTriggerDesc: String
+    ) {
+        val postFg = service.getForegroundPackageName()
+        if (!AppConfig.isGamePackage(postFg)) {
+            appendLog("[計時強退] ${nonGameTriggerDesc} (${postFg ?: "unknown"})，強制喚醒散步趣 ($targetGamePkg) 拉回前景！")
+            service.bringAppToFront(targetGamePkg)
+            delay(800)
+            consecutiveWatchdogTimeouts = 0
+            adWatchdogCooldownTicks = 4
+            return
+        }
+
+        // 前景套件雖為遊戲本體 (LGWKTW/LGWALK)，但內嵌廣告 Activity 可能吞噬 Back 仍卡死在廣告畫面上，重抓截圖確認
+        val (hasVerifyBmp, verifyReturned) = verifyRecoveredGameScreen(service, sourceBitmap)
+        if (verifyReturned) {
+            consecutiveWatchdogTimeouts = 0
+            adWatchdogCooldownTicks = 4
+            return
+        }
+
+        consecutiveWatchdogTimeouts++
+        if (consecutiveWatchdogTimeouts == 1) {
+            appendLog("[計時強退] Back 遭內嵌廣告攔截，執行 Level 1 清棧逃脫：Home -> CLEAR_TOP ($targetGamePkg)")
+            service.pressHome()
+            delay(450)
+            service.forceResetAppTaskToFront(targetGamePkg, clearTask = false)
+            delay(1200)
+            val (hasVerify2, recoveredByClearTop) = verifyRecoveredGameScreen(service, sourceBitmap)
+            if (recoveredByClearTop) {
+                appendLog("[計時強退] Level 1 CLEAR_TOP 已成功脫離內嵌廣告並恢復散步趣主畫面")
+                consecutiveWatchdogTimeouts = 0
+                adWatchdogCooldownTicks = 4
+            } else if (hasVerify2 || hasVerifyBmp) {
+                appendLog("[計時強退] CLEAR_TOP 後仍停留在頑固內嵌廣告，立即升級 Level 2 CLEAR_TASK ($targetGamePkg) 重建主任務！")
+                service.forceResetAppTaskToFront(targetGamePkg, clearTask = true)
+                delay(2200)
+                adWatchdogCooldownTicks = 8
+            } else {
+                adWatchdogCooldownTicks = 4
+            }
+        } else {
+            appendLog("[計時強退] 連續第 $consecutiveWatchdogTimeouts 次逾時（或無截圖回傳），直接執行 Level 2 CLEAR_TASK ($targetGamePkg) 重建主任務！")
+            service.pressHome()
+            delay(450)
+            service.forceResetAppTaskToFront(targetGamePkg, clearTask = true)
+            delay(2200)
+            adWatchdogCooldownTicks = 8
+        }
+    }
+
     private suspend fun verifyRecoveredGameScreen(
         service: AutoAdAccessibilityService,
         sourceBitmap: android.graphics.Bitmap? = null
@@ -3423,50 +3481,12 @@ class AutomationEngine private constructor(private val context: Context) {
             }
             delay(600)
             val targetGamePkg = resolvePreferredGamePackage(service)
-            val postWatchdogFg = service.getForegroundPackageName()
-            if (!AppConfig.isGamePackage(postWatchdogFg)) {
-                appendLog("[計時強退] 兩次系統返回後前景仍非遊戲套件 (${postWatchdogFg ?: "unknown"})，強制喚醒散步趣 ($targetGamePkg) 拉回前景！")
-                service.bringAppToFront(targetGamePkg)
-                delay(800)
-                consecutiveWatchdogTimeouts = 0
-                adWatchdogCooldownTicks = 4
-            } else {
-                // 前景套件雖為遊戲本體 (LGWKTW/LGWALK)，但內嵌廣告 Activity 可能吞噬 Back 仍卡死在廣告畫面上，重抓截圖確認
-                val (hasVerifyBmp, verifyReturned) = verifyRecoveredGameScreen(service, screenBitmap)
-                if (verifyReturned) {
-                    consecutiveWatchdogTimeouts = 0
-                    adWatchdogCooldownTicks = 4
-                } else {
-                    consecutiveWatchdogTimeouts++
-                    if (consecutiveWatchdogTimeouts == 1) {
-                        appendLog("[計時強退] Back 遭內嵌廣告攔截，執行 Level 1 清棧逃脫：Home -> CLEAR_TOP ($targetGamePkg)")
-                        service.pressHome()
-                        delay(450)
-                        service.forceResetAppTaskToFront(targetGamePkg, clearTask = false)
-                        delay(1200)
-                        val (hasVerify2, recoveredByClearTop) = verifyRecoveredGameScreen(service, screenBitmap)
-                        if (recoveredByClearTop) {
-                            appendLog("[計時強退] Level 1 CLEAR_TOP 已成功脫離內嵌廣告並恢復散步趣主畫面")
-                            consecutiveWatchdogTimeouts = 0
-                            adWatchdogCooldownTicks = 4
-                        } else if (hasVerify2 || hasVerifyBmp) {
-                            appendLog("[計時強退] CLEAR_TOP 後仍停留在頑固內嵌廣告，立即升級 Level 2 CLEAR_TASK ($targetGamePkg) 重建主任務！")
-                            service.forceResetAppTaskToFront(targetGamePkg, clearTask = true)
-                            delay(2200)
-                            adWatchdogCooldownTicks = 8
-                        } else {
-                            adWatchdogCooldownTicks = 4
-                        }
-                    } else {
-                        appendLog("[計時強退] 連續第 $consecutiveWatchdogTimeouts 次逾時（或無截圖回傳），直接執行 Level 2 CLEAR_TASK ($targetGamePkg) 重建主任務！")
-                        service.pressHome()
-                        delay(450)
-                        service.forceResetAppTaskToFront(targetGamePkg, clearTask = true)
-                        delay(2200)
-                        adWatchdogCooldownTicks = 8
-                    }
-                }
-            }
+            recoverStuckAdToMainScreen(
+                service = service,
+                sourceBitmap = screenBitmap,
+                targetGamePkg = targetGamePkg,
+                nonGameTriggerDesc = "兩次系統返回後前景仍非遊戲套件"
+            )
             adCloserHandler.clearAdSessionTimer()
             transitionTo(EngineState.IN_GAME_SCAN, "廣告逾時強制拉回散步趣主畫面，繼續巡邏...", "[巡邏] 重新巡邏中...")
             return
@@ -3613,10 +3633,13 @@ class AutomationEngine private constructor(private val context: Context) {
                     if (ocrDigest.isNotBlank()) {
                         appendLog("[畫面線索] 廣告停滯 OCR 摘要: $ocrDigest")
                     }
-                    service.bringAppToFront(targetGamePkg)
-                    delay(800)
+                    recoverStuckAdToMainScreen(
+                        service = service,
+                        sourceBitmap = screenBitmap,
+                        targetGamePkg = targetGamePkg,
+                        nonGameTriggerDesc = "廣告等待達 ${res.elapsedSec}s 超過計時器上限 (${timerLimitSec}s)"
+                    )
                     adCloserHandler.clearAdSessionTimer()
-                    adWatchdogCooldownTicks = 4
                     transitionTo(EngineState.IN_GAME_SCAN, "逾時強制拉回散步趣主畫面，繼續巡邏...", "[巡邏] 重新巡邏中...")
                 }
             }
@@ -3630,10 +3653,13 @@ class AutomationEngine private constructor(private val context: Context) {
                 if (ocrDigest.isNotBlank()) {
                     appendLog("[畫面線索] 停滯畫面 OCR 摘要: $ocrDigest")
                 }
-                service.bringAppToFront(targetGamePkg)
-                delay(800)
+                recoverStuckAdToMainScreen(
+                    service = service,
+                    sourceBitmap = screenBitmap,
+                    targetGamePkg = targetGamePkg,
+                    nonGameTriggerDesc = "${res.reason} 後前景仍非遊戲套件"
+                )
                 adCloserHandler.clearAdSessionTimer()
-                adWatchdogCooldownTicks = 4
                 transitionTo(EngineState.IN_GAME_SCAN, "強制拉回散步趣主畫面，繼續巡邏...", "[巡邏] 重新巡邏中...")
             }
 

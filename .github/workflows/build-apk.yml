@@ -91,42 +91,42 @@ jobs:
       - name: Update Tag and Publish APK to GitHub Releases
         run: |
           git tag -f latest-apk
-          git tag -f v1.15.84
+          git tag -f v1.15.85
           git push -f origin latest-apk || true
-          git push -f origin v1.15.84 || true
+          git push -f origin v1.15.85 || true
 
       - name: Publish APK to GitHub Releases (latest-apk)
         uses: softprops/action-gh-release@v2
         with:
             tag_name: latest-apk
-            name: "散步趣助手 v1.15.84 (左上角跨界略過鈕 [▶|] 偵測、幾何 X 角落收斂、Watchdog 雙段 Task 升級與 OCR 逾時保護 - Run #${{ github.run_number }})"
+            name: "散步趣助手 v1.15.85 (Google Play 膠囊左向封鎖防二次跳轉、問卷 ✕ 排除與結束卡片吞噬 Back 升級清棧逃脫 - Run #${{ github.run_number }})"
             body: |
-              **散步趣助手 v1.15.84 (Run #${{ github.run_number }}) - 左上角跨界略過鈕 [▶|] 偵測、幾何 X 角落收斂、Watchdog 雙段 Task 升級與 OCR 逾時保護 (相容歷代版本 v1.15.83, v1.15.82, v1.15.81, v1.15.80, v1.15.79, v1.15.78, v1.15.77, v1.15.76, v1.15.75, v1.15.74, v1.15.73, v1.15.72, v1.15.71, v1.15.70, v1.15.69, v1.15.68, v1.15.67, v1.15.66, v1.15.65, v1.15.64, v1.15.63, v1.15.62, v1.15.61, v1.15.60, v1.15.58, v1.15.57, v1.15.56, v1.15.55, v1.15.54, v1.15.53, v1.15.52, v1.15.51, v1.15.50, v1.15.49, v1.15.48, v1.15.47, v1.15.46, v1.15.45)**
-              1. **【左上角跨界 [▶|] 略過鈕偵測與膠囊／字詞防護】**：
-                 - `TemplateMatcher` 擴展左上角 `detectCornerFastForwardSkip` 掃描區（支援僅上半圈深灰圓框跨界亮背景），搭配有界 8 連通 `isCrossXGlyph` 與 `hasCapsuleExtension` 排除角落幾何 X 與橫向倒數膠囊；`AdCloserHandler` 加入 `hasAdjacentCapsuleOcr` 防誤觸並移除 `Reveal Swipe` 的 `"Play"` 寬鬆關鍵字。
-              2. **【收斂幾何 X 掃描範圍排除橫幅促銷圖示】**：
-                 - `detectCornerGeometricX` 收斂右上角左側 `0.80f`、左上角橫向 `0.020f..0.162f` 與下緣 `0.140f`，排除 `13.5%~16.6%` 促銷與專頁圖示同時保留真實 `11.3%` 角落叉鈕。
-              3. **【Watchdog 主畫面先檢與內嵌廣告雙段 Task 強退升級】**：
-                 - `handleAdWatching` 逾時前先確認是否已返回主畫面避免誤按返回鍵；面對吞噬 Back 的內嵌廣告（如 `com.linecorp.LGWKTW`），新增 `pressHome()` + `CLEAR_TOP` -> 截圖驗證或連兩次無截圖直上 `CLEAR_TASK` 終結 65 秒循環。
-              4. **【OCR 逾時防護與版本升級】**：
-                 - `OcrRecognizer.recognize` 加入 `withTimeoutOrNull(2500L)` 安全防護（維持 `CancellationException` 重拋），versionCode 117 / versionName 1.15.84（保留歷代版本 APK 與發布紀錄）。
+              **散步趣助手 v1.15.85 (Run #${{ github.run_number }}) - Google Play 膠囊左向封鎖防二次跳轉、問卷 ✕ 排除與結束卡片吞噬 Back 升級清棧逃脫 (相容歷代版本 v1.15.84, v1.15.83, v1.15.82, v1.15.81, v1.15.80, v1.15.79, v1.15.78, v1.15.77, v1.15.76, v1.15.75, v1.15.74, v1.15.73, v1.15.72, v1.15.71, v1.15.70, v1.15.69, v1.15.68, v1.15.67, v1.15.66, v1.15.65, v1.15.64, v1.15.63, v1.15.62, v1.15.61, v1.15.60, v1.15.58, v1.15.57, v1.15.56, v1.15.55, v1.15.54, v1.15.53, v1.15.52, v1.15.51, v1.15.50, v1.15.49, v1.15.48, v1.15.47, v1.15.46, v1.15.45)**
+              1. **【右上角商店膠囊左向封鎖與 OCR 排除】**：
+                 - `isInvalidOrBlacklisted` 新增右上角重定向同列左向 `24%` 寬帶狀封鎖，搭配 `isBlockedByCornerPillOrSurveyOcr` 阻擋 `"Google Play"`、`"安裝"` 文字內 `'y'`/`'a'` 筆畫觸發幾何 X，徹底杜絕 `Play=2` 來回跳轉商店循環。
+              2. **【問卷列 ✕ Not interested 防誤觸】**：
+                 - `OcrRecognizer.AD_CLOSE_EXCLUDE_KEYWORDS` 納入 `"Not interested"`／`"Interested"`，並於 `AdCloserHandler` Step `7`/`7A2` 過濾與問卷文字同列之單字元 `✕`/`×`。
+              3. **【結束卡片吞噬 Back 自動升級清棧逃脫】**：
+                 - `AdCloserHandler` 在 `isEndCard` 與 `redirectCount > 0` 安全返回鍵連遭內嵌廣告攔截 2 次後，第 3 次升級回傳 `ForceBringGameToFront`；`AutomationEngine` 抽出共用 `recoverStuckAdToMainScreen`，讓 Watchdog 逾時與 `ForceBringGameToFront` 統一執行 `pressHome -> CLEAR_TOP -> CLEAR_TASK` 徹底恢復散步趣主畫面。
+              4. **【單元測試與版本升級】**：
+                 - 新增 `V1_15_85SimulationTest`（4 項回歸與清棧逃脫測試），versionCode 118 / versionName 1.15.85（完整保留歷代版本 APK 與發布紀錄）。
             files: LineWalkAutoAd.apk
             prerelease: false
 
-      - name: Publish Versioned APK to GitHub Releases (v1.15.84)
+      - name: Publish Versioned APK to GitHub Releases (v1.15.85)
         uses: softprops/action-gh-release@v2
         with:
-            tag_name: v1.15.84
-            name: "散步趣助手 v1.15.84 (左上角跨界略過鈕 [▶|] 偵測、幾何 X 角落收斂、Watchdog 雙段 Task 升級與 OCR 逾時保護)"
+            tag_name: v1.15.85
+            name: "散步趣助手 v1.15.85 (Google Play 膠囊左向封鎖防二次跳轉、問卷 ✕ 排除與結束卡片吞噬 Back 升級清棧逃脫)"
             body: |
-              **散步趣助手 v1.15.84 (Run #${{ github.run_number }}) - 左上角跨界略過鈕 [▶|] 偵測、幾何 X 角落收斂、Watchdog 雙段 Task 升級與 OCR 逾時保護**
-              1. **【左上角跨界 [▶|] 略過鈕偵測與膠囊／字詞防護】**：
-                 - `TemplateMatcher` 擴展左上角 `detectCornerFastForwardSkip` 掃描區（支援僅上半圈深灰圓框跨界亮背景），搭配有界 8 連通 `isCrossXGlyph` 與 `hasCapsuleExtension` 排除角落幾何 X 與橫向倒數膠囊；`AdCloserHandler` 加入 `hasAdjacentCapsuleOcr` 防誤觸並移除 `Reveal Swipe` 的 `"Play"` 寬鬆關鍵字。
-              2. **【收斂幾何 X 掃描範圍排除橫幅促銷圖示】**：
-                 - `detectCornerGeometricX` 收斂右上角左側 `0.80f`、左上角橫向 `0.020f..0.162f` 與下緣 `0.140f`，排除 `13.5%~16.6%` 促銷與專頁圖示同時保留真實 `11.3%` 角落叉鈕。
-              3. **【Watchdog 主畫面先檢與內嵌廣告雙段 Task 強退升級】**：
-                 - `handleAdWatching` 逾時前先確認是否已返回主畫面避免誤按返回鍵；面對吞噬 Back 的內嵌廣告（如 `com.linecorp.LGWKTW`），新增 `pressHome()` + `CLEAR_TOP` -> 截圖驗證或連兩次無截圖直上 `CLEAR_TASK` 終結 65 秒循環。
-              4. **【OCR 逾時防護與版本升級】**：
-                 - `OcrRecognizer.recognize` 加入 `withTimeoutOrNull(2500L)` 安全防護（維持 `CancellationException` 重拋），versionCode 117 / versionName 1.15.84（保留歷代版本 APK 與發布紀錄）。
+              **散步趣助手 v1.15.85 (Run #${{ github.run_number }}) - Google Play 膠囊左向封鎖防二次跳轉、問卷 ✕ 排除與結束卡片吞噬 Back 升級清棧逃脫**
+              1. **【右上角商店膠囊左向封鎖與 OCR 排除】**：
+                 - `isInvalidOrBlacklisted` 新增右上角重定向同列左向 `24%` 寬帶狀封鎖，搭配 `isBlockedByCornerPillOrSurveyOcr` 阻擋 `"Google Play"`、`"安裝"` 文字內 `'y'`/`'a'` 筆畫觸發幾何 X，徹底杜絕 `Play=2` 來回跳轉商店循環。
+              2. **【問卷列 ✕ Not interested 防誤觸】**：
+                 - `OcrRecognizer.AD_CLOSE_EXCLUDE_KEYWORDS` 納入 `"Not interested"`／`"Interested"`，並於 `AdCloserHandler` Step `7`/`7A2` 過濾與問卷文字同列之單字元 `✕`/`×`。
+              3. **【結束卡片吞噬 Back 自動升級清棧逃脫】**：
+                 - `AdCloserHandler` 在 `isEndCard` 與 `redirectCount > 0` 安全返回鍵連遭內嵌廣告攔截 2 次後，第 3 次升級回傳 `ForceBringGameToFront`；`AutomationEngine` 抽出共用 `recoverStuckAdToMainScreen`，讓 Watchdog 逾時與 `ForceBringGameToFront` 統一執行 `pressHome -> CLEAR_TOP -> CLEAR_TASK` 徹底恢復散步趣主畫面。
+              4. **【單元測試與版本升級】**：
+                 - 新增 `V1_15_85SimulationTest`（4 項回歸與清棧逃脫測試），versionCode 118 / versionName 1.15.85（完整保留歷代版本 APK 與發布紀錄）。
             files: LineWalkAutoAd.apk
             prerelease: false

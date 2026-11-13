@@ -1,6 +1,41 @@
 # LINE 散步趣自動看廣告助手 (LineWalkAutoAd) 發布說明
 
 ## 版本資訊
+- 版本名稱：v1.15.85
+- 版本代碼：versionCode 118, versionName "1.15.85"
+- 發布類型：正式版本 (Release)
+
+---
+
+## 概述
+LineWalkAutoAd v1.15.85 針對 v1.15.84 實機日誌與 AHEALTH 結束卡片／Google Play 重定向循環截圖所揭露之「右上角 `[Google Play ×]` 膠囊 `'y'`/`'a'` 筆畫誤觸幾何 `X` 導致 `Play=2` 來回跳轉」、「問卷按鈕列 `✕ Not interested` 誤識別為關閉鈕」、「結束卡片系統返回鍵遭內嵌廣告攔截反覆重試卻無法脫困」以及「`ForceBringGameToFront` 僅執行無效 `bringAppToFront` 而未清棧」問題完成徹底修復與回歸驗證。
+
+---
+
+## 具體更新與修復內容 (v1.15.85)
+
+### 1. 右上角商店膠囊左向連動封鎖與 OCR 排除，杜絕 `Play=2` 重定向乒乓循環
+- **檔案**：`app/src/main/java/com/linewalk/autoad/engine/AdCloserHandler.kt`
+- `isInvalidOrBlacklisted` 新增右上角重定向膠囊左向帶狀封鎖（自重定向座標向左延伸 `24%` 螢幕寬，覆蓋同列 `[Google Play ×]` 文字膠囊），解決圓形 `6%` 黑名單半徑未覆蓋 `"Google Play"` 尾端 `'y'`/`'a'` 而於 `[01:37:05]` 發生二次跳轉商店的問題。
+- 新增 `isBlockedByCornerPillOrSurveyOcr` 並整合至 `Step 4D`、`Step 7`、`Step 7A2`、`Step 8` 與 `focusedGeoX` 之幾何 `X`／OCR 黑名單條件，在首次點擊即排除 `"Google Play"`、`"Play 商店"`、`"安裝"`、`"下載"` 等商店字樣內部筆畫誤判。
+
+### 2. 排除 `✓ Interested` / `✕ Not interested` 問卷列 `✕` 誤點
+- **檔案**：`app/src/main/java/com/linewalk/autoad/vision/OcrRecognizer.kt`、`app/src/main/java/com/linewalk/autoad/engine/AdCloserHandler.kt`
+- `OcrRecognizer.AD_CLOSE_EXCLUDE_KEYWORDS` 新增 `"Not interested"` 與 `"Interested"`。
+- `AdCloserHandler` 新增 `isSurveyRowCloseSymbol`，在 `Step 7` 全螢幕關閉 OCR 與 `Step 7A2` 角落 ASCII 比對前自動過濾與問卷按鈕同列之單字元 `✕`/`×`，避免因 ML Kit 拆分文字框而誤觸問卷拒絕按鈕。
+
+### 3. 結束卡片系統返回鍵遭吞噬自動升級強制清棧 + 三段式主畫面恢復統一收斂
+- **檔案**：`app/src/main/java/com/linewalk/autoad/engine/AdCloserHandler.kt`、`app/src/main/java/com/linewalk/autoad/engine/AutomationEngine.kt`
+- `AdCloserHandler` 新增 `swallowedEndCardBackAttempts` 與共享 helper `trySafeEndCardOrRedirectBack`：`Step 7B`（`isEndCard`）與 `Step 8B`（`redirectCount > 0` 安全返回）在系統 `Back` 連續 2 次未退出廣告時，第 3 次直接升級回傳 `AdStepResult.ForceBringGameToFront`（`END_CARD_BACK_SWALLOWED` / `POST_REDIRECT_BACK_SWALLOWED`），無須再空等至 65 秒 Watchdog。
+- `AutomationEngine` 抽取共用函式 `recoverStuckAdToMainScreen`，讓全域 Watchdog 逾時、`WatchdogBackTriggered` 達 `timerLimitSec` 上限與 `ForceBringGameToFront` 統一採用 `pressHome -> CLEAR_TOP -> CLEAR_TASK` 三段式清棧逃脫（即使前景套件仍為 `com.linecorp.LGWKTW` 亦能徹底清除卡死的內嵌廣告 Activity）。
+
+### 4. `v1.15.85` 單元回歸驗證與版本升級
+- **檔案**：`app/src/test/java/com/linewalk/autoad/test/v11585/V1_15_85SimulationTest.kt`、`app/build.gradle.kts`
+- 新增 `V1_15_85SimulationTest`（4 項核心情境測試），並將 `versionCode` 升級為 `118`、`versionName` 升級為 `"1.15.85"`（完整保留所有歷代版本紀錄與 APK）。
+
+---
+
+## 版本資訊 (歷史版本: v1.15.84)
 - 版本名稱：v1.15.84
 - 版本代碼：versionCode 117, versionName "1.15.84"
 - 發布類型：正式版本 (Release)

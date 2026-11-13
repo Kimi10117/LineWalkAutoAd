@@ -1480,6 +1480,8 @@ class OcrRecognizer {
             "Report",
             "irrelevant",
             "offensive",
+            "Not interested",
+            "Interested",
             "Google Play",
             "Play Store",
             "Play 商店",
