@@ -219,6 +219,7 @@ class AutomationEngine private constructor(private val context: Context) {
 
     // 廣告載入錯誤與無庫存計數守護
     internal var adLoadErrorCountPerTab: MutableMap<MainTab, Int> = mutableMapOf()
+    internal var consecutiveNetworkErrorCount = 0
 
     // 死鎖斷路器 (Circuit Breaker) 與遊戲內促銷重試
     internal var sameTargetClickCount = 0
@@ -356,6 +357,7 @@ class AutomationEngine private constructor(private val context: Context) {
         nonMainScreenIdleTicks = 0
         confirmedEmptyTabs.clear()
         adLoadErrorCountPerTab.clear()
+        consecutiveNetworkErrorCount = 0
         isBingoCompleted = false
         claimedBingoColumns.clear()
         bingoColumnRetryCount.clear()
@@ -363,12 +365,7 @@ class AutomationEngine private constructor(private val context: Context) {
         bingoDialogCloseAttempts = 0
         subDialogOpenAttempts = 0
         isLotteryCompleted = false
-        hasClickedLotteryAdReward = false
-        lotteryResultRewardWaitTicks = 0
-        lotteryResultCloseAttempts = 0
-        lotteryFiftyDrawAttempts = 0
-        lotteryFreeDrawAttempts = 0
-        lotteryFiveDrawAttempts = 0
+        resetLotterySessionState(resetCloseAttempts = true)
         timeTask.hasTriedBonusBerryInCurrentStay = false
         isMissionCompleted = false
         missionOpenCycleCount = 0
@@ -436,6 +433,7 @@ class AutomationEngine private constructor(private val context: Context) {
         loopJob?.cancel()
         loopJob = null
         resetClickCircuitBreaker()
+        consecutiveNetworkErrorCount = 0
         inGameLinePromoRetryCount = 0
         _uiStatus.value = _uiStatus.value.copy(
             isRunning = false,
@@ -610,7 +608,26 @@ class AutomationEngine private constructor(private val context: Context) {
         }
     }
 
-    private suspend fun handleExternalAppGuard(
+    private fun bringGameToFrontAndRestore(
+        service: AutoAdAccessibilityService,
+        preserveWatchingState: Boolean,
+        restoreReason: String
+    ) {
+        val wasWatchingAd = _uiStatus.value.state == EngineState.AD_WATCHING
+        val targetPkg = resolvePreferredGamePackage(service)
+        service.bringAppToFront(targetPkg)
+        externalAppTicks = 0
+        legitSkipRedirectPkg = null
+        legitSkipRedirectStartMs = 0L
+        if (preserveWatchingState && wasWatchingAd) {
+            appendLog("[防護] $restoreReason，保留 AD_WATCHING 廣告監控與計時上下文不歸零")
+            updateDetail("已拉回散步趣，繼續監控廣告畫面...", "[廣告] 恢復監控中...")
+        } else {
+            transitionTo(EngineState.IN_GAME_SCAN, "已拉回散步趣，恢復遊戲巡邏...", "[巡邏] 巡邏畫面目標中...")
+        }
+    }
+
+    internal suspend fun handleExternalAppGuard(
         service: AutoAdAccessibilityService,
         fgPkg: String?
     ) {
@@ -631,12 +648,7 @@ class AutomationEngine private constructor(private val context: Context) {
         if (isLauncher) {
             appendLog("[防護] 前景為系統桌面 ($externalPkg)，立即強制喚醒散步趣拉回前景！")
             appendLog(buildPhoneStateSnapshot("LAUNCHER_RECOVERY", service))
-            val targetPkg = resolvePreferredGamePackage(service)
-            service.bringAppToFront(targetPkg)
-            externalAppTicks = 0
-            legitSkipRedirectPkg = null
-            legitSkipRedirectStartMs = 0L
-            transitionTo(EngineState.IN_GAME_SCAN, "已從桌面拉回散步趣，恢復遊戲巡邏...", "[巡邏] 巡邏畫面目標中...")
+            bringGameToFrontAndRestore(service, preserveWatchingState = false, restoreReason = "系統桌面強制喚醒")
             return
         }
 
@@ -683,12 +695,7 @@ class AutomationEngine private constructor(private val context: Context) {
             }
             if (postWaitFg != null && (postWaitFg == "com.sec.android.app.launcher" || postWaitFg.contains("launcher", ignoreCase = true))) {
                 appendLog("[防護] 緩衝後前景為系統桌面 ($postWaitFg)，立即強制喚醒散步趣拉回前景！")
-                val targetPkg = resolvePreferredGamePackage(service)
-                service.bringAppToFront(targetPkg)
-                externalAppTicks = 0
-                legitSkipRedirectPkg = null
-                legitSkipRedirectStartMs = 0L
-                transitionTo(EngineState.IN_GAME_SCAN, "已從桌面拉回散步趣，恢復遊戲巡邏...", "[巡邏] 巡邏畫面目標中...")
+                bringGameToFrontAndRestore(service, preserveWatchingState = true, restoreReason = "預期略過緩衝後桌面喚醒")
                 return
             }
             appendLog("[防護] 預期略過跳轉 ($externalPkg | 來源=$lastClickedLabel) 獎勵註冊緩衝完成，發送安全返回鍵回到遊戲")
@@ -699,10 +706,7 @@ class AutomationEngine private constructor(private val context: Context) {
             val postBackFg = service.getForegroundPackageName()
             if (postBackFg != null && (postBackFg == "com.sec.android.app.launcher" || postBackFg.contains("launcher", ignoreCase = true))) {
                 appendLog("[防護] 安全返回後偵測系統桌面 ($postBackFg)，立即強制喚醒散步趣防退回桌面！")
-                val targetPkg = resolvePreferredGamePackage(service)
-                service.bringAppToFront(targetPkg)
-                externalAppTicks = 0
-                transitionTo(EngineState.IN_GAME_SCAN, "已從桌面拉回散步趣，恢復遊戲巡邏...", "[巡邏] 巡邏畫面目標中...")
+                bringGameToFrontAndRestore(service, preserveWatchingState = true, restoreReason = "安全返回後桌面喚醒")
             } else if (AppConfig.isGamePackage(postBackFg)) {
                 externalAppTicks = 0
             }
@@ -721,12 +725,7 @@ class AutomationEngine private constructor(private val context: Context) {
         // 外部工具與瀏覽器極速復原：連續 2 個 tick (約 2.5 秒) 前景仍為三星瀏覽器/Chrome/Play 商店，立即強制喚醒散步趣拉回前景！
         if (externalAppTicks >= 2 && isBrowserOrStore) {
             appendLog("[防護] 停留外部瀏覽器/商店 ($externalPkg) 達 2 次 tick，立即強制喚醒散步趣拉回前景！")
-            val targetPkg = resolvePreferredGamePackage(service)
-            service.bringAppToFront(targetPkg)
-            externalAppTicks = 0
-            legitSkipRedirectPkg = null
-            legitSkipRedirectStartMs = 0L
-            transitionTo(EngineState.IN_GAME_SCAN, "已拉回散步趣，恢復遊戲巡邏...", "[巡邏] 巡邏畫面目標中...")
+            bringGameToFrontAndRestore(service, preserveWatchingState = true, restoreReason = "外部瀏覽器/商店強制拉回 ($externalPkg)")
             return
         }
 
@@ -734,12 +733,7 @@ class AutomationEngine private constructor(private val context: Context) {
         if (externalAppTicks >= 3) {
             appendLog("[防護] 停留外部應用達 3 次 tick 逾時，嘗試強制喚醒散步趣拉回前景！")
             appendLog(buildPhoneStateSnapshot("EXTERNAL_APP_TIMEOUT($externalPkg)", service))
-            val targetPkg = resolvePreferredGamePackage(service)
-            service.bringAppToFront(targetPkg)
-            externalAppTicks = 0
-            legitSkipRedirectPkg = null
-            legitSkipRedirectStartMs = 0L
-            transitionTo(EngineState.IN_GAME_SCAN, "已拉回散步趣，恢復遊戲巡邏...", "[巡邏] 巡邏畫面目標中...")
+            bringGameToFrontAndRestore(service, preserveWatchingState = true, restoreReason = "外部應用逾時強制拉回 ($externalPkg)")
             return
         }
 
@@ -931,7 +925,7 @@ class AutomationEngine private constructor(private val context: Context) {
         return (hasMenuTitle && matchedSettingKeywords.isNotEmpty()) || matchedSettingKeywords.size >= 2
     }
 
-    private suspend fun handleInGameScan(
+    internal suspend fun handleInGameScan(
         service: AutoAdAccessibilityService,
         screenBitmap: android.graphics.Bitmap,
         ocrItems: List<OcrItem>
@@ -939,14 +933,44 @@ class AutomationEngine private constructor(private val context: Context) {
         val sw = screenBitmap.width
         val sh = screenBitmap.height
 
-        // 0. 最優先檢查：是否跳出「無法載入廣告 / 請稍後再試。」錯誤提示彈窗！
+        // 0. 最優先檢查：是否跳出「無法載入廣告 / 請稍後再試。」或網路連線錯誤提示彈窗！
         val adErrorClose = ocrRecognizer.findAdLoadErrorCloseButton(screenBitmap, ocrItems)
         if (adErrorClose != null) {
-            // 斷路器檢查：若同一個錯誤彈窗連續點擊達 3 次無效，直接發送系統返回鍵 (BACK) 破除死鎖並強制換頁！
+            val isNetworkErr = ocrRecognizer.isNetworkErrorDialog(ocrItems)
+            if (isNetworkErr) {
+                consecutiveNetworkErrorCount++
+            } else {
+                consecutiveNetworkErrorCount = 0
+            }
+
+            // 斷路器檢查：若同一個錯誤彈窗連續點擊達 3 次無效，直接發送系統返回鍵 (BACK) 破除死鎖
             if (checkClickCircuitBreaker(service, adErrorClose.first, adErrorClose.second)) {
-                appendLog("[斷路器] 「無法載入廣告」彈窗連續點擊未響應，發送系統返回鍵並強制換頁！")
                 adLoadErrorCountPerTab[currentTab] = 0
-                forceAdvanceToNextTab(service, sw, sh, ocrItems, screenBitmap, "錯誤彈窗連續未響應，斷路器強制換頁")
+                if (currentPhase == PatrolPhase.MAIN_TABS && !isNetworkErr) {
+                    appendLog("[斷路器] 「無法載入廣告」彈窗連續點擊未響應，發送系統返回鍵並強制換頁！")
+                    forceAdvanceToNextTab(service, sw, sh, ocrItems, screenBitmap, "錯誤彈窗連續未響應，斷路器強制換頁")
+                } else {
+                    val waitMs = if (consecutiveNetworkErrorCount >= 4) 8000L else 5000L
+                    appendLog("[斷路器] 網路或系統錯誤彈窗持續出現，已發送返回鍵並暫候 ${waitMs / 1000}s 待連線恢復...")
+                    updateDetail("[網路等待] 錯誤彈窗持續出現，暫候連線恢復...", "[等待] 連線異常暫候")
+                    delay(waitMs)
+                }
+                return
+            }
+
+            if (isNetworkErr) {
+                appendLog("[錯誤/網路] 偵測到網路或連線錯誤彈窗，自動點擊 [關閉] 按鈕 (連續 $consecutiveNetworkErrorCount 次)...")
+                FloatingOverlayService.clickWithOverlayPassthrough(adErrorClose.second) {
+                    service.clickRect(adErrorClose.second)
+                }
+                if (consecutiveNetworkErrorCount >= 2) {
+                    val backoffMs = if (consecutiveNetworkErrorCount >= 4) 8000L else 4000L
+                    updateDetail("[網路等待] 連線異常，暫候 ${backoffMs / 1000}s 待網路恢復...", "[等待] 連線異常 (${backoffMs / 1000}s)")
+                    delay(backoffMs)
+                } else {
+                    updateDetail("[重試] 已關閉連線錯誤彈窗，等待恢復...", "[重試] 關閉連線錯誤")
+                    delay(800)
+                }
                 return
             }
 
@@ -974,6 +998,7 @@ class AutomationEngine private constructor(private val context: Context) {
             delay(600)
             return
         }
+        consecutiveNetworkErrorCount = 0
 
         // 0A. 防外部瀏覽器/商店殘留：若目前前景停留在外部跳轉網頁或 Chrome Custom Tabs，立即按 BACK 並切換至廣告監控
         val fgPkg = service.getForegroundPackageName()
@@ -2862,12 +2887,7 @@ class AutomationEngine private constructor(private val context: Context) {
         bingoDialogCloseAttempts = 0
         subDialogOpenAttempts = 0
         isLotteryCompleted = false
-        hasClickedLotteryAdReward = false
-        lotteryResultRewardWaitTicks = 0
-        lotteryResultCloseAttempts = 0
-        lotteryFiftyDrawAttempts = 0
-        lotteryFreeDrawAttempts = 0
-        lotteryFiveDrawAttempts = 0
+        resetLotterySessionState(resetCloseAttempts = true)
         timeTask.hasTriedBonusBerryInCurrentStay = false
         isMissionCompleted = false
         checkedMissionTabs.clear()
@@ -2931,10 +2951,8 @@ class AutomationEngine private constructor(private val context: Context) {
             bingoOpenCellRetryCount = 0
             bingoDialogCloseAttempts = 0
             isLotteryCompleted = false
-            hasClickedLotteryAdReward = false
-            lotteryResultRewardWaitTicks = 0
-            lotteryFiftyDrawAttempts = 0
-            lotteryFreeDrawAttempts = 0
+            resetLotterySessionState(resetCloseAttempts = true)
+            consecutiveNetworkErrorCount = 0
             isMissionCompleted = false
             checkedMissionTabs.clear()
             isFriendGiftCompleted = false
@@ -2961,19 +2979,22 @@ class AutomationEngine private constructor(private val context: Context) {
         )
     }
 
-    internal fun resetLotterySessionState() {
+    internal fun resetLotterySessionState(resetCloseAttempts: Boolean = false) {
         hasClickedLotteryAdReward = false
         lotteryResultRewardWaitTicks = 0
         lotteryResultCloseAttempts = 0
-        lotteryDialogCloseAttempts = 0
+        if (resetCloseAttempts) {
+            lotteryDialogCloseAttempts = 0
+        }
         lotteryFiftyDrawAttempts = 0
         lotteryFreeDrawAttempts = 0
         lotteryFiveDrawAttempts = 0
     }
 
-    private fun getNextPhase(after: PatrolPhase): PatrolPhase {
+    internal fun getNextPhase(after: PatrolPhase): PatrolPhase {
         if (after == PatrolPhase.LOTTERY) {
-            resetLotterySessionState()
+            // 注意：切勿在此重置 lotteryDialogCloseAttempts，否則第 6 次強制關閉點擊後會被歸零回「嘗試: 1」造成無限循環！
+            resetLotterySessionState(resetCloseAttempts = false)
         }
         val phaseList = listOf(
             PatrolPhase.MAIN_TABS,
@@ -3828,7 +3849,7 @@ class AutomationEngine private constructor(private val context: Context) {
         }
     }
 
-    private fun transitionTo(newState: EngineState, detail: String, safeOverlayText: String) {
+    internal fun transitionTo(newState: EngineState, detail: String, safeOverlayText: String) {
         if (newState != EngineState.IN_GAME_SCAN) {
             nonGameScreenTicks = 0
             inGameLinePromoRetryCount = 0

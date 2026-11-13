@@ -784,9 +784,38 @@ class OcrRecognizer {
      * 判斷目前畫面是否為《LINE 散步趣》的主畫面（涵蓋『首頁』『步數』『時間』『遊戲』四大分頁，且未開啟彈窗）。
      */
     /**
-     * 檢查是否跳出「無法載入廣告 / 請稍後再試。」錯誤提示彈窗：
-     * 當看廣告失敗或網路連線不穩定時，LINE 散步趣會彈出熊大持手機問號圖示與綠色 [關閉] 按鈕。
-     * 若未及時點擊 [關閉]，彈窗將遮擋遊戲畫面，導致巡邏誤以為當前分頁已無目標可領而擅自跳過！
+     * 判斷 OCR 文字是否明確顯示網路中斷、連線失敗或系統錯誤彈窗（供上層做退避冷卻，避免離線期間高頻狂點）。
+     */
+    fun isNetworkErrorDialog(items: List<OcrItem>): Boolean {
+        return items.any { item ->
+            val t = item.text.replace(" ", "")
+            t.contains("網路錯誤") ||
+                t.contains("網路連線") ||
+                t.contains("網路異常") ||
+                t.contains("網路不穩") ||
+                t.contains("沒有網路") ||
+                t.contains("無網路") ||
+                t.contains("無法連線") ||
+                t.contains("連線失敗") ||
+                t.contains("連線逾時") ||
+                t.contains("連線錯誤") ||
+                t.contains("連線中斷") ||
+                t.contains("請檢查網路") ||
+                t.contains("請確認網路") ||
+                t.contains("重新連線") ||
+                t.contains("通訊錯誤") ||
+                t.contains("通信錯誤") ||
+                t.contains("發生錯誤") ||
+                t.contains("系統錯誤") ||
+                t.contains("請求失敗") ||
+                t.contains("無法取得資料")
+        }
+    }
+
+    /**
+     * 檢查是否跳出「無法載入廣告 / 請稍後再試。」或網路連線錯誤提示彈窗：
+     * 當看廣告失敗或網路連線不穩定時，LINE 散步趣會彈出熊大持手機問號圖示與 [關閉] / [確認] 按鈕。
+     * 若未及時點擊 [關閉]，彈窗將遮擋遊戲畫面（含抽抽樂／賓果等子視窗），導致巡邏誤以為當前分頁已無目標可領或卡死於關閉循環！
      * 回傳該彈窗 [關閉] 按鈕的 Rect。
      */
     fun findAdLoadErrorCloseButton(
@@ -796,7 +825,40 @@ class OcrRecognizer {
         val sw = screenBitmap.width
         val sh = screenBitmap.height
 
-        // 0. 嚴格一票否決：若畫面為每日賓果、邀請好友宣傳頁、抽抽樂、任務或好友頁面，絕非「無法載入廣告」錯誤彈窗！
+        fun matchesErrorKeyword(raw: String): Boolean {
+            val t = raw.replace(" ", "")
+            return t.contains("無法載入廣告") ||
+                t.contains("無法載入") ||
+                t.contains("請稍後再試") ||
+                t.contains("稍後再試") ||
+                t.contains("稍後在試") ||
+                t.contains("載入失敗") ||
+                t.contains("廣告載入失敗") ||
+                t.contains("無法播放") ||
+                t.contains("廣告播放失敗") ||
+                t.contains("網路錯誤") ||
+                t.contains("網路連線") ||
+                t.contains("網路異常") ||
+                t.contains("網路不穩") ||
+                t.contains("沒有網路") ||
+                t.contains("無網路") ||
+                t.contains("無法連線") ||
+                t.contains("連線失敗") ||
+                t.contains("連線逾時") ||
+                t.contains("連線錯誤") ||
+                t.contains("連線中斷") ||
+                t.contains("請檢查網路") ||
+                t.contains("請確認網路") ||
+                t.contains("重新連線") ||
+                t.contains("通訊錯誤") ||
+                t.contains("通信錯誤") ||
+                t.contains("發生錯誤") ||
+                t.contains("系統錯誤") ||
+                t.contains("請求失敗") ||
+                t.contains("無法取得資料") ||
+                t.contains("取得失敗")
+        }
+
         val isNonErrorScreen = items.any { item ->
             val t = item.text.replace(" ", "")
             t.contains("每日賓果") || t.contains("今日賓果") || t.contains("距離下次抽選") ||
@@ -805,21 +867,13 @@ class OcrRecognizer {
             t.contains("雙方都") || t.contains("被邀請的好友") ||
             t.contains("抽抽樂") || t.contains("50張") || t.contains("免費抽")
         }
-        if (isNonErrorScreen) return null
 
+        // 若背景處於賓果／抽抽樂／邀請好友等頁面，只允許出現於畫面中央彈窗區域的明確錯誤文字放行（杜絕被背景關鍵字一票否決，同時防止廣告橫幅誤觸）
         val hasErrorText = items.any { item ->
-            val t = item.text.replace(" ", "")
-            t.contains("無法載入廣告") ||
-            t.contains("無法載入") ||
-            t.contains("請稍後再試") ||
-            t.contains("稍後再試") ||
-            t.contains("稍後在試") ||
-            t.contains("載入失敗") ||
-            t.contains("廣告載入失敗") ||
-            t.contains("連線逾時") ||
-            t.contains("連線錯誤") ||
-            t.contains("無法播放") ||
-            t.contains("廣告播放失敗")
+            if (!matchesErrorKeyword(item.text)) return@any false
+            if (!isNonErrorScreen) return@any true
+            val normY = if (sh > 0) item.bounds.centerY().toFloat() / sh else 0.5f
+            normY in 0.18f..0.72f
         }
 
         // 強制要求必須有明確的錯誤提示文字，徹底廢除無文字時僅憑綠色像素盲猜（防止將賓果綠底、邀請好友綠底或首頁下方原萃綠茶廣告誤判為錯誤彈窗）
@@ -827,26 +881,26 @@ class OcrRecognizer {
             return null
         }
 
-        // 1. OCR 定位中下半部 (y in 0.58f..0.76f) 的「關閉 / 確認 / 確定」按鈕
+        // 1. OCR 定位中下半部 (y in 0.56f..0.82f) 的「關閉 / 確認 / 確定 / 重試 / OK」按鈕
         val ocrClose = items.firstOrNull { item ->
             val cy = item.bounds.centerY().toFloat() / sh
             val cx = item.bounds.centerX().toFloat() / sw
             val t = item.text.trim()
-            cy in 0.58f..0.76f && cx in 0.20f..0.80f && (
+            cy in 0.56f..0.82f && cx in 0.18f..0.82f && t.length <= 8 && (
                 t == "關閉" || t.contains("關閉") ||
-                t == "確認" || t == "確定" || t.equals("OK", ignoreCase = true)
+                t == "確認" || t == "確定" || t == "重試" || t.equals("OK", ignoreCase = true)
             )
         }
 
-        // 2. 幾何像素綠色膠囊按鈕探測 (y in 0.58..0.76)
+        // 2. 幾何像素綠色膠囊按鈕探測 (y in 0.56..0.78)
         var greenButtonPts = 0
         var greenButtonMinX = sw
         var greenButtonMaxX = 0
         var greenButtonMinY = sh
         var greenButtonMaxY = 0
 
-        val y1 = (sh * 0.58f).toInt().coerceIn(0, sh - 1)
-        val y2 = (sh * 0.76f).toInt().coerceIn(y1 + 1, sh)
+        val y1 = (sh * 0.56f).toInt().coerceIn(0, sh - 1)
+        val y2 = (sh * 0.78f).toInt().coerceIn(y1 + 1, sh)
         val x1 = (sw * 0.15f).toInt().coerceIn(0, sw - 1)
         val x2 = (sw * 0.85f).toInt().coerceIn(x1 + 1, sw)
 
@@ -864,6 +918,11 @@ class OcrRecognizer {
                     if (y > greenButtonMaxY) greenButtonMaxY = y
                 }
             }
+        }
+
+        // 若背景屬非錯誤視窗 (如抽抽樂／賓果)，要求前景必須實際存在 OCR 按鈕或綠色確認鈕才認定前景跳出了錯誤彈窗
+        if (isNonErrorScreen && ocrClose == null && greenButtonPts < 25) {
+            return null
         }
 
         val dynamicButtonRect = if (greenButtonPts >= 25 && greenButtonMaxX > greenButtonMinX && greenButtonMaxY > greenButtonMinY) {

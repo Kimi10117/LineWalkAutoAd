@@ -140,10 +140,25 @@ class AdCloserHandler(
         clickedHistory.clear()
     }
 
+    private fun isExpectedSkipLabel(label: String?): Boolean {
+        if (label.isNullOrBlank()) return false
+        return label.contains("Google Play", ignoreCase = true) ||
+            label.contains("GooglePlay", ignoreCase = true) ||
+            label.contains("略過") ||
+            label.contains("快轉")
+    }
+
+    private fun countNearbyPoints(points: List<Point>, target: Point): Int {
+        val radiusPx = getBlacklistRadiusPx(if (currentScreenWidth > 0) currentScreenWidth else 1080)
+        return points.count { p ->
+            hypot((p.x - target.x).toDouble(), (p.y - target.y).toDouble()) < radiusPx
+        }
+    }
+
     /**
      * 標記剛發生外部跳轉 (瀏覽器 / Play 商店 / 社群 App)：
-     * - 若最近一次點擊位於左上角區域 (x < 25% sw 且 y < 20% sh)，或 6 秒內剛點擊過左上角幾何 X，
-     *   立即對目前這支廣告永久封鎖整個左上角區域，杜絕同一支廣告在相鄰座標反覆誤點跳轉瀏覽器。
+     * - 若最近一次點擊為非預期略過按鈕（例如「左上角幾何X」誤點後喚起外部瀏覽器），第 1 次即把該誤觸座標加入黑名單，
+     *   避免為觸發左側二次保護而重複跳轉瀏覽器；真正略過按鈕則仍保留累計 3 次保護，避免誤封必須二次互動之廣告。
      */
     fun markRecentRedirect(clickedPoint: Point? = null, fromExternalApp: Boolean = false) {
         val pt = clickedPoint ?: lastClickedPoint
@@ -165,15 +180,12 @@ class AdCloserHandler(
         redirectCount++
         lastRedirectReturnTimeMs = System.currentTimeMillis()
 
-        // 依使用者指導：部分互動廣告必須跳轉商店/瀏覽器並返回才能略過，因此不盲目清空亦不隨意永久封鎖！
-        // 僅當同一個座標區域 (依螢幕寬度動態換算半徑，1080px 基準約 64.8px 對應原 65.0px) 連續累積達 3 次無效跳轉時，才暫時加入黑名單進行節流保護
+        val expectedSkip = isExpectedSkipLabel(lastClickedAdLabel)
         if (pt != null) {
             redirectPointCounts.add(pt)
-            val radiusPx = getBlacklistRadiusPx(if (sw > 0) sw else 1080)
-            val nearbyRedirects = redirectPointCounts.count { p ->
-                hypot((p.x - pt.x).toDouble(), (p.y - pt.y).toDouble()) < radiusPx
-            }
-            if (nearbyRedirects >= 3) {
+            val nearbyRedirects = countNearbyPoints(redirectPointCounts, pt)
+            // 非略過標籤（如幾何 X 或未知點）一旦直接引發外部跳轉，就地封鎖該座標不再二次誤點；略過標籤保留 3 次寬容
+            if (!expectedSkip || nearbyRedirects >= 3) {
                 blacklistedPoints.add(pt)
             }
         }
@@ -246,7 +258,7 @@ class AdCloserHandler(
     private var topSponsoredBottomY: Int = 0
     private var topSponsoredCenterY: Int = 0
 
-    private fun isInvalidOrBlacklisted(x: Int, y: Int): Boolean {
+    internal fun isInvalidOrBlacklisted(x: Int, y: Int): Boolean {
         if (FloatingOverlayService.isInsideOverlay(x, y)) return true
         if (currentScreenHeight > 0 && currentScreenWidth > 0) {
             val sw = currentScreenWidth
@@ -1092,8 +1104,10 @@ class AdCloserHandler(
                     leftCornerGeoXClicks++
                     lastLeftCornerClickTimeMs = System.currentTimeMillis()
                 }
-                lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
                 recordAndClick(service, geoMatch.bounds, allowBlacklist = true, label = geoMatch.label)
+                if (!isInvalidOrBlacklisted(geoMatch.bounds.centerX(), geoMatch.bounds.centerY())) {
+                    lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
+                }
                 return AdStepResult.ClickedCloseOrSkip(geoMatch.label, geoMatch.bounds)
             }
             // 若為頂部白底 Sponsored 橫幅廣告 (如 3M 或 Trip.com) 且無倒數計時：
@@ -1431,14 +1445,17 @@ class AdCloserHandler(
         return target
     }
 
-    private fun isHighConfidenceAdTarget(label: String?): Boolean {
-        if (label.isNullOrBlank()) return false
-        return label.contains("Google Play", ignoreCase = true) ||
-            label.contains("GooglePlay", ignoreCase = true) ||
-            label == "左上角幾何X" ||
+    private fun isGeoXTarget(label: String?): Boolean {
+        return label == "左上角幾何X" ||
             label == "右上角幾何X" ||
             label == "Meta預覽關閉(幾何X)" ||
             label == "Sponsored頂部左上角X"
+    }
+
+    private fun isHighConfidenceAdTarget(label: String?): Boolean {
+        if (label.isNullOrBlank()) return false
+        return label.contains("Google Play", ignoreCase = true) ||
+            label.contains("GooglePlay", ignoreCase = true)
     }
 
     private suspend fun recordAndClick(
@@ -1456,14 +1473,12 @@ class AdCloserHandler(
         // 記錄最近一次點擊是否位於左上角（若隨後觸發外部跳轉，用於封鎖本支廣告的左上角區域）
         lastLeftCornerClickTimeMs = if (isInLeftCornerZone(pt.x, pt.y)) System.currentTimeMillis() else 0L
         clickedHistory.add(pt)
-        val radiusPx = getBlacklistRadiusPx(if (currentScreenWidth > 0) currentScreenWidth else 1080)
-        val nearbyClicks = clickedHistory.count { p ->
-            hypot((p.x - pt.x).toDouble(), (p.y - pt.y).toDouble()) < radiusPx
-        }
+        val nearbyClicks = countNearbyPoints(clickedHistory, pt)
+        val isGeoX = isGeoXTarget(effectiveLabel)
         val isHighConfidence = isHighConfidenceAdTarget(effectiveLabel)
         if (allowBlacklist) {
-            if (!isHighConfidence && nearbyClicks >= 4) {
-                // 非高可信目標／盲點類：同一區域 (依螢幕寬度動態換算半徑，1080px 基準對應原 65.0px) 點擊達 4 次仍未關閉，才加入黑名單避免重複空點
+            // 幾何 X 同區連點 3 次無效（例如誤中廣告圖示）即納入黑名單，避免 80+ 次無效空點；非高可信目標保留 4 次
+            if ((isGeoX && nearbyClicks >= 3) || (!isHighConfidence && nearbyClicks >= 4)) {
                 blacklistedPoints.add(pt)
             }
         }

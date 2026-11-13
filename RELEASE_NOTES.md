@@ -1,6 +1,51 @@
 # LINE 散步趣自動看廣告助手 (LineWalkAutoAd) 發布說明
 
 ## 版本資訊
+- 版本名稱：v1.15.82
+- 版本代碼：versionCode 115, versionName "1.15.82"
+- 發布類型：正式版本 (Release)
+
+---
+
+## 概述
+LineWalkAutoAd v1.15.82 依據實機診斷日誌，針對「抽抽樂關閉嘗試次數重設導致 1 到 6 無限迴圈」、「右上角幾何叉叉重複誤點擊 85 次」、「外部防護拉回遊戲後遺失觀看廣告狀態」、「左上角幾何叉叉重複跳轉外部瀏覽器」以及「斷線或網路異常彈窗覆蓋抽抽樂與副分頁時未識別」進行五大核心修復，並於網路異常時執行漸進退避等待，避免誤判各分頁廣告已清空。
+
+---
+
+## 具體更新與修復內容 (v1.15.82)
+
+### 1. 修正抽抽樂關閉「1 -> 6 -> 1」死循環
+- **檔案**：`app/src/main/java/com/linewalk/autoad/engine/AutomationEngine.kt`
+- `resetLotterySessionState(resetCloseAttempts: Boolean = false)` 新增選項參數；於 `getNextPhase(PatrolPhase.LOTTERY)` 推進流程與第 6 次強制離開抽抽樂分頁時保留 `lotteryDialogCloseAttempts`，使其能順利累積至第 7、8 次（強制切換分頁／執行系統返回鍵與重置），不再重設回 `1`。
+- `start()`、`simulateRoundCompletion()` 與 `handleRoundCompletion()` 仍完整重設全部抽抽樂狀態。
+
+### 2. 收緊右上角幾何偵測範圍並停止重複誤點 85 次
+- **檔案**：`app/src/main/java/com/linewalk/autoad/vision/TemplateMatcher.kt`、`app/src/main/java/com/linewalk/autoad/engine/AdCloserHandler.kt`
+- 將 `TemplateMatcher.detectCornerGeometricX` 右上角邊界門檻由 `0.75f` 收緊至 `0.80f`，避開畫面中右上方的非關閉圖示誤檢。
+- `AdCloserHandler` 抽取 `isGeoXTarget` 與 `countNearbyPoints`，將幾何叉叉與 Google Play 等高信心按鈕分流；同一幾何叉叉座標累積點擊 3 次無效即加入黑名單，並停止延後 `lastFallbackCornerTimeMs` 保底計時。
+
+### 3. 外部 App 防護拉回時保留 `AD_WATCHING` 觀看狀態
+- **檔案**：`app/src/main/java/com/linewalk/autoad/engine/AutomationEngine.kt`
+- 於 `handleExternalAppGuard` 抽取 `bringGameToFrontAndRestore(service, preserveWatchingState, restoreReason)`。
+- 當系統正處於 `EngineState.AD_WATCHING` 且因 Google Play／外部瀏覽器 2 拍拉回、外部 App 逾時 3 拍拉回或略過點擊後回彈桌面時，保留 `EngineState.AD_WATCHING` 與原本廣告倒數基準，不再誤切回 `EngineState.IN_GAME_SCAN`。
+
+### 4. 非預期外部瀏覽器跳轉於首次發生即拉黑原座標
+- **檔案**：`app/src/main/java/com/linewalk/autoad/engine/AdCloserHandler.kt`
+- 抽取 `isExpectedSkipLabel` 判斷預期跳轉按鈕（`Google Play`、`GooglePlay`、`略過`、`快轉`）。
+- 於 `markRecentRedirect` 中，若最近點擊並非預期略過按鈕（例如 `左上角幾何X`）卻觸發跳轉外部瀏覽器，第 1 次跳轉即直接將該點加入 `blacklistedPoints`，不再連跳多次；同時維持既定鄰近半徑，不誤傷角落其他有效關閉點。
+
+### 5. 網路異常彈窗穿透子對話框偵測與離線漸進退避
+- **檔案**：`app/src/main/java/com/linewalk/autoad/vision/OcrRecognizer.kt`、`app/src/main/java/com/linewalk/autoad/engine/AutomationEngine.kt`
+- `OcrRecognizer` 新增 `isNetworkErrorDialog(items)` 並強化 `findAdLoadErrorCloseButton`：納入常見網路／連線／通訊錯誤關鍵字、放寬底部關閉與 `重試` 鈕縱軸掃描區間（`0.56f..0.82f`），並在畫面中部（`0.18f..0.72f`）出現明確錯誤提示且搭配關閉按鈕或綠色膠囊按鈕時，不再被背景 `抽抽樂`、`每日賓果`、`邀請好友` 文字誤擋。
+- `AutomationEngine` 新增 `consecutiveNetworkErrorCount`，於偵測到網路異常彈窗點擊關閉後執行離線退避（`4s` / `8s`，熔斷時 `5s` / `8s`）且不將分頁標記為 `confirmedEmptyTabs`。
+
+### 6. 回歸驗證與版本升級
+- 新增 `V1_15_82SimulationTest`（5 項情境回歸測試涵蓋上述五大問題）。
+- `versionCode` 升級為 `115`、`versionName` 升級為 `"1.15.82"`（相容歷代版本記錄完整保留）。
+
+---
+
+## 版本資訊 (歷史版本: v1.15.81)
 - 版本名稱：v1.15.81
 - 版本代碼：versionCode 114, versionName "1.15.81"
 - 發布類型：正式版本 (Release)

@@ -669,13 +669,13 @@ class TemplateMatcher {
 
         val topLimitY = max(vp.mapContentY(0.082f), statusBarSafeH + max(2, (ch * 0.012f).toInt()))
         val searchZones = mutableListOf(
-            // 右上角 (廣告標準關閉鈕位置，避開最頂部系統狀態列與通知列 y < 8.2%，涵蓋 y in 8.2%..16%)
-            Rect(vp.mapContentX(0.75f), topLimitY, vp.mapContentX(0.98f), vp.mapContentY(0.16f))
+            // 右上角 (廣告標準關閉鈕位置，收斂左側起點至 80% 避免誤判廣告創意內縮圖示 @ ~78%，涵蓋 y in 8.2%..16%)
+            Rect(vp.mapContentX(0.80f), topLimitY, vp.mapContentX(0.98f), vp.mapContentY(0.16f))
         )
         // 右上角高位與預覽區 (專門應對 InMobi / AdMob / AppLovin / Meta Web Preview 等全螢幕廣告位於 y in 4.8%..16% 的關閉 X 鈕)
         val rightUpperTopLimitY = max(vp.mapContentY(0.048f), max(1, (ch * 0.020f).toInt()))
         val rightUpperBottomLimitY = max(vp.mapContentY(0.16f), topLimitY)
-        searchZones.add(Rect(vp.mapContentX(0.75f), rightUpperTopLimitY, vp.mapContentX(0.98f), rightUpperBottomLimitY))
+        searchZones.add(Rect(vp.mapContentX(0.80f), rightUpperTopLimitY, vp.mapContentX(0.98f), rightUpperBottomLimitY))
 
         if (includeLeftZone) {
             // 左上角 (Meta Sponsored 橫幅、CACO 輪播/插頁廣告與全比例 16:9~22:9 左上角關閉鈕位置，涵蓋 x in 2.0%..19.5% 與 y in 1.4%..16.0%)
