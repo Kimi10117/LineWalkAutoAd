@@ -91,50 +91,50 @@ jobs:
       - name: Update Tag and Publish APK to GitHub Releases
         run: |
           git tag -f latest-apk
-          git tag -f v1.15.82
+          git tag -f v1.15.83
           git push -f origin latest-apk || true
-          git push -f origin v1.15.82 || true
+          git push -f origin v1.15.83 || true
 
       - name: Publish APK to GitHub Releases (latest-apk)
         uses: softprops/action-gh-release@v2
         with:
             tag_name: latest-apk
-            name: "散步趣助手 v1.15.82 (打破抽抽樂退出死循環、外部拉回保留觀看狀態與網路異常退避升級 - Run #${{ github.run_number }})"
+            name: "散步趣助手 v1.15.83 (角落獨立 X 關閉、移除右下角安裝盲點、Watchdog 計時重置與任務直領加速 - Run #${{ github.run_number }})"
             body: |
-              **散步趣助手 v1.15.82 (Run #${{ github.run_number }}) - 打破抽抽樂退出死循環、外部拉回保留觀看狀態與網路異常退避升級 (相容歷代版本 v1.15.81, v1.15.80, v1.15.79, v1.15.78, v1.15.77, v1.15.76, v1.15.75, v1.15.74, v1.15.73, v1.15.72, v1.15.71, v1.15.70, v1.15.69, v1.15.68, v1.15.67, v1.15.66, v1.15.65, v1.15.64, v1.15.63, v1.15.62, v1.15.61, v1.15.60, v1.15.58, v1.15.57, v1.15.56, v1.15.55, v1.15.54, v1.15.53, v1.15.52, v1.15.51, v1.15.50, v1.15.49, v1.15.48, v1.15.47, v1.15.46, v1.15.45)**
-              1. **【修正抽抽樂關閉「1 -> 6 -> 1」死循環】**：
-                 - 新增 `resetLotterySessionState(resetCloseAttempts = false)` 參數，`getNextPhase(PatrolPhase.LOTTERY)` 推進與第 6 次強制離場時保留關閉嘗試計數，讓第 7 次起可執行強制換分頁／返回退場並歸零，徹底打破無限迴圈。
-              2. **【右上角幾何叉叉偵測收緊與重複點擊止損】**：
-                 - `TemplateMatcher.detectCornerGeometricX` 右上角區域收緊至 `0.80f`，`AdCloserHandler` 分流高信心商業按鈕與幾何 X；同一幾何 X 鄰近點擊達 3 次即拉黑並解除保底關閉計時延後。
-              3. **【外部 App 防護拉回保留 `AD_WATCHING` 狀態】**：
-                 - `AutomationEngine.handleExternalAppGuard` 抽取 `bringGameToFrontAndRestore`，於瀏覽器／Play 商店 2 拍拉回、逾時 3 拍拉回或略過回彈桌面時維持 `EngineState.AD_WATCHING`，避免重設回主遊戲掃描。
-              4. **【非預期外部瀏覽器跳轉首次即拉黑原座標】**：
-                 - `AdCloserHandler.markRecentRedirect` 對非預期略過／Play 商店之按鈕（如左上角幾何 X）於首次跳轉外部瀏覽器時直接加入黑名單，防止連續跳轉網頁同時不影響同角其他有效按鈕。
-              5. **【網路異常彈窗穿透偵測與離線退避】**：
-                 - `OcrRecognizer` 新增 `isNetworkErrorDialog` 與網路／連線異常關鍵字並支援錯誤彈窗覆蓋於抽抽樂／每日賓果／邀請好友之上；`AutomationEngine` 關閉異常彈窗後執行 `4s`/`8s`（或熔斷 `5s`/`8s`）退避且不誤判分頁清空。
+              **散步趣助手 v1.15.83 (Run #${{ github.run_number }}) - 角落獨立 X 關閉、移除右下角安裝盲點、Watchdog 計時重置與任務直領加速 (相容歷代版本 v1.15.82, v1.15.81, v1.15.80, v1.15.79, v1.15.78, v1.15.77, v1.15.76, v1.15.75, v1.15.74, v1.15.73, v1.15.72, v1.15.71, v1.15.70, v1.15.69, v1.15.68, v1.15.67, v1.15.66, v1.15.65, v1.15.64, v1.15.63, v1.15.62, v1.15.61, v1.15.60, v1.15.58, v1.15.57, v1.15.56, v1.15.55, v1.15.54, v1.15.53, v1.15.52, v1.15.51, v1.15.50, v1.15.49, v1.15.48, v1.15.47, v1.15.46, v1.15.45)**
+              1. **【Google Play 略過鈕過濾與角落獨立 X OCR 關閉】**：
+                 - 收緊 `findTopLeftGooglePlaySkipPill` 座標區間並排除星等評價與 App 推廣卡（如「起漲K線!4.8 ★▶ Goo…」），同步將重定向容錯收緊為 2 次；`OcrRecognizer` 新增 `findCornerAsciiCloseButton` 精準點擊左上／右上角獨立 `"X"`（如 `"X"@6%,6%`）。
+              2. **【移除右下角安裝 CTA 盲點並跳過黑名單熱區】**：
+                 - `getNextFallbackTarget` 移除易誤跳 Play 商店之「螢幕右下角熱區」，重新校準右上角避開系統狀態列並略過已黑名單座標，全面黑名單後直接改發系統返回鍵。
+              3. **【Watchdog 強退重置廣告計時器】**：
+                 - 新增 `AdCloserHandler.clearAdSessionTimer()` 並於所有 `AD_WATCHDOG_TIMEOUT`／拉回退出點呼叫，杜絕 6 秒後外部跳轉重進時繼承過期時間戳導致 `74s/65s` 秒退。
+              4. **【黑名單座標去重與「無法讀取資料」錯誤彈窗識別】**：
+                 - `addBlacklistPoint` 以 16px 半徑去重黑名單座標，消除 `blk=` 快照重複項目；`OcrRecognizer` 補充「無法讀取資料」、「讀取資料失敗」、「資料讀取失敗」關鍵字識別。
+              5. **【每日任務綠色「領取」免廣告直領單拍恢復】**：
+                 - `AutomationEngine` 新增 `pendingMissionDirectClaim` 並於狀態離開時清除，免廣告任務領取後第 1 拍即迅速返回 `IN_GAME_SCAN` 繼續領下一項，消除每次 4 秒「領獎確認逾時」等待。
               6. **【版本號升級】**：
-                 - versionCode 115 / versionName 1.15.82（保留歷代版本 APK 與發布紀錄）。
+                 - versionCode 116 / versionName 1.15.83（保留歷代版本 APK 與發布紀錄）。
             files: LineWalkAutoAd.apk
             prerelease: false
 
-      - name: Publish Versioned APK to GitHub Releases (v1.15.82)
+      - name: Publish Versioned APK to GitHub Releases (v1.15.83)
         uses: softprops/action-gh-release@v2
         with:
-            tag_name: v1.15.82
-            name: "散步趣助手 v1.15.82 (打破抽抽樂退出死循環、外部拉回保留觀看狀態與網路異常退避升級)"
+            tag_name: v1.15.83
+            name: "散步趣助手 v1.15.83 (角落獨立 X 關閉、移除右下角安裝盲點、Watchdog 計時重置與任務直領加速)"
             body: |
-              **散步趣助手 v1.15.82 (Run #${{ github.run_number }}) - 打破抽抽樂退出死循環、外部拉回保留觀看狀態與網路異常退避升級**
-              1. **【修正抽抽樂關閉「1 -> 6 -> 1」死循環】**：
-                 - 新增 `resetLotterySessionState(resetCloseAttempts = false)` 參數，`getNextPhase(PatrolPhase.LOTTERY)` 推進與第 6 次強制離場時保留關閉嘗試計數，讓第 7 次起可執行強制換分頁／返回退場並歸零，徹底打破無限迴圈。
-              2. **【右上角幾何叉叉偵測收緊與重複點擊止損】**：
-                 - `TemplateMatcher.detectCornerGeometricX` 右上角區域收緊至 `0.80f`，`AdCloserHandler` 分流高信心商業按鈕與幾何 X；同一幾何 X 鄰近點擊達 3 次即拉黑並解除保底關閉計時延後。
-              3. **【外部 App 防護拉回保留 `AD_WATCHING` 狀態】**：
-                 - `AutomationEngine.handleExternalAppGuard` 抽取 `bringGameToFrontAndRestore`，於瀏覽器／Play 商店 2 拍拉回、逾時 3 拍拉回或略過回彈桌面時維持 `EngineState.AD_WATCHING`，避免重設回主遊戲掃描。
-              4. **【非預期外部瀏覽器跳轉首次即拉黑原座標】**：
-                 - `AdCloserHandler.markRecentRedirect` 對非預期略過／Play 商店之按鈕（如左上角幾何 X）於首次跳轉外部瀏覽器時直接加入黑名單，防止連續跳轉網頁同時不影響同角其他有效按鈕。
-              5. **【網路異常彈窗穿透偵測與離線退避】**：
-                 - `OcrRecognizer` 新增 `isNetworkErrorDialog` 與網路／連線異常關鍵字並支援錯誤彈窗覆蓋於抽抽樂／每日賓果／邀請好友之上；`AutomationEngine` 關閉異常彈窗後執行 `4s`/`8s`（或熔斷 `5s`/`8s`）退避且不誤判分頁清空。
+              **散步趣助手 v1.15.83 (Run #${{ github.run_number }}) - 角落獨立 X 關閉、移除右下角安裝盲點、Watchdog 計時重置與任務直領加速**
+              1. **【Google Play 略過鈕過濾與角落獨立 X OCR 關閉】**：
+                 - 收緊 `findTopLeftGooglePlaySkipPill` 座標區間並排除星等評價與 App 推廣卡（如「起漲K線!4.8 ★▶ Goo…」），同步將重定向容錯收緊為 2 次；`OcrRecognizer` 新增 `findCornerAsciiCloseButton` 精準點擊左上／右上角獨立 `"X"`（如 `"X"@6%,6%`）。
+              2. **【移除右下角安裝 CTA 盲點並跳過黑名單熱區】**：
+                 - `getNextFallbackTarget` 移除易誤跳 Play 商店之「螢幕右下角熱區」，重新校準右上角避開系統狀態列並略過已黑名單座標，全面黑名單後直接改發系統返回鍵。
+              3. **【Watchdog 強退重置廣告計時器】**：
+                 - 新增 `AdCloserHandler.clearAdSessionTimer()` 並於所有 `AD_WATCHDOG_TIMEOUT`／拉回退出點呼叫，杜絕 6 秒後外部跳轉重進時繼承過期時間戳導致 `74s/65s` 秒退。
+              4. **【黑名單座標去重與「無法讀取資料」錯誤彈窗識別】**：
+                 - `addBlacklistPoint` 以 16px 半徑去重黑名單座標，消除 `blk=` 快照重複項目；`OcrRecognizer` 補充「無法讀取資料」、「讀取資料失敗」、「資料讀取失敗」關鍵字識別。
+              5. **【每日任務綠色「領取」免廣告直領單拍恢復】**：
+                 - `AutomationEngine` 新增 `pendingMissionDirectClaim` 並於狀態離開時清除，免廣告任務領取後第 1 拍即迅速返回 `IN_GAME_SCAN` 繼續領下一項，消除每次 4 秒「領獎確認逾時」等待。
               6. **【版本號升級】**：
-                 - versionCode 115 / versionName 1.15.82（保留歷代版本 APK 與發布紀錄）。
+                 - versionCode 116 / versionName 1.15.83（保留歷代版本 APK 與發布紀錄）。
             files: LineWalkAutoAd.apk
             prerelease: false

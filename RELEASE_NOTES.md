@@ -1,6 +1,50 @@
 # LINE 散步趣自動看廣告助手 (LineWalkAutoAd) 發布說明
 
 ## 版本資訊
+- 版本名稱：v1.15.83
+- 版本代碼：versionCode 116, versionName "1.15.83"
+- 發布類型：正式版本 (Release)
+
+---
+
+## 概述
+LineWalkAutoAd v1.15.83 依據 `v1.15.82` 實機診斷日誌（15 輪、50 次廣告完成分析），針對「應用評分推廣卡誤充左上角 Google Play 略過鈕並漏掉角落 X」、「45 秒右下角備援盲點誤觸 Play 商店安裝橫幅」、「Watchdog 強退未重設廣告計時導致 6 秒後秒退」、「黑名單座標重複記錄與無法讀取資料彈窗識別」，以及「每日任務免費直領誤等 4 秒逾時警告」進行五大精準修正。
+
+---
+
+## 具體更新與修復內容 (v1.15.83)
+
+### 1. 收緊 Google Play 略過鈕條件並新增角落獨立 `X` OCR 關閉
+- **檔案**：`app/src/main/java/com/linewalk/autoad/vision/OcrRecognizer.kt`、`app/src/main/java/com/linewalk/autoad/engine/AdCloserHandler.kt`
+- `AdCloserHandler.findTopLeftGooglePlaySkipPill` 收緊左上角幾何區間（`cxRatio <= 0.285f`、`cyRatio <= 0.155f`、`leftRatio <= 0.160f`）並過濾星等（`★`／`⭐`／`\d.\d`）、App 名稱前綴與推薦／安裝雜訊，杜絕將「起漲K線!4.8 ★▶ Goo…」推廣卡片誤判為略過鈕。
+- `markRecentRedirect` 將預期略過標籤的重定向容錯次數收緊至 `2` 次並依跳轉狀況調整點擊上限，同時於 `OcrRecognizer` 新增 `findCornerAsciiCloseButton` 精準辨識僅位於左上／右上角落安全座標的獨立 `"X"`（如 `"X"@6%,6%`），不再漏失或誤觸中央品牌文字。
+
+### 2. 移除右下角安裝 CTA 盲點並強化備援熱區黑名單過濾
+- **檔案**：`app/src/main/java/com/linewalk/autoad/engine/AdCloserHandler.kt`
+- `getNextFallbackTarget` 正式移除易誤觸底部全寬安裝按鈕之「螢幕右下角熱區」（`0.89..0.95h`），並將「螢幕右上角熱區」與「內容右上角熱區」往下校準避開系統狀態列邊緣。
+- 備援盲點序列會跳過已被 `isInvalidOrBlacklisted` 封鎖的熱區座標；若所有安全角落皆已進黑名單，則直接改發系統安全返回鍵，不再反覆盲點同一跳轉區。
+
+### 3. Watchdog 強退退出時重置廣告計時，杜絕秒級連鎖逾時
+- **檔案**：`app/src/main/java/com/linewalk/autoad/engine/AdCloserHandler.kt`、`app/src/main/java/com/linewalk/autoad/engine/AutomationEngine.kt`
+- `AdCloserHandler` 新增 `clearAdSessionTimer()` 重置 `adStartTimeMs` 與 `watchdogForceBackAttempts`。
+- `AutomationEngine` 於 `AD_WATCHDOG_TIMEOUT`、`WATCHDOG_BACK_TIMEOUT` 與強制拉回主畫面離開 `AD_WATCHING` 時呼叫 `clearAdSessionTimer()`，徹底防止數秒後外部瀏覽器／跳轉拉回並 `onEnterAdMode(preserveRedirectState = true)` 時繼承舊時間戳觸發 `74s/65s` 秒退。
+
+### 4. 黑名單座標 16px 半徑去重與新增「無法讀取資料」錯誤彈窗識別
+- **檔案**：`app/src/main/java/com/linewalk/autoad/engine/AdCloserHandler.kt`、`app/src/main/java/com/linewalk/autoad/vision/OcrRecognizer.kt`
+- `AdCloserHandler` 抽取 `addBlacklistPoint`，對半徑 `16px` 內鄰近或相同座標自動去重，防止日誌出現 `(540,2071),(540,2071)` 重複項目佔滿快照上限。
+- `OcrRecognizer.isNetworkErrorDialog` 與 `findAdLoadErrorCloseButton` 納入「無法讀取資料」、「讀取資料失敗」、「資料讀取失敗」，加速排除抽抽樂與副分頁斷線遮罩。
+
+### 5. 每日任務綠色「領取」免廣告直領項目單拍快速恢復
+- **檔案**：`app/src/main/java/com/linewalk/autoad/engine/AutomationEngine.kt`
+- 新增 `pendingMissionDirectClaim` 旗標並於 `transitionTo` 切換離場時自動清除；在 `handleMissionDialog` 點擊綠色「領取」後，若下個循環仍在任務視窗且無廣告或領獎中央彈窗，於第 1 拍即以「免看廣告獎勵已直接領取」快速返回 `IN_GAME_SCAN` 繼續領下一項，消除每次 4 秒「領獎確認逾時」等待與誤導日誌。
+
+### 6. 回歸驗證與版本升級
+- 新增 `V1_15_83SimulationTest`（5 項情境回歸測試涵蓋上述五大問題）。
+- `versionCode` 升級為 `116`、`versionName` 升級為 `"1.15.83"`（相容歷代版本記錄完整保留）。
+
+---
+
+## 版本資訊 (歷史版本: v1.15.82)
 - 版本名稱：v1.15.82
 - 版本代碼：versionCode 115, versionName "1.15.82"
 - 發布類型：正式版本 (Release)

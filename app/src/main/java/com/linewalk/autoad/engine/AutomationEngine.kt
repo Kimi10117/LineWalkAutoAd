@@ -131,6 +131,7 @@ class AutomationEngine private constructor(private val context: Context) {
     private var loopJob: Job? = null
 
     private var popupRetryTicks = 0
+    private var pendingMissionDirectClaim = false
     private var rewardClaimRetryTicks = 0
     private var adWatchdogCooldownTicks = 0
     enum class GuardAction {
@@ -349,6 +350,7 @@ class AutomationEngine private constructor(private val context: Context) {
         resetClickCircuitBreaker()
         inGameLinePromoRetryCount = 0
         popupRetryTicks = 0
+        pendingMissionDirectClaim = false
         rewardClaimRetryTicks = 0
         nonGameScreenTicks = 0
         emptyTicksOnCurrentTab = 0
@@ -2029,6 +2031,7 @@ class AutomationEngine private constructor(private val context: Context) {
             }
             delay(500)
             popupRetryTicks = 0
+            pendingMissionDirectClaim = true
             // 領取後可能觸發看廣告或獎勵彈窗，切入 TRIGGER_AD_POPUP 流程安全等候
             transitionTo(
                 EngineState.TRIGGER_AD_POPUP,
@@ -3052,7 +3055,7 @@ class AutomationEngine private constructor(private val context: Context) {
         transitionTo(EngineState.IN_GAME_SCAN, "已點擊 [取消]，切換至下一分頁/任務...", "[巡邏] 切換巡邏中...")
     }
 
-    private suspend fun handleTriggerAdPopup(
+    internal suspend fun handleTriggerAdPopup(
         service: AutoAdAccessibilityService,
         screenBitmap: android.graphics.Bitmap,
         ocrItems: List<OcrItem>
@@ -3258,19 +3261,29 @@ class AutomationEngine private constructor(private val context: Context) {
         val isGameScreen = adCloserHandler.isGameScreenVisible(service, screenBitmap, ocrItems)
         // 嚴格安全防護：若畫面仍在主畫面或領獎下半部彈窗，絕不誤判為全螢幕廣告！
         if (!onMainScreenDirect && !isBottomRewardPopup && ((hasAdOcrDirect && !isStillInSubDialog) || (!isStillInSubDialog && (directGeoX != null || isExternalDirect || hasBrowserTitleDirect || (!isGameScreen && popupRetryTicks >= 2))))) {
+            pendingMissionDirectClaim = false
             appendLog("[廣告] 點擊目標後已直接進入全螢幕廣告/宣傳頁，啟動廣告監控流程！")
             adCloserHandler.onEnterAdMode()
             transitionTo(EngineState.AD_WATCHING, "已進入廣告畫面，安全監控中...", "[廣告] 監控中...")
             return
         }
 
+        if (pendingMissionDirectClaim && !onMainScreenDirect && missionTask.isMissionDialogOpen(ocrItems, sh, screenBitmap) && popupRetryTicks >= 1) {
+            pendingMissionDirectClaim = false
+            appendLog("[任務] 免看廣告獎勵已直接領取，繼續檢查下一項任務")
+            transitionTo(EngineState.IN_GAME_SCAN, "任務獎勵已領取，繼續檢查下一項...", "[任務] 繼續領取...")
+            return
+        }
+
         if (isStillInSubDialog && popupRetryTicks >= 2) {
+            pendingMissionDirectClaim = false
             appendLog("[子視窗] 領獎確認逾時（無有效目標或已領畢），退出子彈窗繼續巡邏")
             transitionTo(EngineState.IN_GAME_SCAN, "領獎確認逾時，退出子彈窗繼續巡邏...", "[巡邏] 檢查彈窗中...")
             return
         }
 
         if (onMainScreenDirect && popupRetryTicks >= 3) {
+            pendingMissionDirectClaim = false
             transitionTo(EngineState.IN_GAME_SCAN, "已回到主畫面，繼續常規巡邏...", "[巡邏] 巡邏畫面目標中...")
             return
         }
@@ -3286,6 +3299,7 @@ class AutomationEngine private constructor(private val context: Context) {
                 maxTextLength = 6
             )
             if (normalOrSkip != null) {
+                pendingMissionDirectClaim = false
                 appendLog("[一般] 點擊彈窗一般按鈕: [${normalOrSkip.text}]")
                 FloatingOverlayService.clickWithOverlayPassthrough(normalOrSkip.bounds) {
                     service.clickRect(normalOrSkip.bounds)
@@ -3301,6 +3315,7 @@ class AutomationEngine private constructor(private val context: Context) {
         }
 
         if (popupRetryTicks >= 2) {
+            pendingMissionDirectClaim = false
             appendLog("[返回] 未偵測到看廣告彈窗，返回主畫面繼續巡邏")
             transitionTo(EngineState.IN_GAME_SCAN, "重新掃描遊戲畫面...", "[巡邏] 巡邏畫面目標中...")
         } else {
@@ -3391,6 +3406,7 @@ class AutomationEngine private constructor(private val context: Context) {
                 service.bringAppToFront(targetGamePkg)
                 delay(800)
             }
+            adCloserHandler.clearAdSessionTimer()
             adWatchdogCooldownTicks = 4
             transitionTo(EngineState.IN_GAME_SCAN, "廣告逾時強制拉回散步趣主畫面，繼續巡邏...", "[巡邏] 重新巡邏中...")
             return
@@ -3537,6 +3553,7 @@ class AutomationEngine private constructor(private val context: Context) {
                     }
                     service.bringAppToFront(targetGamePkg)
                     delay(800)
+                    adCloserHandler.clearAdSessionTimer()
                     adWatchdogCooldownTicks = 4
                     transitionTo(EngineState.IN_GAME_SCAN, "逾時強制拉回散步趣主畫面，繼續巡邏...", "[巡邏] 重新巡邏中...")
                 }
@@ -3553,6 +3570,7 @@ class AutomationEngine private constructor(private val context: Context) {
                 }
                 service.bringAppToFront(targetGamePkg)
                 delay(800)
+                adCloserHandler.clearAdSessionTimer()
                 adWatchdogCooldownTicks = 4
                 transitionTo(EngineState.IN_GAME_SCAN, "強制拉回散步趣主畫面，繼續巡邏...", "[巡邏] 重新巡邏中...")
             }
@@ -3850,6 +3868,9 @@ class AutomationEngine private constructor(private val context: Context) {
     }
 
     internal fun transitionTo(newState: EngineState, detail: String, safeOverlayText: String) {
+        if (newState != EngineState.TRIGGER_AD_POPUP) {
+            pendingMissionDirectClaim = false
+        }
         if (newState != EngineState.IN_GAME_SCAN) {
             nonGameScreenTicks = 0
             inGameLinePromoRetryCount = 0

@@ -83,6 +83,14 @@ class AdCloserHandler(
     private val clickedHistory = mutableListOf<Point>()
     private val blacklistedPoints = mutableListOf<Point>()
 
+    /**
+     * Watchdog 強制逾時退出廣告時重置廣告計時與退避計數，避免下一次外部跳轉拉回誤繼承已過期之 adStartTimeMs。
+     */
+    fun clearAdSessionTimer() {
+        adStartTimeMs = 0L
+        watchdogForceBackAttempts = 0
+    }
+
     fun onEnterAdMode(preserveRedirectState: Boolean = false) {
         val now = System.currentTimeMillis()
         if (!preserveRedirectState || adStartTimeMs == 0L || now - adStartTimeMs > 120_000L) {
@@ -184,12 +192,22 @@ class AdCloserHandler(
         if (pt != null) {
             redirectPointCounts.add(pt)
             val nearbyRedirects = countNearbyPoints(redirectPointCounts, pt)
-            // 非略過標籤（如幾何 X 或未知點）一旦直接引發外部跳轉，就地封鎖該座標不再二次誤點；略過標籤保留 3 次寬容
-            if (!expectedSkip || nearbyRedirects >= 3) {
-                blacklistedPoints.add(pt)
+            // 非略過標籤（如幾何 X 或未知點）一旦直接引發外部跳轉，就地封鎖該座標不再二次誤點；略過標籤保留 2 次寬容
+            if (!expectedSkip || nearbyRedirects >= 2) {
+                addBlacklistPoint(pt)
             }
         }
         lastClickedPoint = null
+    }
+
+    /** 將座標納入黑名單（以 16px 半徑去重，避免相同 OCR 座標重複塞滿快照與清單） */
+    private fun addBlacklistPoint(pt: Point) {
+        val alreadyBlocked = blacklistedPoints.any { existing ->
+            hypot((existing.x - pt.x).toDouble(), (existing.y - pt.y).toDouble()) < 16.0
+        }
+        if (!alreadyBlocked) {
+            blacklistedPoints.add(pt)
+        }
     }
 
     /** 目前廣告是否已封鎖左上角掃描（供測試與診斷使用） */
@@ -403,7 +421,7 @@ class AdCloserHandler(
             hasAdActuallyShown = true
             markRecentRedirect()
             lastClickedPoint?.let { badPt ->
-                blacklistedPoints.add(badPt)
+                addBlacklistPoint(badPt)
                 lastClickedPoint = null
             }
             if (!service.navigateBack()) {
@@ -418,7 +436,7 @@ class AdCloserHandler(
             socialLandingPageTicks++
             socialLandingPageTotalRecoveries++
             lastClickedPoint?.let { badPt ->
-                blacklistedPoints.add(badPt)
+                addBlacklistPoint(badPt)
                 lastClickedPoint = null
             }
             // 社群落地頁極速返回：第 1 次按 Back 鍵，若仍停留在社群則直接 bringAppToFront 拉回散步趣
@@ -512,7 +530,7 @@ class AdCloserHandler(
         // 立即將觸發座標加入黑名單，並點擊上方半透明遮罩區 (或返回鍵) 關閉選單讓廣告繼續播放！
         if (ocrRecognizer.isAdChoicesMenuOpen(ocrItems)) {
             lastClickedPoint?.let { badPt ->
-                blacklistedPoints.add(badPt)
+                addBlacklistPoint(badPt)
                 lastClickedPoint = null
             }
             adChoicesDismissCount++
@@ -912,7 +930,8 @@ class AdCloserHandler(
         // 該按鈕為廣告略過之前置要件，必須第一時間立即點擊跳轉 Google Play 再按返回鍵才能略過！
         // 若未即時點擊會自動淡出隱藏，因此移除 4 秒延遲，第 1 秒起即刻秒點！
         val nowMsForPill = System.currentTimeMillis()
-        if (elapsedSec >= 1 && googlePlayPillClickCount < 4 && nowMsForPill - lastGooglePlayPillClickTimeMs >= 2500L) {
+        val maxGooglePlayPillClicks = if (redirectCount > 0) 2 else 3
+        if (elapsedSec >= 1 && googlePlayPillClickCount < maxGooglePlayPillClicks && nowMsForPill - lastGooglePlayPillClickTimeMs >= 2500L) {
             val topLeftGooglePlayPill = findTopLeftGooglePlaySkipPill(ocrItems, sw, sh)
             if (topLeftGooglePlayPill != null &&
                 !isInvalidOrBlacklisted(topLeftGooglePlayPill.centerX(), topLeftGooglePlayPill.centerY())
@@ -1062,6 +1081,18 @@ class AdCloserHandler(
             val closeOcrLabel = "OCR[${fullScreenCloseOcr.text}]"
             recordAndClick(service, fullScreenCloseOcr.bounds, allowBlacklist = true, label = closeOcrLabel)
             return AdStepResult.ClickedCloseOrSkip(closeOcrLabel, fullScreenCloseOcr.bounds)
+        }
+
+        // 7A2. 角落獨立單字 X 關閉按鈕識別（如起漲K線廣告之左上角 "X"@6%,6%），僅匹配螢幕角落安全座標
+        val cornerAsciiClose = ocrRecognizer.findCornerAsciiCloseButton(ocrItems, sw, sh) { cx, cy ->
+            isInvalidOrBlacklisted(cx, cy)
+        }
+        if (cornerAsciiClose != null) {
+            lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
+            hasAdActuallyShown = true
+            val cornerLabel = "OCR-角落[${cornerAsciiClose.text.trim()}]"
+            recordAndClick(service, cornerAsciiClose.bounds, allowBlacklist = true, label = cornerLabel)
+            return AdStepResult.ClickedCloseOrSkip(cornerLabel, cornerAsciiClose.bounds)
         }
 
         // 7B. 第二層辨識 B：中下方廣告控制欄「关闭 / 關閉」藥丸按鈕偵測 (如 Google 聯播網、何基鼎台股分析廣告)
@@ -1269,13 +1300,15 @@ class AdCloserHandler(
                         }
                     }
                 } else {
-                    // 若未發生重定向，輪流嘗試角落備援熱區（右上角/右下角/內容右上角）與安全返回鍵
+                    // 若未發生重定向，輪流嘗試已過濾狀態列與黑名單的右上角備援熱區與安全返回鍵
                     if (!isOutsideGame && now - lastFallbackCornerTimeMs >= 3000L) {
                         val (label, targetRect) = getNextFallbackTarget(sw, sh, ocrItems)
                         lastFallbackCornerTimeMs = now
-                        val fallbackLabel = "備援盲點[$label]"
-                        recordAndClick(service, targetRect, allowBlacklist = true, label = fallbackLabel)
-                        return AdStepResult.WatchdogBackTriggered(elapsedSec, fallbackLabel)
+                        if (!isInvalidOrBlacklisted(targetRect.centerX(), targetRect.centerY())) {
+                            val fallbackLabel = "備援盲點[$label]"
+                            recordAndClick(service, targetRect, allowBlacklist = true, label = fallbackLabel)
+                            return AdStepResult.WatchdogBackTriggered(elapsedSec, fallbackLabel)
+                        }
                     }
                     if ((!isGame || !isGameVisible) && now - lastBackActionTimeMs >= 3000L) {
                         lastBackActionTimeMs = now
@@ -1351,6 +1384,30 @@ class AdCloserHandler(
      * - 嚴格限定於左上角區域 (cy in 2.5%..18.0% sh, cx in 2.0%..42.0% sw)，自適應 16:9 無黑邊與 21:9/22:9 摺疊機頂部黑邊。
      * - 膠囊尺寸必須為小型獨立標籤 (寬度 <= 42% sw, 高度 <= 8% sh)，嚴格排除畫面中下方的商店橫幅或大型廣告圖卡。
      */
+    private fun isGooglePlaySkipPillNoise(rawText: String): Boolean {
+        val compact = rawText.replace(" ", "")
+        if (compact.isEmpty()) return true
+        val noiseKeywords = listOf(
+            "★", "⭐", "☆", "下載", "安裝", "免費", "推薦", "評分", "評論", "萬次",
+            "廣告", "Sponsored", "...", "…"
+        )
+        if (noiseKeywords.any { compact.contains(it, ignoreCase = true) }) {
+            return true
+        }
+        if (Regex("""\d+\.\d""").containsMatchIn(compact)) {
+            return true
+        }
+        val googleIdx = compact.indexOf("Google", ignoreCase = true)
+        if (googleIdx > 0) {
+            val prefix = compact.substring(0, googleIdx)
+            val strippedPrefix = prefix.replace(Regex("""[▶▸►▷>|│/\\:\[\]()·•\-–—]"""), "")
+            if (strippedPrefix.length > 1 || strippedPrefix.any { it in '\u4E00'..'\u9FFF' }) {
+                return true
+            }
+        }
+        return false
+    }
+
     fun findTopLeftGooglePlaySkipPill(
         ocrItems: List<OcrItem>,
         sw: Int,
@@ -1360,12 +1417,15 @@ class AdCloserHandler(
         val topLeftItems = ocrItems.filter { item ->
             val cyRatio = item.bounds.centerY().toFloat() / sh
             val cxRatio = item.bounds.centerX().toFloat() / sw
+            val leftRatio = item.bounds.left.toFloat() / sw
             val wRatio = item.bounds.width().toFloat() / sw
             val hRatio = item.bounds.height().toFloat() / sh
-            cyRatio in 0.025f..0.180f &&
-                cxRatio in 0.020f..0.420f &&
-                wRatio <= 0.42f &&
-                hRatio <= 0.08f
+            cyRatio in 0.025f..0.155f &&
+                cxRatio in 0.020f..0.285f &&
+                leftRatio <= 0.160f &&
+                wRatio <= 0.34f &&
+                hRatio <= 0.07f &&
+                !isGooglePlaySkipPillNoise(item.text)
         }
         if (topLeftItems.isEmpty()) return null
 
@@ -1416,30 +1476,30 @@ class AdCloserHandler(
         // 現已徹底重構備援盲點序列：完全移除 "螢幕左上角熱區"（即使 !hasGooglePlayNear 為 true 亦嚴禁啟用左上角），杜絕任何喚起外部瀏覽器的危險盲點！
         // 改為以安全關閉優先序列：右上角 (0.91w, 0.045h) -> 右下角 (0.91w, 0.92h) -> 右上角更偏角 (0.95w, 0.08h)
 
-        // 1. 螢幕右上角關閉熱區 (中心錨定 0.91w, 0.045h，標準頂部略過/關閉位置)
+        // 1. 螢幕右上角關閉熱區 (中心錨定 0.915w, 0.066h，完全避開頂部系統狀態列與廣告下載橫幅)
         targets.add("螢幕右上角熱區" to Rect(
-            (sw * 0.86f).toInt(),
-            max((sh * 0.015f).toInt(), 15),
+            (sw * 0.87f).toInt(),
+            (sh * 0.045f).toInt(),
             (sw * 0.96f).toInt(),
-            (sh * 0.075f).toInt()
+            (sh * 0.088f).toInt()
         ))
 
-        // 2. 螢幕右下角關閉熱區 (中心錨定 0.91w, 0.92h，應對將略過/關閉放置於右下角之全螢幕影音廣告)
-        targets.add("螢幕右下角熱區" to Rect(
-            (sw * 0.86f).toInt(),
-            (sh * 0.89f).toInt(),
-            (sw * 0.96f).toInt(),
-            (sh * 0.95f).toInt()
-        ))
-
-        // 3. 螢幕右上角更偏角熱區 (中心錨定 0.95w, 0.08h，應對 16:9 / 4:3 劇院黑邊或更靠外緣之 (X) 按鈕)
+        // 2. 螢幕右上角更偏角熱區 (中心錨定 0.942w, 0.090h，應對 16:9 / 4:3 劇院黑邊或更靠外緣之 (X) 按鈕；已移除易誤點底部安裝 CTA 的右下角熱區)
         targets.add("內容右上角熱區" to Rect(
-            (sw * 0.91f).toInt(),
-            (sh * 0.055f).toInt(),
-            (sw * 0.99f).toInt(),
-            (sh * 0.105f).toInt()
+            (sw * 0.90f).toInt(),
+            (sh * 0.068f).toInt(),
+            (sw * 0.985f).toInt(),
+            (sh * 0.112f).toInt()
         ))
 
+        for (attempt in targets.indices) {
+            val idx = (fallbackCornerCycle + attempt) % targets.size
+            val candidate = targets[idx]
+            if (!isInvalidOrBlacklisted(candidate.second.centerX(), candidate.second.centerY())) {
+                fallbackCornerCycle = idx + 1
+                return candidate
+            }
+        }
         val target = targets[fallbackCornerCycle % targets.size]
         fallbackCornerCycle++
         return target
@@ -1479,7 +1539,7 @@ class AdCloserHandler(
         if (allowBlacklist) {
             // 幾何 X 同區連點 3 次無效（例如誤中廣告圖示）即納入黑名單，避免 80+ 次無效空點；非高可信目標保留 4 次
             if ((isGeoX && nearbyClicks >= 3) || (!isHighConfidence && nearbyClicks >= 4)) {
-                blacklistedPoints.add(pt)
+                addBlacklistPoint(pt)
             }
         }
         closeClickCount++

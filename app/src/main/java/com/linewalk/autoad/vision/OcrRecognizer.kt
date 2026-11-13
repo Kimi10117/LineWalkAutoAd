@@ -808,7 +808,10 @@ class OcrRecognizer {
                 t.contains("發生錯誤") ||
                 t.contains("系統錯誤") ||
                 t.contains("請求失敗") ||
-                t.contains("無法取得資料")
+                t.contains("無法取得資料") ||
+                t.contains("無法讀取資料") ||
+                t.contains("讀取資料失敗") ||
+                t.contains("資料讀取失敗")
         }
     }
 
@@ -856,6 +859,9 @@ class OcrRecognizer {
                 t.contains("系統錯誤") ||
                 t.contains("請求失敗") ||
                 t.contains("無法取得資料") ||
+                t.contains("無法讀取資料") ||
+                t.contains("讀取資料失敗") ||
+                t.contains("資料讀取失敗") ||
                 t.contains("取得失敗")
         }
 
@@ -1090,6 +1096,47 @@ class OcrRecognizer {
             val t = item.text
             AD_CHOICES_MENU_KEYWORDS.any { kw -> t.contains(kw, ignoreCase = true) }
         }
+    }
+
+    /**
+     * 角落獨立單字 X 關閉按鈕識別：
+     * 部分全螢幕廣告（如起漲K線、股市廣告）無障礙節點樹未暴露 desc=Close，
+     * 僅於左上角或右上角繪製獨立字元 "X"@6%,6%（無包圍文字）。
+     * 為避免誤點畫面中央之 X 品牌名稱，嚴格限定僅搜尋螢幕左上／右上極端角落區域與獨立字元尺寸。
+     */
+    fun findCornerAsciiCloseButton(
+        items: List<OcrItem>,
+        sw: Int,
+        sh: Int,
+        isExcluded: (Int, Int) -> Boolean = { _, _ -> false }
+    ): OcrItem? {
+        if (sw <= 0 || sh <= 0) return null
+        val candidates = items.filter { item ->
+            if (isSystemTelemetryOcr(item.text)) return@filter false
+            val trimmed = item.text.trim()
+            val isCornerXToken = trimmed.equals("X", ignoreCase = true) ||
+                trimmed == "✕" ||
+                trimmed == "✖" ||
+                trimmed == "×" ||
+                trimmed == "╳" ||
+                trimmed == "⊗" ||
+                trimmed == "ⓧ" ||
+                trimmed.equals("[X]", ignoreCase = true) ||
+                trimmed.equals("(X)", ignoreCase = true)
+            if (!isCornerXToken) return@filter false
+
+            val cx = item.bounds.centerX()
+            val cy = item.bounds.centerY()
+            val normX = cx.toFloat() / sw
+            val normY = cy.toFloat() / sh
+            val inTopBand = normY in 0.028f..0.145f
+            val inLeftOrRightCorner = normX in 0.025f..0.165f || normX in 0.835f..0.975f
+            val reasonableSize = item.bounds.width() <= sw * 0.12f && item.bounds.height() <= sh * 0.06f
+
+            inTopBand && inLeftOrRightCorner && reasonableSize && !isExcluded(cx, cy)
+        }
+        if (candidates.isEmpty()) return null
+        return candidates.maxByOrNull { item -> if (item.bounds.centerX() > sw / 2) 1 else 0 }
     }
 
     fun detectRewardPendingCountdownSeconds(items: List<OcrItem>, screenHeight: Int): Int? {
