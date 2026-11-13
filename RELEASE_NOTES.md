@@ -1,6 +1,41 @@
 # LINE 散步趣自動看廣告助手 (LineWalkAutoAd) 發布說明
 
 ## 版本資訊
+- 版本名稱：v1.15.84
+- 版本代碼：versionCode 117, versionName "1.15.84"
+- 發布類型：正式版本 (Release)
+
+---
+
+## 概述
+LineWalkAutoAd v1.15.84 針對「全螢幕廣告左上角跨界 `[▶|]` 略過圓鈕無法辨識（如 iHEALTH Run. Burn. Earn.）」、「`13.5%~16.6%` 廣告橫幅／專頁圖示誤觸幾何 `X`」、「Watchdog 返回主畫面後誤觸返回鍵」、「內嵌廣告吞噬 `Back` 導致反覆 `65s` 強退死循環」與「OCR 原生呼叫做逾時防呆」完成全方位修復與回歸驗證。
+
+---
+
+## 具體更新與修復內容 (v1.15.84)
+
+### 1. 左上角跨界深色半透明 `[▶|]` 略過鈕偵測與膠囊／字詞防誤觸
+- **檔案**：`app/src/main/java/com/linewalk/autoad/vision/TemplateMatcher.kt`、`app/src/main/java/com/linewalk/autoad/engine/AdCloserHandler.kt`
+- `TemplateMatcher.detectCornerFastForwardSkip` 與 `scanCornerSkipZone` 擴展左上角掃描區（`x in 2.5%..22.0%`、`y in 3.5%..14.0%`），支援僅上半圈深灰圓框貼邊跨界（Horizon 亮背景交界）搭配單色純白圖示驗證，同時透過 `hasCapsuleExtension` 與有界 8 連通 `isCrossXGlyph` 排除頂部「X 56 秒後可獲獎勵」橫向膠囊及角落幾何 `X`。
+- `AdCloserHandler` Step `4C` 放寬 `fastForwardSkipClicks` 至涵蓋 `isMetaAd || isAd || isGame || fgPkg == null`，並加入 `hasAdjacentCapsuleOcr` 阻擋重疊於倒數／Google Play 文字膠囊之座標；同時移除 `8B Reveal Swipe` 對 `"Play"` 寬鬆比對，避免撞上 `"Google Play"` 徽章。
+
+### 2. 收斂幾何 `X` 角落掃描區，排除橫幅促銷與廣告主圖示
+- **檔案**：`app/src/main/java/com/linewalk/autoad/vision/TemplateMatcher.kt`
+- `detectCornerGeometricX` 將右上角左側起點收斂至 `0.80f`（排除 `~78%` 創意內縮圖示）、左上角橫向收斂於 `0.020f..0.162f`（排除 `16.6%` 專頁圖示），並將下緣校準為 `0.140f`（扣除內部掃描邊距後中心止於 `~13.06%`，排除 `13.5%~15.7%` 促銷圖示同時保留 `11.3%` 真實角落叉鈕）。
+
+### 3. Watchdog 主畫面先檢與內嵌廣告雙段強退 Task 升級
+- **檔案**：`app/src/main/java/com/linewalk/autoad/engine/AutomationEngine.kt`、`app/src/main/java/com/linewalk/autoad/service/AutoAdAccessibilityService.kt`
+- `handleAdWatching` 於判斷 `adElapsed >= timerLimitSec` 前先以 `isGameScreenVisible` 確認是否已回到散步趣主畫面並直接復歸，避免已退場卻誤發返回鍵跳回桌面。
+- 針對內嵌廣告吞噬 `Back`（前景仍停在 `com.linecorp.LGWKTW`）情境，新增 `pressHome()`、`forceResetAppTaskToFront(targetPackage, clearTask)`、`verifyRecoveredGameScreen` 與 `consecutiveWatchdogTimeouts`：第 1 階段執行 `pressHome()` + `CLEAR_TOP`，若截圖驗證仍卡在廣告則立即升級 `CLEAR_TASK`，連續無法截圖（`null`）時於第 2 次逾時直上 `CLEAR_TASK` 終結 65 秒迴圈。
+
+### 4. ML Kit OCR 逾時防護與 `v1.15.84` 回歸驗證
+- **檔案**：`app/src/main/java/com/linewalk/autoad/vision/OcrRecognizer.kt`、`app/src/test/java/com/linewalk/autoad/test/v11584/V1_15_84SimulationTest.kt`、`app/build.gradle.kts`
+- `OcrRecognizer.recognize` 導入 `withTimeoutOrNull(2500L)` 與 `Throwable` 保護（維持重拋 `CancellationException`），防止 OCR 停滯卡死引擎迴圈。
+- 新增 `V1_15_84SimulationTest`（4 項情境測試），並將 `versionCode` 升級為 `117`、`versionName` 升級為 `"1.15.84"`（完整保留所有歷代版本紀錄與 APK）。
+
+---
+
+## 版本資訊 (歷史版本: v1.15.83)
 - 版本名稱：v1.15.83
 - 版本代碼：versionCode 116, versionName "1.15.83"
 - 發布類型：正式版本 (Release)

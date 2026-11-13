@@ -403,6 +403,50 @@ class AutoAdAccessibilityService : AccessibilityService() {
         return false
     }
 
+    /**
+     * 執行系統 Home 鍵返回桌面（用於脫離吞噬系統返回鍵的遊戲內嵌廣告 Activity）。
+     */
+    fun pressHome(): Boolean {
+        return try {
+            performGlobalAction(GLOBAL_ACTION_HOME)
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /**
+     * 強制清棧拉回指定遊戲套件至前景，突破卡死在遊戲 Task 頂端的內嵌廣告 Activity：
+     * - `clearTask = false`：使用 `FLAG_ACTIVITY_CLEAR_TOP or FLAG_ACTIVITY_SINGLE_TOP or FLAG_ACTIVITY_RESET_TASK_IF_NEEDED` 嘗試清除上層廣告頁。
+     * - `clearTask = true`：升級使用 `FLAG_ACTIVITY_NEW_TASK or FLAG_ACTIVITY_CLEAR_TASK` 徹底重建遊戲主頁面 Task。
+     */
+    fun forceResetAppTaskToFront(
+        targetPackage: String = "com.linecorp.LGWKTW",
+        clearTask: Boolean = false
+    ): Boolean {
+        val candidates = listOf(targetPackage, "com.linecorp.LGWKTW", "com.linecorp.LGWALK")
+        for (pkg in candidates) {
+            try {
+                val intent = packageManager.getLaunchIntentForPackage(pkg)?.apply {
+                    flags = if (clearTask) {
+                        android.content.Intent.FLAG_ACTIVITY_NEW_TASK or
+                            android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK
+                    } else {
+                        android.content.Intent.FLAG_ACTIVITY_NEW_TASK or
+                            android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                            android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                            android.content.Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED
+                    }
+                }
+                if (intent != null) {
+                    startActivity(intent)
+                    return true
+                }
+            } catch (_: Exception) {
+            }
+        }
+        return false
+    }
+
     companion object {
         private const val TAG = "AutoAdAccService"
 

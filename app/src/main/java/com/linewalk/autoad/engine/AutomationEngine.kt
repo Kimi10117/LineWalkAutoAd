@@ -134,6 +134,7 @@ class AutomationEngine private constructor(private val context: Context) {
     private var pendingMissionDirectClaim = false
     private var rewardClaimRetryTicks = 0
     private var adWatchdogCooldownTicks = 0
+    internal var consecutiveWatchdogTimeouts = 0
     enum class GuardAction {
         ALLOW_IN_GAME_SCAN,
         SAFE_BACK_NAVIGATION,
@@ -339,6 +340,7 @@ class AutomationEngine private constructor(private val context: Context) {
         if (resetRound) {
             currentRound = 1
             timeoutForceEscapeCount = 0
+            consecutiveWatchdogTimeouts = 0
             externalRedirectPlayCount = 0
             externalRedirectBrowserCount = 0
             externalRedirectOtherCount = 0
@@ -436,6 +438,7 @@ class AutomationEngine private constructor(private val context: Context) {
         loopJob = null
         resetClickCircuitBreaker()
         consecutiveNetworkErrorCount = 0
+        consecutiveWatchdogTimeouts = 0
         inGameLinePromoRetryCount = 0
         _uiStatus.value = _uiStatus.value.copy(
             isRunning = false,
@@ -1408,6 +1411,7 @@ class AutomationEngine private constructor(private val context: Context) {
         // 只要在主畫面，立即交由 handleMainScreenPatrol 進行分頁切換與常規巡邏！
         val onMainScreen = ocrRecognizer.isLineWalkMainScreenVisible(screenBitmap, ocrItems, templateMatcher)
         if (onMainScreen) {
+            consecutiveWatchdogTimeouts = 0
             nonGameScreenTicks = 0
             nonMainScreenIdleTicks = 0
             handleMainScreenPatrol(service, screenBitmap, ocrItems, sw, sh)
@@ -3331,6 +3335,7 @@ class AutomationEngine private constructor(private val context: Context) {
         confirmedEmptyTabs.remove(currentTab)
         when (action) {
             is PopupActionTarget.CandySkipAd -> {
+                consecutiveWatchdogTimeouts = 0
                 val newCount = _uiStatus.value.adsCompletedCount + 1
                 _uiStatus.value = _uiStatus.value.copy(adsCompletedCount = newCount)
                 appendLog("[糖果] 偵測到可用糖果！點擊 [${action.label}] 直接跳過廣告！(累計 $newCount 次)")
@@ -3360,7 +3365,24 @@ class AutomationEngine private constructor(private val context: Context) {
         }
     }
 
-    private suspend fun handleAdWatching(
+    private suspend fun verifyRecoveredGameScreen(
+        service: AutoAdAccessibilityService,
+        sourceBitmap: android.graphics.Bitmap? = null
+    ): Pair<Boolean, Boolean> {
+        val verifyBmp = service.captureScreenBitmap() ?: return Pair(false, false)
+        return try {
+            val verifyOcr = ocrRecognizer.recognize(verifyBmp)
+            val isBack = ocrRecognizer.isLineWalkMainScreenVisible(verifyBmp, verifyOcr, templateMatcher) ||
+                adCloserHandler.isGameScreenVisible(service, verifyBmp, verifyOcr)
+            Pair(true, isBack)
+        } finally {
+            if (verifyBmp !== sourceBitmap && !verifyBmp.isRecycled) {
+                verifyBmp.recycle()
+            }
+        }
+    }
+
+    internal suspend fun handleAdWatching(
         service: AutoAdAccessibilityService,
         screenBitmap: android.graphics.Bitmap,
         ocrItems: List<OcrItem>
@@ -3381,9 +3403,10 @@ class AutomationEngine private constructor(private val context: Context) {
         // 0. 全域廣告超時絕對防護 (Global Ad Timeout Watchdog)：
         // 依 adCloserHandler.getEffectiveWatchdogLimitSec(config.maxAdWaitSeconds) 動態取得計時上限，
         // 超過上限先寫入 [狀態Snap] 與 OCR 摘要，再突破容器防護發送系統返回鍵；若前景仍非散步趣則強制喚醒目標套件！
+        val alreadyBackInGame = adCloserHandler.isGameScreenVisible(service, screenBitmap, ocrItems)
         val timerLimitSec = adCloserHandler.getEffectiveWatchdogLimitSec(config.maxAdWaitSeconds)
         val adElapsed = adCloserHandler.getElapsedSeconds()
-        if (adElapsed >= timerLimitSec) {
+        if (!alreadyBackInGame && adElapsed >= timerLimitSec) {
             timeoutForceEscapeCount++
             appendLog("[警報] 廣告播放達 ${adElapsed}s 超過計時器上限 (${timerLimitSec}s)，準備強制關閉廣告拉回散步趣！")
             appendLog(buildPhoneStateSnapshot("AD_WATCHDOG_TIMEOUT(${adElapsed}s/${timerLimitSec}s)", service, screenBitmap, ocrItems))
@@ -3399,15 +3422,52 @@ class AutomationEngine private constructor(private val context: Context) {
                 recordBackRejectIfAny(service, "WatchdogEscape#2", screenBitmap, ocrItems)
             }
             delay(600)
+            val targetGamePkg = resolvePreferredGamePackage(service)
             val postWatchdogFg = service.getForegroundPackageName()
             if (!AppConfig.isGamePackage(postWatchdogFg)) {
-                val targetGamePkg = resolvePreferredGamePackage(service)
                 appendLog("[計時強退] 兩次系統返回後前景仍非遊戲套件 (${postWatchdogFg ?: "unknown"})，強制喚醒散步趣 ($targetGamePkg) 拉回前景！")
                 service.bringAppToFront(targetGamePkg)
                 delay(800)
+                consecutiveWatchdogTimeouts = 0
+                adWatchdogCooldownTicks = 4
+            } else {
+                // 前景套件雖為遊戲本體 (LGWKTW/LGWALK)，但內嵌廣告 Activity 可能吞噬 Back 仍卡死在廣告畫面上，重抓截圖確認
+                val (hasVerifyBmp, verifyReturned) = verifyRecoveredGameScreen(service, screenBitmap)
+                if (verifyReturned) {
+                    consecutiveWatchdogTimeouts = 0
+                    adWatchdogCooldownTicks = 4
+                } else {
+                    consecutiveWatchdogTimeouts++
+                    if (consecutiveWatchdogTimeouts == 1) {
+                        appendLog("[計時強退] Back 遭內嵌廣告攔截，執行 Level 1 清棧逃脫：Home -> CLEAR_TOP ($targetGamePkg)")
+                        service.pressHome()
+                        delay(450)
+                        service.forceResetAppTaskToFront(targetGamePkg, clearTask = false)
+                        delay(1200)
+                        val (hasVerify2, recoveredByClearTop) = verifyRecoveredGameScreen(service, screenBitmap)
+                        if (recoveredByClearTop) {
+                            appendLog("[計時強退] Level 1 CLEAR_TOP 已成功脫離內嵌廣告並恢復散步趣主畫面")
+                            consecutiveWatchdogTimeouts = 0
+                            adWatchdogCooldownTicks = 4
+                        } else if (hasVerify2 || hasVerifyBmp) {
+                            appendLog("[計時強退] CLEAR_TOP 後仍停留在頑固內嵌廣告，立即升級 Level 2 CLEAR_TASK ($targetGamePkg) 重建主任務！")
+                            service.forceResetAppTaskToFront(targetGamePkg, clearTask = true)
+                            delay(2200)
+                            adWatchdogCooldownTicks = 8
+                        } else {
+                            adWatchdogCooldownTicks = 4
+                        }
+                    } else {
+                        appendLog("[計時強退] 連續第 $consecutiveWatchdogTimeouts 次逾時（或無截圖回傳），直接執行 Level 2 CLEAR_TASK ($targetGamePkg) 重建主任務！")
+                        service.pressHome()
+                        delay(450)
+                        service.forceResetAppTaskToFront(targetGamePkg, clearTask = true)
+                        delay(2200)
+                        adWatchdogCooldownTicks = 8
+                    }
+                }
             }
             adCloserHandler.clearAdSessionTimer()
-            adWatchdogCooldownTicks = 4
             transitionTo(EngineState.IN_GAME_SCAN, "廣告逾時強制拉回散步趣主畫面，繼續巡邏...", "[巡邏] 重新巡邏中...")
             return
         }
@@ -3464,6 +3524,7 @@ class AutomationEngine private constructor(private val context: Context) {
             }
 
             is AdStepResult.ReturnedToGame -> {
+                consecutiveWatchdogTimeouts = 0
                 if (res.label == "廣告載入逾時已取消") {
                     appendLog("[逾時] 廣告伺服器載入逾時 (超過 18 秒)，已自動取消並返回遊戲！")
                     // 若當前在日常子視窗，關閉該視窗並推進至下一項目，避免無廣告庫存時持續重試
@@ -3520,6 +3581,7 @@ class AutomationEngine private constructor(private val context: Context) {
                     handlePopupCooldownCancel(service, cancelRect, screenBitmap.width, screenBitmap.height)
                     return
                 }
+                consecutiveWatchdogTimeouts = 0
                 val newAdsCount = _uiStatus.value.adsCompletedCount + 1
                 _uiStatus.value = _uiStatus.value.copy(adsCompletedCount = newAdsCount)
                 emptyTicksOnCurrentTab = 0

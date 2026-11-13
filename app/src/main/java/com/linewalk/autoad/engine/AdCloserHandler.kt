@@ -1006,7 +1006,7 @@ class AdCloserHandler(
         // 限制：非頂部白底 Sponsored 橫幅廣告，且單支廣告最多嘗試 2 次，杜絕在右上角連續空點 6~8 次！
         if (!isCurrentAdTopSponsored &&
             fastForwardSkipClicks < 2 &&
-            (isMetaAd || fgPkg == "com.linecorp.LGWKTW" || fgPkg == "com.linecorp.LGWALK") &&
+            (isMetaAd || isAd || isGame || fgPkg == null) &&
             (elapsedSec >= 5 || rewardGrantedOcr != null) &&
             (remainingSec == null || remainingSec <= 1 || rewardGrantedOcr != null)
         ) {
@@ -1014,7 +1014,26 @@ class AdCloserHandler(
                 screenBitmap = screenBitmap,
                 blacklistedCoord = ::isInvalidOrBlacklisted
             )
-            if (skipMatch != null) {
+            val hasAdjacentCapsuleOcr = if (skipMatch != null) {
+                ocrItems.any { item ->
+                    val sameRow = kotlin.math.abs(item.bounds.centerY() - skipMatch.bounds.centerY()) <= sh * 0.035f
+                    val rightExtended = item.bounds.right >= skipMatch.bounds.left &&
+                        item.bounds.left <= skipMatch.bounds.right + (sw * 0.14f).toInt()
+                    val t = item.text.replace(" ", "")
+                    sameRow && rightExtended && t.length >= 2 && (
+                        t.contains("秒") ||
+                            t.contains("獎勵") ||
+                            t.contains("Google", ignoreCase = true) ||
+                            t.contains("Play", ignoreCase = true) ||
+                            t.any { it.isDigit() }
+                        )
+                }
+            } else {
+                false
+            }
+            if (skipMatch != null && !hasAdjacentCapsuleOcr &&
+                !isInvalidOrBlacklisted(skipMatch.bounds.centerX(), skipMatch.bounds.centerY())
+            ) {
                 fastForwardSkipClicks++
                 hasAdActuallyShown = true
                 lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
@@ -1332,7 +1351,9 @@ class AdCloserHandler(
         ) {
             val hasPlayableKeywords = ocrItems.any { item ->
                 val t = item.text.replace(" ", "")
-                t.contains("立即遊玩") || t.contains("遊玩") || t.contains("Play") ||
+                t.contains("立即遊玩") || t.contains("試玩") || t.contains("互動") ||
+                    t.contains("Tap", ignoreCase = true) || t.contains("Drag", ignoreCase = true) ||
+                    t.contains("Swipe", ignoreCase = true) || t.contains("Hold", ignoreCase = true) ||
                     t.contains("Level") || t.contains("港口") || t.contains("關卡")
             }
             if (hasPlayableKeywords || (googlePlayPillClickCount > 0 && elapsedSec >= 6)) {

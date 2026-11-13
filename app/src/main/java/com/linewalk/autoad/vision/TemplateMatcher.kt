@@ -663,28 +663,26 @@ class TemplateMatcher {
         val sw = screenBitmap.width
         val sh = screenBitmap.height
         val vp = ScreenViewportCalibrator.detectViewport(sw, sh, screenBitmap)
-        val cw = vp.contentWidth
         val ch = vp.contentHeight
         val statusBarSafeH = ScreenViewportCalibrator.getStatusBarSafeHeight(sw, sh, screenBitmap)
 
         val topLimitY = max(vp.mapContentY(0.082f), statusBarSafeH + max(2, (ch * 0.012f).toInt()))
         val searchZones = mutableListOf(
-            // 右上角 (廣告標準關閉鈕位置，收斂左側起點至 80% 避免誤判廣告創意內縮圖示 @ ~78%，涵蓋 y in 8.2%..16%)
-            Rect(vp.mapContentX(0.80f), topLimitY, vp.mapContentX(0.98f), vp.mapContentY(0.16f))
+            // 右上角 (廣告標準關閉鈕位置，收斂左側起點至 80% 避免誤判廣告創意內縮圖示 @ ~78%，並控制下緣使中心點止於 ~13.06% 以排除 13.5% 橫幅促銷美術圖)
+            Rect(vp.mapContentX(0.80f), topLimitY, vp.mapContentX(0.98f), vp.mapContentY(0.140f))
         )
-        // 右上角高位與預覽區 (專門應對 InMobi / AdMob / AppLovin / Meta Web Preview 等全螢幕廣告位於 y in 4.8%..16% 的關閉 X 鈕)
         val rightUpperTopLimitY = max(vp.mapContentY(0.048f), max(1, (ch * 0.020f).toInt()))
-        val rightUpperBottomLimitY = max(vp.mapContentY(0.16f), topLimitY)
+        val rightUpperBottomLimitY = max(vp.mapContentY(0.140f), topLimitY)
         searchZones.add(Rect(vp.mapContentX(0.80f), rightUpperTopLimitY, vp.mapContentX(0.98f), rightUpperBottomLimitY))
 
         if (includeLeftZone) {
-            // 左上角 (Meta Sponsored 橫幅、CACO 輪播/插頁廣告與全比例 16:9~22:9 左上角關閉鈕位置，涵蓋 x in 2.0%..19.5% 與 y in 1.4%..16.0%)
+            // 左上角 (Meta Sponsored / CACO / 全比例左上角關閉鈕，收斂為 x in 2.0%..16.2%、y in 1.4%..14.0% 扣內縮安全距約 13.0%，避免誤點 13.5%~15.7% 橫幅圖示及 16.6% 廣告主專頁圖示)
             val leftTopLimitY = max(vp.mapContentY(0.014f), max(1, (ch * 0.008f).toInt()))
-            val leftBottomLimitY = vp.mapContentY(0.160f)
+            val leftBottomLimitY = vp.mapContentY(0.140f)
             if (vp.effectiveLeftX == 0 && vp.effectiveRightX == sw) {
-                searchZones.add(Rect((sw * 0.020f).toInt(), leftTopLimitY, (sw * 0.195f).toInt(), leftBottomLimitY))
+                searchZones.add(Rect((sw * 0.020f).toInt(), leftTopLimitY, (sw * 0.162f).toInt(), leftBottomLimitY))
             } else {
-                searchZones.add(Rect(vp.mapContentX(0.020f), leftTopLimitY, vp.mapContentX(0.195f), leftBottomLimitY))
+                searchZones.add(Rect(vp.mapContentX(0.020f), leftTopLimitY, vp.mapContentX(0.162f), leftBottomLimitY))
             }
         }
 
@@ -863,50 +861,235 @@ class TemplateMatcher {
      * 本偵測器精準計算右上角區域 (x in 72%..96.5%, y in 1.5%..11.5%) 之圓環底色與內部圖示高對比度，
      * 能在廣告播放滿 4~5 秒略過鈕浮現時立即秒速點擊跳過廣告！
      */
+    /**
+     * 偵測全螢幕廣告右上角或左上角的快轉／略過按鈕 (`▶|`、`▶▶|` 等深色圓底白色圖示)。
+     * 支援純黑邊／亮背景交界線跨界貼邊圓鈕，並排除與右側文字共箱之倒數膠囊 (`X 56 秒後可獲獎勵`)。
+     */
     suspend fun detectCornerFastForwardSkip(
         screenBitmap: Bitmap,
         blacklistedCoord: ((Int, Int) -> Boolean)? = null
     ): TemplateMatchResult? = withContext(Dispatchers.Default) {
         val sw = screenBitmap.width
         val sh = screenBitmap.height
-        // 嚴格排除 y < 4.2% 之頂部系統狀態列 (Wi-Fi、電量、訊號與靜音圖示)
         val vp = ScreenViewportCalibrator.detectViewport(sw, sh, screenBitmap)
         val cw = vp.contentWidth
         val ch = vp.contentHeight
-        val topLimitY = max(vp.mapContentY(0.042f), max(2, (ch * 0.019f).toInt()))
-        val bottomLimitY = vp.mapContentY(0.115f)
-        val leftLimitX = vp.mapContentX(0.72f)
-        val rightLimitX = vp.mapContentX(0.965f)
 
+        val rightTopY = max(vp.mapContentY(0.042f), max(2, (ch * 0.019f).toInt()))
+        val rightBottomY = kotlin.math.min(sh - 1, max(vp.mapContentY(0.135f), (sh * 0.135f).toInt()))
+        val rightMatch = scanCornerSkipZone(
+            screenBitmap = screenBitmap,
+            sw = sw,
+            sh = sh,
+            cw = cw,
+            leftLimitX = vp.mapContentX(0.72f),
+            rightLimitX = vp.mapContentX(0.965f),
+            topLimitY = rightTopY,
+            bottomLimitY = rightBottomY,
+            label = "右上角略過鈕(▶|)",
+            blacklistedCoord = blacklistedCoord
+        )
+        if (rightMatch != null) return@withContext rightMatch
+
+        val leftTopY = max(2, kotlin.math.min(vp.mapContentY(0.038f), (sh * 0.035f).toInt()))
+        val leftBottomY = kotlin.math.min(sh - 1, max(vp.mapContentY(0.140f), (sh * 0.140f).toInt()))
+        val leftStartX = if (vp.effectiveLeftX == 0 && vp.effectiveRightX == sw) {
+            (sw * 0.025f).toInt()
+        } else {
+            vp.mapContentX(0.025f)
+        }
+        val leftEndX = if (vp.effectiveLeftX == 0 && vp.effectiveRightX == sw) {
+            (sw * 0.220f).toInt()
+        } else {
+            vp.mapContentX(0.220f)
+        }
+        scanCornerSkipZone(
+            screenBitmap = screenBitmap,
+            sw = sw,
+            sh = sh,
+            cw = cw,
+            leftLimitX = leftStartX,
+            rightLimitX = leftEndX,
+            topLimitY = leftTopY,
+            bottomLimitY = leftBottomY,
+            label = "左上角略過鈕(▶|)",
+            blacklistedCoord = blacklistedCoord
+        )
+    }
+
+    private fun scanCornerSkipZone(
+        screenBitmap: Bitmap,
+        sw: Int,
+        sh: Int,
+        cw: Int,
+        leftLimitX: Int,
+        rightLimitX: Int,
+        topLimitY: Int,
+        bottomLimitY: Int,
+        label: String,
+        blacklistedCoord: ((Int, Int) -> Boolean)?
+    ): TemplateMatchResult? {
         val rInner = max(2, (cw * 0.024f).toInt())
+        val rCore = max(3, (cw * 0.017f).toInt())
+        val rRing = max(5, (cw * 0.025f).toInt())
         val rOuter = max(4, (cw * 0.042f).toInt())
         val step = max(1, cw / 200)
 
         val zw = rightLimitX - leftLimitX
         val zh = bottomLimitY - topLimitY
-        if (zw <= rOuter * 2 || zh <= rOuter * 2) return@withContext null
+        if (zw <= rOuter * 2 || zh <= rOuter * 2) return null
 
         val pixels = IntArray(zw * zh)
         screenBitmap.getPixels(pixels, 0, zw, leftLimitX, topLimitY, zw, zh)
 
-        fun lum(x: Int, y: Int): Float {
-            val c = pixels[y * zw + x]
-            return 0.299f * ((c shr 16) and 0xFF) +
-                0.587f * ((c shr 8) and 0xFF) +
-                0.114f * (c and 0xFF)
+        fun pixelAt(x: Int, y: Int): Int = pixels[y * zw + x]
+        fun lumColor(c: Int): Float =
+            0.299f * ((c shr 16) and 0xFF) + 0.587f * ((c shr 8) and 0xFF) + 0.114f * (c and 0xFF)
+        fun isMonochromeWhite(c: Int): Boolean {
+            val r = (c shr 16) and 0xFF
+            val g = (c shr 8) and 0xFF
+            val b = c and 0xFF
+            return max(r, max(g, b)) - kotlin.math.min(r, kotlin.math.min(g, b)) <= 45
         }
+
+        // 預先準備水平右延展膠囊過濾條（跨越 zone 右界時可直接讀取 screenBitmap）
+        fun hasCapsuleExtension(absX: Int, absY: Int): Boolean {
+            val dx0 = max(rRing + 2, (cw * 0.036f).toInt())
+            val dx1 = kotlin.math.min(sw - 1 - absX, (cw * 0.160f).toInt())
+            val extStep = max(1, cw / 180)
+            var extDark = 0
+            var extBright = 0
+            if (dx1 > dx0) {
+                var dy = -rCore / 2
+                while (dy <= rCore / 2) {
+                    val py = (absY + dy).coerceIn(0, sh - 1)
+                    var dx = dx0
+                    while (dx <= dx1) {
+                        val l = lumColor(screenBitmap.getPixel((absX + dx).coerceIn(0, sw - 1), py))
+                        if (l > 170f) extBright++ else if (l < 125f) extDark++
+                        if (extBright >= 4 && extDark >= 6) return true
+                        dx += extStep
+                    }
+                    dy += extStep
+                }
+            }
+            return false
+        }
+
+        fun isCrossXGlyph(absX: Int, absY: Int): Boolean {
+            // 沿圓內亮白筆畫進行有界 8 連通 BFS，於 rInner 圓內播種並擴展至完整筆畫邊界，
+            // 既可避免候選中心偏離 X 中心或落在臂間暗隙時漏偵，亦不會抓到圓框外亮背景
+            val maxR = max(rInner + 8, (cw * 0.042f).toInt())
+            val side = maxR * 2 + 1
+            val visited = BooleanArray(side * side)
+            val maxQueue = side * side
+            val qx = IntArray(maxQueue)
+            val qy = IntArray(maxQueue)
+            var head = 0
+            var tail = 0
+
+            val rSeed = rInner
+            val rSeed2 = rSeed * rSeed
+            for (dy in -rSeed..rSeed) {
+                val py = absY + dy
+                if (py !in 0 until sh) continue
+                for (dx in -rSeed..rSeed) {
+                    if (dx * dx + dy * dy > rSeed2) continue
+                    val px = absX + dx
+                    if (px !in 0 until sw) continue
+                    if (abs(dx) <= maxR && abs(dy) <= maxR && lumColor(screenBitmap.getPixel(px, py)) > 155f) {
+                        val idx = (dy + maxR) * side + (dx + maxR)
+                        if (!visited[idx]) {
+                            visited[idx] = true
+                            qx[tail] = px
+                            qy[tail] = py
+                            tail++
+                        }
+                    }
+                }
+            }
+            if (tail == 0) return false
+
+            var minx = sw
+            var miny = sh
+            var maxx = -1
+            var maxy = -1
+            var cnt = 0
+            val maxPixels = max(60, maxR * maxR)
+
+            while (head < tail) {
+                val x = qx[head]
+                val y = qy[head]
+                head++
+                if (x < minx) minx = x
+                if (x > maxx) maxx = x
+                if (y < miny) miny = y
+                if (y > maxy) maxy = y
+                cnt++
+                if (cnt > maxPixels) return false
+
+                for (dy in -1..1) {
+                    val ny = y + dy
+                    if (ny !in 0 until sh || abs(ny - absY) > maxR) continue
+                    for (dx in -1..1) {
+                        if (dx == 0 && dy == 0) continue
+                        val nx = x + dx
+                        if (nx !in 0 until sw || abs(nx - absX) > maxR) continue
+                        val idx = (ny - absY + maxR) * side + (nx - absX + maxR)
+                        if (!visited[idx] && lumColor(screenBitmap.getPixel(nx, ny)) > 155f) {
+                            visited[idx] = true
+                            qx[tail] = nx
+                            qy[tail] = ny
+                            tail++
+                        }
+                    }
+                }
+            }
+            if (cnt < 6 || maxx <= minx || maxy <= miny) return false
+            val hw = max(3, (maxx - minx) / 2)
+            val hh = max(3, (maxy - miny) / 2)
+            if (hw > maxR - 2 || hh > maxR - 2) return false
+            if (abs(hw - hh) > max(3, hw / 3)) return false
+            val mx = (minx + maxx) / 2
+            val my = (miny + maxy) / 2
+            val ax = max(2, (hw * 0.68f).toInt())
+            val ay = max(2, (hh * 0.68f).toInt())
+            val ddx = max(2, (hw * 0.55f).toInt())
+            val ddy = max(2, (hh * 0.55f).toInt())
+            fun lumSafe(x: Int, y: Int): Float =
+                lumColor(screenBitmap.getPixel(x.coerceIn(0, sw - 1), y.coerceIn(0, sh - 1)))
+            val axialMax = max(
+                max(lumSafe(mx - ax, my), lumSafe(mx + ax, my)),
+                max(lumSafe(mx, my - ay), lumSafe(mx, my + ay))
+            )
+            val diagMin = kotlin.math.min(
+                kotlin.math.min(lumSafe(mx - ddx, my - ddy), lumSafe(mx + ddx, my - ddy)),
+                kotlin.math.min(lumSafe(mx - ddx, my + ddy), lumSafe(mx + ddx, my + ddy))
+            )
+            return axialMax < 140f && diagMin > 150f
+        }
+
+        val topAngles = doubleArrayOf(
+            -Math.PI * 0.85,
+            -Math.PI * 0.65,
+            -Math.PI * 0.50,
+            -Math.PI * 0.35,
+            -Math.PI * 0.15
+        )
 
         var bestScore = 0f
         var bestCandidate: TemplateMatchResult? = null
+        val coreStep = max(1, rCore / 6)
 
-        var cy = rInner
-        while (cy <= zh - rInner) {
-            var cx = rInner
-            while (cx <= zw - rInner) {
+        var cy = rRing
+        while (cy <= zh - rRing) {
+            var cx = rRing
+            while (cx <= zw - rRing) {
                 val absX = leftLimitX + cx
                 val absY = topLimitY + cy
 
                 if (blacklistedCoord?.invoke(absX, absY) != true) {
+                    // 檢查 1：傳統 360 度對稱深色圓框 (rOuter)
                     val ringSamples = FloatArray(12)
                     var ringSum = 0f
                     var ringMax = 0f
@@ -915,7 +1098,7 @@ class TemplateMatcher {
                         val angle = i * (Math.PI / 6.0)
                         val px = (cx + rOuter * kotlin.math.cos(angle)).toInt().coerceIn(0, zw - 1)
                         val py = (cy + rOuter * kotlin.math.sin(angle)).toInt().coerceIn(0, zh - 1)
-                        val l = lum(px, py)
+                        val l = lumColor(pixelAt(px, py))
                         ringSamples[i] = l
                         ringSum += l
                         if (l > ringMax) ringMax = l
@@ -923,8 +1106,6 @@ class TemplateMatcher {
                     }
                     val ringMean = ringSum / 12f
                     val ringDiff = ringMax - ringMin
-
-                    // 圓形對稱性與均勻度檢驗：抑制橫向長條狀促銷橫幅
                     var maxSymDiff = 0f
                     for (i in 0 until 6) {
                         val d = abs(ringSamples[i] - ringSamples[i + 6])
@@ -932,47 +1113,134 @@ class TemplateMatcher {
                     }
                     val horizMean = (ringSamples[0] + ringSamples[6]) / 2f
                     val vertMean = (ringSamples[3] + ringSamples[9]) / 2f
-                    val hvDiff = abs(horizMean - vertMean)
+                    val symOk = ringDiff < 35f && maxSymDiff < 30f && abs(horizMean - vertMean) < 20f &&
+                        ringMean < 115f && ringMax < 135f
 
-                    val isSymmetric = ringDiff < 35f && maxSymDiff < 30f && hvDiff < 20f
-
-                    if (isSymmetric) {
-                        val centerLum = lum(cx, cy)
+                    if (symOk) {
+                        val centerLum = lumColor(pixelAt(cx, cy))
                         var innerMax = 0f
-                        var innerMin = 255f
-                        var darkInnerCount = 0
-                        var totalInner = 0
-
                         var dy = -rInner
                         while (dy <= rInner) {
                             var dx = -rInner
                             while (dx <= rInner) {
                                 if (dx * dx + dy * dy <= rInner * rInner) {
-                                    val px = (cx + dx).coerceIn(0, zw - 1)
-                                    val py = (cy + dy).coerceIn(0, zh - 1)
-                                    val l = lum(px, py)
-                                    totalInner++
-                                    if (l < 235f) darkInnerCount++
+                                    val l = lumColor(pixelAt((cx + dx).coerceIn(0, zw - 1), (cy + dy).coerceIn(0, zh - 1)))
                                     if (l > innerMax) innerMax = l
-                                    if (l < innerMin) innerMin = l
                                 }
                                 dx += 2
                             }
                             dy += 2
                         }
-
-                        // 僅保留模式 A：深色半透明圓形底圖內嵌高亮白色圖示 (▶|)，徹底移除容易誤判白底廣告右上角靜音喇叭、AdChoices 與網址文字的模式 B
-                        if (ringMean < 115f && ringMax < 135f && (centerLum - ringMean > 35f || centerLum > 150f)) {
+                        if ((centerLum - ringMean > 35f || centerLum > 150f) && innerMax > 175f) {
                             val contrast = innerMax - ringMean
-                            if (innerMax > 175f && contrast > 85f) {
-                                if (contrast > bestScore) {
-                                    bestScore = contrast
-                                    val boxRadius = rOuter + max(2, (cw * 0.004f).toInt())
-                                    bestCandidate = TemplateMatchResult(
-                                        score = (contrast / 180f).coerceIn(0.85f, 0.99f),
-                                        bounds = Rect(absX - boxRadius, absY - boxRadius, absX + boxRadius, absY + boxRadius),
-                                        label = "右上角略過鈕(▶|)"
-                                    )
+                            if (contrast > 85f && contrast > bestScore && !hasCapsuleExtension(absX, absY) && !isCrossXGlyph(absX, absY)) {
+                                bestScore = contrast
+                                val boxRadius = rOuter + max(2, (cw * 0.004f).toInt())
+                                bestCandidate = TemplateMatchResult(
+                                    score = (contrast / 180f).coerceIn(0.85f, 0.99f),
+                                    bounds = Rect(absX - boxRadius, absY - boxRadius, absX + boxRadius, absY + boxRadius),
+                                    label = label
+                                )
+                            }
+                        }
+                    } else {
+                        // 檢查 2：黑邊／亮背景交界線跨界深色半透明圓鈕 + 單色純白圖示 (`▶|`)
+                        var topRimSum = 0f
+                        var topRimMax = 0f
+                        for (a in topAngles) {
+                            val px = (cx + rRing * kotlin.math.cos(a)).toInt().coerceIn(0, zw - 1)
+                            val py = (cy + rRing * kotlin.math.sin(a)).toInt().coerceIn(0, zh - 1)
+                            val l = lumColor(pixelAt(px, py))
+                            topRimSum += l
+                            if (l > topRimMax) topRimMax = l
+                        }
+                        val rLeft = lumColor(pixelAt((cx - rRing).coerceIn(0, zw - 1), cy))
+                        val rRight = lumColor(pixelAt((cx + rRing).coerceIn(0, zw - 1), cy))
+
+                        if (topRimMax <= 135f && rLeft <= 140f && rRight <= 140f) {
+                            var spill = false
+                            var off = max(1, (rCore * 0.85f).toInt())
+                            while (off <= rRing) {
+                                if (lumColor(pixelAt((cx - off).coerceIn(0, zw - 1), cy)) > 155f ||
+                                    lumColor(pixelAt((cx + off).coerceIn(0, zw - 1), cy)) > 155f
+                                ) {
+                                    spill = true
+                                    break
+                                }
+                                off += coreStep
+                            }
+                            if (!spill) {
+                                val shelfY = (cy + (rCore * 0.75f).toInt()).coerceIn(0, zh - 1)
+                                var shelfMin = 255f
+                                var shelfSum = 0f
+                                var shelfCnt = 0
+                                var sdx = -rCore / 2
+                                while (sdx <= rCore / 2) {
+                                    val l = lumColor(pixelAt((cx + sdx).coerceIn(0, zw - 1), shelfY))
+                                    shelfSum += l
+                                    if (l < shelfMin) shelfMin = l
+                                    shelfCnt++
+                                    sdx += coreStep
+                                }
+                                val shelfMean = if (shelfCnt > 0) shelfSum / shelfCnt else 255f
+                                if (shelfMin <= 135f && shelfMean <= 165f) {
+                                    var inMax = 0f
+                                    var inMin = 255f
+                                    var brightCnt = 0
+                                    var darkCnt = 0
+                                    var midBrightCnt = 0
+                                    var topBrightCnt = 0
+                                    var botBrightCnt = 0
+                                    var total = 0
+                                    var monoOk = true
+                                    var dy = -rCore
+                                    while (dy <= rCore && monoOk) {
+                                        var dx = -rCore
+                                        while (dx <= rCore) {
+                                            if (dx * dx + dy * dy <= rCore * rCore) {
+                                                val c = pixelAt((cx + dx).coerceIn(0, zw - 1), (cy + dy).coerceIn(0, zh - 1))
+                                                val l = lumColor(c)
+                                                total++
+                                                if (l > inMax) inMax = l
+                                                if (l < inMin) inMin = l
+                                                if (l > 180f) {
+                                                    brightCnt++
+                                                    if (abs(dy) <= rCore * 0.45f && abs(dx) <= rCore * 0.75f) midBrightCnt++
+                                                    if (dy < 0) topBrightCnt++
+                                                    if (dy > 0) botBrightCnt++
+                                                    if (!isMonochromeWhite(c)) {
+                                                        monoOk = false
+                                                        break
+                                                    }
+                                                } else if (l < 135f) {
+                                                    darkCnt++
+                                                }
+                                            }
+                                            dx += coreStep
+                                        }
+                                        dy += coreStep
+                                    }
+                                    if (monoOk && total > 0) {
+                                        val brightRatio = brightCnt.toFloat() / total
+                                        val darkRatio = darkCnt.toFloat() / total
+                                        if (inMax >= 190f && inMin <= 120f &&
+                                            brightRatio in 0.06f..0.42f && darkRatio >= 0.42f &&
+                                            midBrightCnt >= 3 && topBrightCnt >= 1 && botBrightCnt >= 1 &&
+                                            !hasCapsuleExtension(absX, absY) && !isCrossXGlyph(absX, absY)
+                                        ) {
+                                            val avgRim = ((topRimSum / topAngles.size) + rLeft + rRight) / 3f
+                                            val score = inMax - avgRim
+                                            if (score > bestScore) {
+                                                bestScore = score
+                                                val boxRadius = rRing + max(4, (cw * 0.008f).toInt())
+                                                bestCandidate = TemplateMatchResult(
+                                                    score = (score / 210f).coerceIn(0.86f, 0.99f),
+                                                    bounds = Rect(absX - boxRadius, absY - boxRadius, absX + boxRadius, absY + boxRadius),
+                                                    label = label
+                                                )
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -982,7 +1250,7 @@ class TemplateMatcher {
             }
             cy += step
         }
-        bestCandidate
+        return bestCandidate
     }
 
 }

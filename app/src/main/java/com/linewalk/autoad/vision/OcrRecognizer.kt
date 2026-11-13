@@ -26,7 +26,9 @@ class OcrRecognizer {
     suspend fun recognize(bitmap: Bitmap): List<OcrItem> {
         return try {
             val inputImage = InputImage.fromBitmap(bitmap, 0)
-            val visionText = recognizer.process(inputImage).await()
+            val visionText = kotlinx.coroutines.withTimeoutOrNull(2500L) {
+                recognizer.process(inputImage).await()
+            } ?: return emptyList()
             val items = mutableListOf<OcrItem>()
 
             for (block in visionText.textBlocks) {
@@ -50,8 +52,9 @@ class OcrRecognizer {
                 }
             }
             items
-        } catch (e: Exception) {
-            Log.e(TAG, "ML Kit OCR 辨識失敗", e)
+        } catch (t: Throwable) {
+            if (t is kotlinx.coroutines.CancellationException) throw t
+            Log.e(TAG, "ML Kit OCR 辨識失敗", t)
             emptyList()
         }
     }
