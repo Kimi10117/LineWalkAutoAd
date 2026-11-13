@@ -1,6 +1,43 @@
 # LINE 散步趣自動看廣告助手 (LineWalkAutoAd) 發布說明
 
 ## 版本資訊
+- 版本名稱：v1.15.81
+- 版本代碼：versionCode 114, versionName "1.15.81"
+- 發布類型：正式版本 (Release)
+
+---
+
+## 概述
+LineWalkAutoAd v1.15.81 依據實機執行診斷日誌，針對「動態島等被動懸浮軟體誤觸外部防護」、「LINE 內部宣傳廣告右上角關閉成功率」、「廣告倒數凍結／超時解鎖」、「點擊熔斷器跨階段殘留」與「OCR 畫面線索遙測雜訊」進行五大核心修復。本版本可穿透系統懸浮層取回真實前景 App、強化雙尺度幾何叉叉偵測與系統返回鍵交替策略，並讓診斷日誌精準聚焦於可分析的畫面內容與廣告計時狀態。
+
+---
+
+## 具體更新與修復內容 (v1.15.81)
+
+### 1. 動態島與懸浮輔助套件防誤判保護
+- **檔案**：`AppConfig.kt`、`AutoAdAccessibilityService.kt`、`AutomationEngine.kt`
+- 新增 `PASSIVE_OVERLAY_UTILITY_PACKAGES` 與 `isPassiveOverlayUtilityPackage(pkg)`，涵蓋 `com.android.systemui`、`com.jamworks.dynamicspot`、`com.linewalk.autoad`、輸入法（IME）及 Samsung Edge 等輔助套件，並支援 `dynamicspot`、`dynamicisland`、`inputmethod` 名稱比對。
+- 無障礙服務新增 `isIgnoredOverlayPackage(pkg)`（含 `packageName` 異常保護），並調整 `getForegroundPackageName()` 優先讀取 `TYPE_APPLICATION` 視窗（優先 `isActive`）穿透懸浮層取得真實前景套件；`evaluateForegroundPackage` 將此類懸浮套件視為非外部 App（回傳 `BLOCK_REGULAR_CLICK`），不再誤判進入 `AD_WATCHING` 或觸發外部返回防護。
+
+### 2. LINE 內部宣傳廣告雙尺度幾何 X 偵測與奇偶交替返回
+- **檔案**：`TemplateMatcher.kt`、`OcrRecognizer.kt`、`AdCloserHandler.kt`、`AutomationEngine.kt`
+- 自 `TemplateMatcher` 抽出共用方法 `detectGeometricXInZones(..., skipZone0BingoBox = true, scaleRatio = 0.018f)` 供 `detectCornerGeometricX` 與跨模組共用，並修正類別大括號結構。
+- `OcrRecognizer.findLineInHousePromoCloseButton` 改用雙尺度（`scaleRatio = 0.018f` 與 `0.028f`）幾何 X 偵測結合視口比例備援，並將 `recognizer` 改為 `by lazy` 延遲初始化。
+- 於 `AdCloserHandler`（`1A-4` `LINE宣傳廣告`）與 `AutomationEngine` 共用之 `handleInGameLinePromoClose`（串接 `handleInGameScan` 與 `handleTriggerAdPopup`），實施奇數次嘗試關閉節點或幾何 X、偶數次觸發 `safeNavigateBack(allowInGame = true)` 的交替退場機制。
+
+### 3. 廣告倒數凍結或逾時自動解鎖與點擊熔斷器重設
+- **檔案**：`AdCloserHandler.kt`、`AutomationEngine.kt`
+- `AdCloserHandler` 於 `3B` 階段透過 `isCountdownStuckOrExpired` 偵測連續停滯或超時倒數並自動解除等待鎖定，恢復幾何 X 掃描與強退邏輯。
+- `AutomationEngine` 新增 `lastTargetClickTimeMs` 與 `resetClickCircuitBreaker()`，讓 `checkClickCircuitBreaker` 在超過 20 秒未點擊後自動歸零，並於 `start()`、`stop()`、`transitionTo(AD_WATCHING)` 與 `ReturnedToGame` 時一併清除熔斷次數、`inGameLinePromoRetryCount` 與退回拒絕原因。
+
+### 4. `[畫面線索]` OCR 摘要淨化與診斷欄位補充
+- **檔案**：`OcrRecognizer.kt`、`AutomationEngine.kt`、`AdCloserHandler.kt`
+- 新增 `OcrRecognizer.isSystemTelemetryOcr(text)`，於 `detectAdCountdownSeconds` 排除頂部狀態列（`< 2.8%`）與系統指標文字；`formatStagnationOcrDigest` 進一步過濾狀態列、Pointer Location 遙測字串（如 `P:\d+/\d+`、`dX:` 等）及父子重複文字。
+- `ClickedCloseOrSkip` 於空區域或 `"返回鍵"` 動作時省略無效座標紀錄；`AdCloserHandler.getDiagnosticsSnapshotFields()` 新增廣告載入耗時與最後觀察倒數（`load=${adLoadElapsedSec}s | cd=$cdStr`）。
+
+---
+
+## 版本資訊 (歷史版本: v1.15.80)
 - 版本名稱：v1.15.80
 - 版本代碼：versionCode 113, versionName "1.15.80"
 - 發布類型：正式版本 (Release)

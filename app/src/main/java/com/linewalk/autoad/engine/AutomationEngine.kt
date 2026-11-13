@@ -220,19 +220,30 @@ class AutomationEngine private constructor(private val context: Context) {
     // 廣告載入錯誤與無庫存計數守護
     internal var adLoadErrorCountPerTab: MutableMap<MainTab, Int> = mutableMapOf()
 
-    // 死鎖斷路器 (Circuit Breaker)
+    // 死鎖斷路器 (Circuit Breaker) 與遊戲內促銷重試
     internal var sameTargetClickCount = 0
     internal var lastTargetClickName: String? = null
     internal var lastTargetClickRect: Rect? = null
+    internal var lastTargetClickTimeMs: Long = 0L
     internal var closeNodeConsecutiveClicks = 0
     internal var lastCloseNodeLabel: String? = null
+    private var inGameLinePromoRetryCount = 0
 
     private val _uiStatus = MutableStateFlow(EngineUiStatus())
     val uiStatus: StateFlow<EngineUiStatus> = _uiStatus.asStateFlow()
 
+    internal fun resetClickCircuitBreaker() {
+        sameTargetClickCount = 0
+        lastTargetClickName = null
+        lastTargetClickRect = null
+        lastTargetClickTimeMs = 0L
+        closeNodeConsecutiveClicks = 0
+        lastCloseNodeLabel = null
+    }
+
 /**
      * 連續點擊死鎖斷路器 (Circuit Breaker)：
-     * 當針對同一個按鈕/目標連續點擊達 3 次且畫面無響應時觸發！
+     * 當針對同一個按鈕/目標於短時間內連續點擊達 3 次且畫面無響應時觸發！
      * 若為關閉/取消類目標，發送 Android 系統返回鍵 (BACK) 強制關閉彈窗；
      * 若為一般目標，自動重置並推進狀態以打破死鎖！
      */
@@ -241,6 +252,14 @@ class AutomationEngine private constructor(private val context: Context) {
         targetName: String,
         targetRect: Rect
     ): Boolean {
+        val now = System.currentTimeMillis()
+        if (lastTargetClickTimeMs > 0L && now - lastTargetClickTimeMs > 20_000L) {
+            sameTargetClickCount = 0
+            lastTargetClickName = null
+            lastTargetClickRect = null
+        }
+        lastTargetClickTimeMs = now
+
         val isSameTarget = lastTargetClickName == targetName ||
             (lastTargetClickRect != null &&
              kotlin.math.abs(lastTargetClickRect!!.centerX() - targetRect.centerX()) < 40 &&
@@ -258,9 +277,7 @@ class AutomationEngine private constructor(private val context: Context) {
                     appendLog("[斷路器] 發送系統返回鍵 (BACK) 強制關閉卡死彈窗！")
                     service.navigateBack()
                 }
-                sameTargetClickCount = 0
-                lastTargetClickName = null
-                lastTargetClickRect = null
+                resetClickCircuitBreaker()
                 return true
             }
         } else {
@@ -276,8 +293,8 @@ class AutomationEngine private constructor(private val context: Context) {
         hasAdGeometricX: Boolean = false,
         isWatchingAd: Boolean = false
     ): GuardDecision {
-        // 前景未知（系統短暫無焦點）或本助手 App 自身在前景：不點擊、不返回，原地等待
-        if (fgPkg.isNullOrBlank() || fgPkg == context.packageName) {
+        // 前景未知（系統短暫無焦點）、本助手 App 自身或常駐動態島/輸入法等覆蓋工具：不誤判為外部跳轉，等待底層前景穩定
+        if (fgPkg.isNullOrBlank() || fgPkg == context.packageName || AppConfig.isPassiveOverlayUtilityPackage(fgPkg)) {
             return GuardDecision(
                 isExternal = false,
                 recommendedAction = GuardAction.BLOCK_REGULAR_CLICK,
@@ -328,6 +345,8 @@ class AutomationEngine private constructor(private val context: Context) {
         legitSkipRedirectPkg = null
         legitSkipRedirectStartMs = 0L
         lastLoggedBackRejectReason = null
+        resetClickCircuitBreaker()
+        inGameLinePromoRetryCount = 0
         popupRetryTicks = 0
         rewardClaimRetryTicks = 0
         nonGameScreenTicks = 0
@@ -416,6 +435,8 @@ class AutomationEngine private constructor(private val context: Context) {
     fun stop(reason: String = "使用者手動暫停") {
         loopJob?.cancel()
         loopJob = null
+        resetClickCircuitBreaker()
+        inGameLinePromoRetryCount = 0
         _uiStatus.value = _uiStatus.value.copy(
             isRunning = false,
             state = EngineState.IDLE,
@@ -1095,14 +1116,11 @@ class AutomationEngine private constructor(private val context: Context) {
         val onMainScreenForPromo = ocrRecognizer.isLineWalkMainScreenVisible(screenBitmap, ocrItems, templateMatcher)
         if (!onMainScreenForPromo && ocrRecognizer.isLineInHousePromoAd(ocrItems) && !lotteryTask.isLotteryWinResultScreen(ocrItems, sh, screenBitmap)) {
             nonGameScreenTicks = 0
-            val closeBtn = ocrRecognizer.findLineInHousePromoCloseButton(screenBitmap, sw, sh)
-            appendLog("[廣告] 偵測到 LINE 宣傳廣告/促銷彈窗，點擊右上角 (X) 關閉視窗")
-            updateDetail("[關閉] 正在關閉宣傳廣告視窗...", "[巡邏] 關閉宣傳視窗中...")
-            FloatingOverlayService.clickWithOverlayPassthrough(closeBtn) {
-                service.clickRect(closeBtn, maxJitterPx = 2, allowTopSafeZone = true)
-            }
+            handleInGameLinePromoClose(service, screenBitmap, sw, sh, "偵測到 LINE 宣傳廣告/促銷彈窗")
             delay(500)
             return
+        } else {
+            inGameLinePromoRetryCount = 0
         }
 
         // B. 【子視窗與日常任務優先】優先檢查是否處於日常任務子彈窗或好友分頁（絕不可被底層導覽列誤判為主畫面而忽略已開啟的視窗！）：
@@ -3180,13 +3198,9 @@ class AutomationEngine private constructor(private val context: Context) {
 
         // 檢查是否彈出 LINE 內部宣傳促銷廣告 (如『還沒有邀請好友 實在太可惜了！』)
         if (ocrRecognizer.isLineInHousePromoAd(ocrItems)) {
-            val closeBtn = ocrRecognizer.findLineInHousePromoCloseButton(screenBitmap, sw, sh)
-            appendLog("[廣告] 彈窗觸發期間偵測到 LINE 宣傳廣告/促銷彈窗，點擊右上角 (X) 關閉")
-            FloatingOverlayService.clickWithOverlayPassthrough(closeBtn) {
-                service.clickRect(closeBtn, maxJitterPx = 2, allowTopSafeZone = true)
-            }
+            handleInGameLinePromoClose(service, screenBitmap, sw, sh, "彈窗觸發期間偵測到 LINE 宣傳廣告/促銷彈窗")
             delay(500)
-            transitionTo(EngineState.IN_GAME_SCAN, "已關閉宣傳廣告，繼續巡邏...", "[巡邏] 巡邏畫面目標中...")
+            transitionTo(EngineState.IN_GAME_SCAN, "已處理宣傳廣告，繼續巡邏...", "[巡邏] 巡邏畫面目標中...")
             return
         }
 
@@ -3397,11 +3411,15 @@ class AutomationEngine private constructor(private val context: Context) {
             }
 
             is AdStepResult.ClickedCloseOrSkip -> {
-                val cx = res.bounds.centerX()
-                val cy = res.bounds.centerY()
-                val nx = if (sw > 0) String.format(Locale.US, "%.1f", cx * 100f / sw) else "0.0"
-                val ny = if (sh > 0) String.format(Locale.US, "%.1f", cy * 100f / sh) else "0.0"
-                appendLog("[點擊] 點擊關閉/略過按鈕: ${res.sourceLabel} @ ($cx, $cy | ${nx}%, ${ny}%)")
+                if (res.bounds.isEmpty || res.sourceLabel.contains("返回鍵")) {
+                    appendLog("[點擊] 執行關閉/略過動作: ${res.sourceLabel}")
+                } else {
+                    val cx = res.bounds.centerX()
+                    val cy = res.bounds.centerY()
+                    val nx = if (sw > 0) String.format(Locale.US, "%.1f", cx * 100f / sw) else "0.0"
+                    val ny = if (sh > 0) String.format(Locale.US, "%.1f", cy * 100f / sh) else "0.0"
+                    appendLog("[點擊] 點擊關閉/略過按鈕: ${res.sourceLabel} @ ($cx, $cy | ${nx}%, ${ny}%)")
+                }
                 updateDetail(
                     "[點擊] 已點擊 ${res.sourceLabel}，確認是否回到遊戲...",
                     "[點擊] 已點關閉，確認中..."
@@ -3468,6 +3486,7 @@ class AutomationEngine private constructor(private val context: Context) {
                 val newAdsCount = _uiStatus.value.adsCompletedCount + 1
                 _uiStatus.value = _uiStatus.value.copy(adsCompletedCount = newAdsCount)
                 emptyTicksOnCurrentTab = 0
+                resetClickCircuitBreaker()
                 if (res.confirmBounds != null) {
                     appendLog("[成功] 廣告已關閉，自動點擊領獎彈窗 [關閉]！(累計完成 $newAdsCount 次)")
                     FloatingOverlayService.clickWithOverlayPassthrough(res.confirmBounds) {
@@ -3774,9 +3793,49 @@ class AutomationEngine private constructor(private val context: Context) {
         return null
     }
 
+    private suspend fun handleInGameLinePromoClose(
+        service: AutoAdAccessibilityService,
+        screenBitmap: android.graphics.Bitmap,
+        sw: Int,
+        sh: Int,
+        logPrefix: String
+    ) {
+        inGameLinePromoRetryCount++
+        if (inGameLinePromoRetryCount >= 2 && inGameLinePromoRetryCount % 2 == 0) {
+            appendLog("[廣告] $logPrefix，點擊 (X) 後仍停留，改發送安全返回鍵關閉 (第${inGameLinePromoRetryCount}次)")
+            updateDetail("[關閉] 改用返回鍵關閉宣傳視窗...", "[巡邏] 返回關閉宣傳...")
+            if (!service.safeNavigateBack(minIntervalMs = 600L, allowInGame = true)) {
+                recordBackRejectIfAny(service, "InGameLinePromoBack", screenBitmap)
+            }
+            return
+        }
+
+        val promoNodeClose = nodeInspector.findAdCloseNode(
+            root = service.getSafeRootNode(),
+            screenWidth = sw,
+            screenHeight = sh,
+            isFullScreenAd = true
+        )?.bounds?.takeIf { b -> b.centerX() > sw * 0.70f && b.centerY() < sh * 0.25f }
+        val closeBtn = promoNodeClose ?: ocrRecognizer.findLineInHousePromoCloseButton(screenBitmap, sw, sh)
+        val cx = closeBtn.centerX()
+        val cy = closeBtn.centerY()
+        val nx = if (sw > 0) String.format(Locale.US, "%.1f", cx * 100f / sw) else "0.0"
+        val ny = if (sh > 0) String.format(Locale.US, "%.1f", cy * 100f / sh) else "0.0"
+        appendLog("[廣告] $logPrefix，點擊右上角 (X) 關閉視窗 @ ($cx, $cy | ${nx}%, ${ny}%)")
+        updateDetail("[關閉] 正在關閉宣傳廣告視窗...", "[巡邏] 關閉宣傳視窗中...")
+        FloatingOverlayService.clickWithOverlayPassthrough(closeBtn) {
+            service.clickRect(closeBtn, maxJitterPx = 2, allowTopSafeZone = true)
+        }
+    }
+
     private fun transitionTo(newState: EngineState, detail: String, safeOverlayText: String) {
         if (newState != EngineState.IN_GAME_SCAN) {
             nonGameScreenTicks = 0
+            inGameLinePromoRetryCount = 0
+        }
+        if (newState == EngineState.AD_WATCHING) {
+            resetClickCircuitBreaker()
+            AutoAdAccessibilityService.instance.value?.clearBackRejectReason()
         }
 
         _uiStatus.value = _uiStatus.value.copy(
@@ -3832,6 +3891,7 @@ class AutomationEngine private constructor(private val context: Context) {
 
     /**
      * 將目前畫面的 OCR 文字項目濃縮為精簡線索摘要（預設最多 6 筆、單筆文字上限 16 字）。
+     * 自動排除頂部系統狀態列、開發人員選項指標位置除錯字樣，以及重複的詞素拆字項目。
      */
     internal fun formatStagnationOcrDigest(
         ocrItems: List<OcrItem>,
@@ -3840,22 +3900,49 @@ class AutomationEngine private constructor(private val context: Context) {
         maxItems: Int = 6
     ): String {
         if (ocrItems.isEmpty() || maxItems <= 0) return ""
-        return ocrItems
+        val statusBarTopCutY = if (sh > 0) {
+            maxOf(ScreenViewportCalibrator.getStatusBarSafeHeight(sw, sh), (sh * 0.055f).toInt())
+        } else {
+            0
+        }
+
+        val candidates = ocrItems
             .asSequence()
             .map { item ->
                 val clean = item.text.replace("\n", " ").replace("\r", " ").trim()
                 item to clean
             }
-            .filter { (_, clean) -> clean.isNotBlank() }
-            .take(maxItems)
-            .joinToString(" ; ") { (item, clean) ->
-                val truncated = if (clean.length > 16) clean.take(15) + "…" else clean
-                val cx = item.bounds.centerX()
-                val cy = item.bounds.centerY()
-                val nx = if (sw > 0) (cx * 100f / sw).toInt() else 0
-                val ny = if (sh > 0) (cy * 100f / sh).toInt() else 0
-                "\"$truncated\"@${nx}%,${ny}%"
+            .filter { (item, clean) ->
+                clean.isNotBlank() &&
+                    !OcrRecognizer.isSystemTelemetryOcr(clean) &&
+                    (statusBarTopCutY <= 0 || item.bounds.centerY() >= statusBarTopCutY)
             }
+            .sortedWith(compareBy<Pair<OcrItem, String>>({ it.first.bounds.top }, { -it.second.length }))
+            .toList()
+
+        val selected = mutableListOf<Pair<OcrItem, String>>()
+        for (candidate in candidates) {
+            if (selected.size >= maxItems) break
+            val (item, clean) = candidate
+            val cx = item.bounds.centerX()
+            val cy = item.bounds.centerY()
+            val isDuplicateSubToken = selected.any { (keptItem, keptText) ->
+                (keptText == clean && kotlin.math.abs(keptItem.bounds.centerY() - cy) < 20) ||
+                    (keptItem.bounds.contains(cx, cy) && keptText.contains(clean))
+            }
+            if (!isDuplicateSubToken) {
+                selected.add(candidate)
+            }
+        }
+
+        return selected.joinToString(" ; ") { (item, clean) ->
+            val truncated = if (clean.length > 16) clean.take(15) + "…" else clean
+            val cx = item.bounds.centerX()
+            val cy = item.bounds.centerY()
+            val nx = if (sw > 0) (cx * 100f / sw).toInt() else 0
+            val ny = if (sh > 0) (cy * 100f / sh).toInt() else 0
+            "\"$truncated\"@${nx}%,${ny}%"
+        }
     }
 
     /**

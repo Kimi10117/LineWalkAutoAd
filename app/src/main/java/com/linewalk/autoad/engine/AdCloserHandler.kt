@@ -56,6 +56,11 @@ class AdCloserHandler(
     private var wasAdLoading: Boolean = false
     private var hasAdActuallyShown: Boolean = false
     private var adLoadingTicks: Int = 0
+    private var adLoadStartedAtMs: Long = 0L
+    private var adLoadElapsedSec: Int = 0
+    private var lastObservedCountdownSec: Int? = null
+    private var staleCountdownTicks: Int = 0
+    private var lastCountdownSecForDiag: Int? = null
     private var lastClickedPoint: Point? = null
     private var lastClickedAdLabel: String? = null
     private var lastBackActionTimeMs: Long = 0L
@@ -89,6 +94,11 @@ class AdCloserHandler(
             wasAdLoading = false
             hasAdActuallyShown = false
             adLoadingTicks = 0
+            adLoadStartedAtMs = 0L
+            adLoadElapsedSec = 0
+            lastObservedCountdownSec = null
+            staleCountdownTicks = 0
+            lastCountdownSecForDiag = null
             lastClickedPoint = null
             lastClickedAdLabel = null
             lastBackActionTimeMs = 0L
@@ -192,7 +202,8 @@ class AdCloserHandler(
             if (blacklistedPoints.size > 5) "$pts,..." else pts
         }
         val lastClickStr = lastClickedPoint?.let { "(${it.x},${it.y})" } ?: "none"
-        return "redir=$redirectCount | blk=${blacklistedPoints.size}[$blkPreview] | lastClick=$lastClickStr"
+        val cdStr = lastCountdownSecForDiag?.toString() ?: "none"
+        return "redir=$redirectCount | blk=${blacklistedPoints.size}[$blkPreview] | lastClick=$lastClickStr | load=${adLoadElapsedSec}s | cd=$cdStr"
     }
 
     /**
@@ -435,15 +446,22 @@ class AdCloserHandler(
         // 1A-4. LINE 內部促銷宣傳全螢幕廣告 (如『還沒有邀請好友 實在太可惜了！』『獲得金幣的流程』『邀請好友 最高可獲 10000 金幣 快來領取吧!!』)：
         // 屬於帶點廣告時可能彈出的促銷全螢幕廣告，絕不等待 30 秒倒數！
         // 雙重脫困機制：
-        // 1. 動態高精確辨識右上角圓形 (X) 鈕位置，立即點擊關閉（不列入黑名單，避免鎖死）
-        // 2. 若連點兩次仍未關閉（如因進場動畫延遲或 WebView 觸控阻斷），立即派發 safeNavigateBack(allowInGame = true) 安全返回鍵退回遊戲！
-        // 3. 往後奇數次（第3, 5, 7次）派發返回鍵、偶數次（第4, 6, 8次）點擊 (X) 鈕，交叉脫困，直至徹底關閉彈窗回到遊戲。
+        // 1. 先檢查右上角無障礙關閉節點，或使用幾何交叉偵測精準定位 (X) 立即點擊（第 1、3、5 次）
+        // 2. 若點完 (X) 仍未關閉，偶數次（第 2、4、6 次）立即派發 safeNavigateBack(allowInGame = true) 安全返回鍵，將平均關閉耗時縮減一半！
         if (isGame && !isAd && ocrRecognizer.isLineInHousePromoAd(ocrItems)) {
-            val promoCloseRect = ocrRecognizer.findLineInHousePromoCloseButton(screenBitmap, sw, sh)
             hasAdActuallyShown = true
             linePromoCloseClicks++
 
-            if (linePromoCloseClicks == 1 || linePromoCloseClicks == 2 || linePromoCloseClicks % 2 == 0) {
+            if (linePromoCloseClicks % 2 == 1) {
+                val promoNodeClose = nodeInspector.findAdCloseNode(
+                    root = service.getSafeRootNode(),
+                    screenWidth = sw,
+                    screenHeight = sh,
+                    blacklistedCoord = ::isInvalidOrBlacklisted,
+                    isFullScreenAd = true
+                )?.bounds?.takeIf { b -> b.centerX() > sw * 0.70f && b.centerY() < sh * 0.25f }
+                val promoCloseRect = promoNodeClose
+                    ?: ocrRecognizer.findLineInHousePromoCloseButton(screenBitmap, sw, sh)
                 val promoLabel = "LINE宣傳廣告關閉(X)[第${linePromoCloseClicks}次]"
                 lastClickedAdLabel = promoLabel
                 closeClickCount++
@@ -454,7 +472,7 @@ class AdCloserHandler(
             } else {
                 val promoBackLabel = "LINE宣傳廣告安全返回鍵[第${linePromoCloseClicks}次]"
                 if (service.safeNavigateBack(minIntervalMs = 600L, allowInGame = true)) {
-                    return AdStepResult.ClickedCloseOrSkip(promoBackLabel, promoCloseRect)
+                    return AdStepResult.ClickedCloseOrSkip(promoBackLabel, Rect())
                 } else {
                     logThrottledBackReject(service, promoBackLabel)
                 }
@@ -508,6 +526,10 @@ class AdCloserHandler(
         val isAdLoading = !hasAdActuallyShown && ocrRecognizer.isAdLoadingScreen(ocrItems, screenBitmap)
         if (isAdLoading) {
             wasAdLoading = true
+            if (adLoadStartedAtMs == 0L) {
+                adLoadStartedAtMs = System.currentTimeMillis()
+            }
+            adLoadElapsedSec = ((System.currentTimeMillis() - adLoadStartedAtMs) / 1000L).toInt().coerceAtLeast(0)
             adLoadingTicks++
             // 在容許載入時間 (約 12 個 tick，約 15 秒) 內，靜候廣告緩衝，嚴禁誤按 [取消] 或誤判回到遊戲！
             if (adLoadingTicks < 12) {
@@ -533,7 +555,10 @@ class AdCloserHandler(
             adLoadingTicks = 0
             if (wasAdLoading) {
                 // 廣告剛從『載入中...』緩衝完成切換至實際廣告畫面！
-                // 重置計時起點，確保實際廣告享有完整的播放保護期 (Grace Period) 與倒數計時！
+                // 保留載入耗時供診斷快照參考，並重置播放計時起點，確保實際廣告享有完整保護期與倒數計時！
+                if (adLoadStartedAtMs > 0L) {
+                    adLoadElapsedSec = ((System.currentTimeMillis() - adLoadStartedAtMs) / 1000L).toInt().coerceAtLeast(0)
+                }
                 wasAdLoading = false
                 hasAdActuallyShown = true
                 watchdogForceBackAttempts = 0
@@ -684,10 +709,24 @@ class AdCloserHandler(
         }
 
         // 3B. 【倒數計時絕對防護：若畫面正在倒數（含「56 秒後可獲獎勵」膠囊），嚴禁提早點擊任何關閉/略過按鈕！】
-        // 優先偵測「\d+ 秒後可獲獎勵 / 發放獎勵」膠囊，防止誤觸廣告中斷確認彈窗！
+        // 優先偵測「\d+ 秒後可獲獎勵 / 發放獎勵」膠囊，防止誤觸廣告中斷確認彈窗；
+        // 若倒數計時長期卡住未遞減 (>= 10 tick 且已播 >= 35s) 或已超過合理上限，主動解除封鎖放行後續幾何掃描與安全返回。
         val pendingRewardSec = ocrRecognizer.detectRewardPendingCountdownSeconds(ocrItems, sh)
         val normalCountdownSec = ocrRecognizer.detectAdCountdownSeconds(ocrItems, sh, sw)
-        val remainingSec = pendingRewardSec ?: normalCountdownSec
+        val rawRemainingSec = pendingRewardSec ?: normalCountdownSec
+        lastCountdownSecForDiag = rawRemainingSec
+        if (rawRemainingSec != null && rawRemainingSec > 1) {
+            if (rawRemainingSec == lastObservedCountdownSec) {
+                staleCountdownTicks++
+            } else {
+                staleCountdownTicks = 0
+                lastObservedCountdownSec = rawRemainingSec
+            }
+        } else {
+            staleCountdownTicks = 0
+            lastObservedCountdownSec = null
+        }
+
         val rewardGrantedOcr = ocrRecognizer.findMatch(
             items = ocrItems,
             keywords = OcrRecognizer.AD_REWARD_GRANTED_KEYWORDS,
@@ -695,9 +734,12 @@ class AdCloserHandler(
             screenHeight = sh,
             roiNormalized = RectF(0f, 0f, 1f, 0.25f)
         )
-        if (remainingSec != null || rewardGrantedOcr != null) {
+        if (rawRemainingSec != null || rewardGrantedOcr != null) {
             hasAdActuallyShown = true
         }
+        val countdownHardCutoffSec = minOf(48, (config.maxAdWaitSeconds * 0.78).toInt().coerceAtLeast(35))
+        val isCountdownStuckOrExpired = (staleCountdownTicks >= 10 && elapsedSec >= 35) || elapsedSec >= countdownHardCutoffSec
+        val remainingSec = if (isCountdownStuckOrExpired) null else rawRemainingSec
         if (remainingSec != null && remainingSec > 1 && rewardGrantedOcr == null) {
             return AdStepResult.StillCountingDown(remainingSec, elapsedSec)
         }

@@ -226,6 +226,32 @@ class AppConfig(context: Context) {
             "androidx.browser.customtabs"      // Jetpack Custom Tabs 模組標識
         )
 
+        /**
+         * 常駐覆蓋型輔助／系統元件套件（如 DynamicSpot 動態島、輸入法、SystemUI 狀態列）：
+         * 僅在畫面上層提供常駐介面或接收通知事件，絕不可被誤判為「跳轉至外部應用程式」！
+         */
+        val PASSIVE_OVERLAY_UTILITY_PACKAGES = setOf(
+            "com.android.systemui",
+            "com.jamworks.dynamicspot",
+            "com.linewalk.autoad",
+            "com.samsung.android.honeyboard",
+            "com.google.android.inputmethod.latin",
+            "com.touchtype.swiftkey",
+            "com.samsung.android.app.cocktailbarservice",
+            "com.samsung.android.edge",
+            "android"
+        )
+
+        fun isPassiveOverlayUtilityPackage(pkg: String?): Boolean {
+            if (pkg.isNullOrBlank()) return false
+            if (isGamePackage(pkg) || isAdPackage(pkg)) return false
+            if (pkg in PASSIVE_OVERLAY_UTILITY_PACKAGES) return true
+            val lower = pkg.lowercase()
+            return lower.contains("dynamicspot") ||
+                lower.contains("dynamicisland") ||
+                lower.contains("inputmethod")
+        }
+
         fun isAdPackage(pkg: String?): Boolean {
             if (pkg.isNullOrBlank()) return false
             if (pkg in KNOWN_AD_PACKAGES) return true

@@ -667,11 +667,6 @@ class TemplateMatcher {
         val ch = vp.contentHeight
         val statusBarSafeH = ScreenViewportCalibrator.getStatusBarSafeHeight(sw, sh, screenBitmap)
 
-        val r = max(2, (cw * 0.018f).toInt())
-        val rHalf = max(1, (r * 0.65f).toInt())
-        val step = max(1, cw / 240)
-        val tol = max(1, cw / 360)
-
         val topLimitY = max(vp.mapContentY(0.082f), statusBarSafeH + max(2, (ch * 0.012f).toInt()))
         val searchZones = mutableListOf(
             // 右上角 (廣告標準關閉鈕位置，避開最頂部系統狀態列與通知列 y < 8.2%，涵蓋 y in 8.2%..16%)
@@ -683,7 +678,7 @@ class TemplateMatcher {
         searchZones.add(Rect(vp.mapContentX(0.75f), rightUpperTopLimitY, vp.mapContentX(0.98f), rightUpperBottomLimitY))
 
         if (includeLeftZone) {
-            // 左上角 (Meta Sponsored 頂部橫幅、CACO 輪播/插頁廣告與全比例 16:9~22:9 左上角關閉鈕位置，涵蓋 x in 2.0%..19.5% 與 y in 1.4%..16.0%)
+            // 左上角 (Meta Sponsored 橫幅、CACO 輪播/插頁廣告與全比例 16:9~22:9 左上角關閉鈕位置，涵蓋 x in 2.0%..19.5% 與 y in 1.4%..16.0%)
             val leftTopLimitY = max(vp.mapContentY(0.014f), max(1, (ch * 0.008f).toInt()))
             val leftBottomLimitY = vp.mapContentY(0.160f)
             if (vp.effectiveLeftX == 0 && vp.effectiveRightX == sw) {
@@ -693,144 +688,173 @@ class TemplateMatcher {
             }
         }
 
-        var bestCandidate: TemplateMatchResult? = null
-        var bestRawScore = if (isRelaxed) 58f else 82f
-        val centerContrastMin = if (isRelaxed) 28f else 45f
-        val contrastMin = if (isRelaxed) 40f else 55f
-        val minArmContrastMin = if (isRelaxed) 20f else 35f
+        detectGeometricXInZones(
+            screenBitmap = screenBitmap,
+            searchZones = searchZones,
+            vp = vp,
+            blacklistedCoord = blacklistedCoord,
+            isRelaxed = isRelaxed,
+            skipZone0BingoBox = true
+        )
+    }
 
-        for ((zoneIdx, zone) in searchZones.withIndex()) {
-            val zw = zone.width()
-            val zh = zone.height()
-            if (zw <= r * 2 + 4 || zh <= r * 2 + 4) continue
+    companion object {
+        /**
+         * 共用免樣本幾何 (X) 交叉輪廓偵測核心，同時服務全螢幕廣告角落偵測與 LINE 內部宣傳廣告右上角關閉定位。
+         */
+        fun detectGeometricXInZones(
+            screenBitmap: Bitmap,
+            searchZones: List<Rect>,
+            vp: ScreenViewportCalibrator.ViewportMetrics = ScreenViewportCalibrator.detectViewport(
+                screenBitmap.width,
+                screenBitmap.height,
+                screenBitmap
+            ),
+            blacklistedCoord: ((Int, Int) -> Boolean)? = null,
+            isRelaxed: Boolean = false,
+            skipZone0BingoBox: Boolean = true,
+            scaleRatio: Float = 0.018f
+        ): TemplateMatchResult? {
+            val sw = screenBitmap.width
+            val sh = screenBitmap.height
+            val cw = vp.contentWidth
+            val ch = vp.contentHeight
+            val r = max(2, (cw * scaleRatio).toInt())
+            val rHalf = max(1, (r * 0.65f).toInt())
+            val step = max(1, cw / 240)
+            val tol = max(1, cw / 360)
 
-            val pixels = IntArray(zw * zh)
-            screenBitmap.getPixels(pixels, 0, zw, zone.left, zone.top, zw, zh)
+            var bestCandidate: TemplateMatchResult? = null
+            var bestRawScore = if (isRelaxed) 58f else 82f
+            val centerContrastMin = if (isRelaxed) 28f else 45f
+            val contrastMin = if (isRelaxed) 40f else 55f
+            val minArmContrastMin = if (isRelaxed) 20f else 35f
 
-            fun lum(x: Int, y: Int): Float {
-                val c = pixels[y * zw + x]
-                return 0.299f * ((c shr 16) and 0xFF) +
-                    0.587f * ((c shr 8) and 0xFF) +
-                    0.114f * (c and 0xFF)
-            }
+            for ((zoneIdx, zone) in searchZones.withIndex()) {
+                val zw = zone.width()
+                val zh = zone.height()
+                if (zw <= r * 2 + 4 || zh <= r * 2 + 4) continue
 
-            fun armLum(px: Int, py: Int, brightX: Boolean): Float {
-                var best = if (brightX) 0f else 255f
-                for (dy in -tol..tol) {
-                    val ny = (py + dy).coerceIn(0, zh - 1)
-                    for (dx in -tol..tol) {
-                        val nx = (px + dx).coerceIn(0, zw - 1)
-                        val l = lum(nx, ny)
-                        if (brightX && l > best) best = l
-                        if (!brightX && l < best) best = l
-                    }
+                val pixels = IntArray(zw * zh)
+                screenBitmap.getPixels(pixels, 0, zw, zone.left, zone.top, zw, zh)
+
+                fun lum(x: Int, y: Int): Float {
+                    val c = pixels[y * zw + x]
+                    return 0.299f * ((c shr 16) and 0xFF) +
+                        0.587f * ((c shr 8) and 0xFF) +
+                        0.114f * (c and 0xFF)
                 }
-                return best
-            }
 
-            var cy = r + tol
-            while (cy < zh - r - tol) {
-                var cx = r + tol
-                while (cx < zw - r - tol) {
-                    val absX = zone.left + cx
-                    val absY = zone.top + cy
-
-                    // 排除最頂部系統狀態列與通知列
-                    if (zoneIdx == 0) {
-                        if (absY - r < (sh * 0.08f).toInt()) {
-                            cx += step
-                            continue
-                        }
-                        val isBingoCloseZone = absX in (sw * 0.84f).toInt()..(sw * 0.98f).toInt() &&
-                            absY in (sh * 0.08f).toInt()..(sh * 0.16f).toInt()
-                        if (isBingoCloseZone) {
-                            cx += step
-                            continue
-                        }
-                    } else if (zone.left < sw / 2) {
-                        // 左上角 (Meta Sponsored 橫幅與輪播廣告)：頂部限制為 1.4% sh 或 16px，覆蓋 y ≈ 2.8% 與 6.5% 的 Meta 關閉按鈕
-                        if (absY - r < max(vp.mapContentY(0.014f), max(1, (ch * 0.007f).toInt()))) {
-                            cx += step
-                            continue
-                        }
-                    } else {
-                        // 右上角高位/預覽區 (InMobi / AdMob / AppLovin / Meta 網頁預覽等)：覆蓋 y >= 4.0% sh 的關閉按鈕
-                        if (absY - r < max(vp.mapContentY(0.040f), max(1, (ch * 0.018f).toInt()))) {
-                            cx += step
-                            continue
+                fun armLum(px: Int, py: Int, brightX: Boolean): Float {
+                    var best = if (brightX) 0f else 255f
+                    for (dy in -tol..tol) {
+                        val ny = (py + dy).coerceIn(0, zh - 1)
+                        for (dx in -tol..tol) {
+                            val nx = (px + dx).coerceIn(0, zw - 1)
+                            val l = lum(nx, ny)
+                            if (brightX && l > best) best = l
+                            if (!brightX && l < best) best = l
                         }
                     }
+                    return best
+                }
 
-                    if (blacklistedCoord?.invoke(absX, absY) != true) {
-                        // 上下左右四個非對角扇區（圓形按鈕底色）必須亮度一致
-                        val lTop = lum(cx, cy - r)
-                        val lBot = lum(cx, cy + r)
-                        val lLeft = lum(cx - r, cy)
-                        val lRight = lum(cx + r, cy)
-                        val cardMean = (lTop + lBot + lLeft + lRight) * 0.25f
-                        val cardDiff = abs(lTop - cardMean) + abs(lBot - cardMean) +
-                            abs(lLeft - cardMean) + abs(lRight - cardMean)
+                var cy = r + tol
+                while (cy < zh - r - tol) {
+                    var cx = r + tol
+                    while (cx < zw - r - tol) {
+                        val absX = zone.left + cx
+                        val absY = zone.top + cy
 
-                        if (cardDiff <= 58f) {
-                            val isBrightX = cardMean < 150f
-
-                            // 1. 中心點本身必須位於 X 的交叉線上，排除『ⓘ ▷』兩個圖示中間的黑縫！
-                            val centerPixelLum = lum(cx, cy)
-                            val centerContrast = if (isBrightX) centerPixelLum - cardMean else cardMean - centerPixelLum
-                            if (centerContrast < centerContrastMin) {
+                        if (zoneIdx == 0 && skipZone0BingoBox) {
+                            if (absY - r < (sh * 0.08f).toInt()) {
                                 cx += step
                                 continue
                             }
-
-                            // 2. 檢查半徑 rHalf 的上下左右四個 V 型缺口：
-                            // 真正的『X』只有四條對角線，其正上、正下、正左、正右 (rHalf 處) 必須是背景底色！
-                            // 這能 100% 排除帶有垂直線或水平線的 AdChoices『ⓘ / ▷』圖示與喇叭圖示！
-                            val vTop = lum(cx, cy - rHalf)
-                            val vBot = lum(cx, cy + rHalf)
-                            val vLeft = lum(cx - rHalf, cy)
-                            val vRight = lum(cx + rHalf, cy)
-                            val maxVGapDiff = max(
-                                max(abs(vTop - cardMean), abs(vBot - cardMean)),
-                                max(abs(vLeft - cardMean), abs(vRight - cardMean))
-                            )
-                            if (maxVGapDiff > 35f) {
+                            val isBingoCloseZone = absX in (sw * 0.84f).toInt()..(sw * 0.98f).toInt() &&
+                                absY in (sh * 0.08f).toInt()..(sh * 0.16f).toInt()
+                            if (isBingoCloseZone) {
                                 cx += step
                                 continue
                             }
-
-                            val cLum = armLum(cx, cy, isBrightX)
-                            val d1 = armLum(cx - rHalf, cy - rHalf, isBrightX)
-                            val d2 = armLum(cx + rHalf, cy + rHalf, isBrightX)
-                            val d3 = armLum(cx + rHalf, cy - rHalf, isBrightX)
-                            val d4 = armLum(cx - rHalf, cy + rHalf, isBrightX)
-
-                            val diagMean = (cLum + d1 + d2 + d3 + d4) * 0.2f
-                            val contrast = if (isBrightX) diagMean - cardMean else cardMean - diagMean
-                            val minArmContrast = if (isBrightX) {
-                                min(cLum, min(min(d1, d2), min(d3, d4))) - cardMean
-                            } else {
-                                cardMean - max(cLum, max(max(d1, d2), max(d3, d4)))
+                        } else if (zone.left < sw / 2) {
+                            if (absY - r < max(vp.mapContentY(0.014f), max(1, (ch * 0.007f).toInt()))) {
+                                cx += step
+                                continue
                             }
+                        } else {
+                            if (absY - r < max(vp.mapContentY(0.040f), max(1, (ch * 0.018f).toInt()))) {
+                                cx += step
+                                continue
+                            }
+                        }
 
-                            if (contrast > contrastMin && minArmContrast > minArmContrastMin) {
-                                val rawScore = contrast - (cardDiff * 0.5f)
-                                if (rawScore > bestRawScore) {
-                                    bestRawScore = rawScore
-                                    bestCandidate = TemplateMatchResult(
-                                        score = (rawScore / 150f).coerceIn(0.80f, 0.99f),
-                                        bounds = Rect(absX - r, absY - r, absX + r, absY + r),
-                                        label = if (zone.left < sw / 2) "左上角幾何X" else "右上角幾何X"
-                                    )
+                        if (blacklistedCoord?.invoke(absX, absY) != true) {
+                            val lTop = lum(cx, cy - r)
+                            val lBot = lum(cx, cy + r)
+                            val lLeft = lum(cx - r, cy)
+                            val lRight = lum(cx + r, cy)
+                            val cardMean = (lTop + lBot + lLeft + lRight) * 0.25f
+                            val cardDiff = abs(lTop - cardMean) + abs(lBot - cardMean) +
+                                abs(lLeft - cardMean) + abs(lRight - cardMean)
+
+                            if (cardDiff <= 58f) {
+                                val isBrightX = cardMean < 150f
+
+                                val centerPixelLum = lum(cx, cy)
+                                val centerContrast = if (isBrightX) centerPixelLum - cardMean else cardMean - centerPixelLum
+                                if (centerContrast < centerContrastMin) {
+                                    cx += step
+                                    continue
+                                }
+
+                                val vTop = lum(cx, cy - rHalf)
+                                val vBot = lum(cx, cy + rHalf)
+                                val vLeft = lum(cx - rHalf, cy)
+                                val vRight = lum(cx + rHalf, cy)
+                                val maxVGapDiff = max(
+                                    max(abs(vTop - cardMean), abs(vBot - cardMean)),
+                                    max(abs(vLeft - cardMean), abs(vRight - cardMean))
+                                )
+                                if (maxVGapDiff > 35f) {
+                                    cx += step
+                                    continue
+                                }
+
+                                val cLum = armLum(cx, cy, isBrightX)
+                                val d1 = armLum(cx - rHalf, cy - rHalf, isBrightX)
+                                val d2 = armLum(cx + rHalf, cy + rHalf, isBrightX)
+                                val d3 = armLum(cx + rHalf, cy - rHalf, isBrightX)
+                                val d4 = armLum(cx - rHalf, cy + rHalf, isBrightX)
+
+                                val diagMean = (cLum + d1 + d2 + d3 + d4) * 0.2f
+                                val contrast = if (isBrightX) diagMean - cardMean else cardMean - diagMean
+                                val minArmContrast = if (isBrightX) {
+                                    min(cLum, min(min(d1, d2), min(d3, d4))) - cardMean
+                                } else {
+                                    cardMean - max(cLum, max(max(d1, d2), max(d3, d4)))
+                                }
+
+                                if (contrast > contrastMin && minArmContrast > minArmContrastMin) {
+                                    val rawScore = contrast - (cardDiff * 0.5f)
+                                    if (rawScore > bestRawScore) {
+                                        bestRawScore = rawScore
+                                        bestCandidate = TemplateMatchResult(
+                                            score = (rawScore / 150f).coerceIn(0.80f, 0.99f),
+                                            bounds = Rect(absX - r, absY - r, absX + r, absY + r),
+                                            label = if (zone.left < sw / 2) "左上角幾何X" else "右上角幾何X"
+                                        )
+                                    }
                                 }
                             }
                         }
+                        cx += step
                     }
-                    cx += step
+                    cy += step
                 }
-                cy += step
             }
+            return bestCandidate
         }
-        bestCandidate
     }
 
     /**

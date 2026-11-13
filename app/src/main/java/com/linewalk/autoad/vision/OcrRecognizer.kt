@@ -17,9 +17,11 @@ data class OcrItem(
 
 class OcrRecognizer {
 
-    private val recognizer = TextRecognition.getClient(
-        ChineseTextRecognizerOptions.Builder().build()
-    )
+    private val recognizer by lazy {
+        TextRecognition.getClient(
+            ChineseTextRecognizerOptions.Builder().build()
+        )
+    }
 
     suspend fun recognize(bitmap: Bitmap): List<OcrItem> {
         return try {
@@ -564,52 +566,56 @@ class OcrRecognizer {
     }
 
     /**
-     * LINE 內部宣傳廣告右上角的圓形關閉按鈕 (X) 區域：
-     * - 優先動態掃描頂部角落 (x: 85%~98%, y: 5%~15%) 內白色 "X" 像素簇，自動精準定位中心；
-     * - 基準幾何座標：中心錨定 (x=92.0%, y=9.25%)，包覆半徑充足之可點擊熱區，相容 16:9、20:9、22:9 (摺疊螢幕) 等全機型。
+     * LINE 內部宣傳廣告右上角的關閉按鈕 (X) 區域：
+     * - 優先使用共用免樣本幾何交叉偵測器 (TemplateMatcher.detectGeometricXInZones)，兼顧深色與白色圓底 (X) 及 16:9~22:9 視口縮放；
+     * - 若無明顯幾何特徵再退回依螢幕有效畫布縮放之基準安全座標。
      */
     fun findLineInHousePromoCloseButton(screenBitmap: Bitmap?, sw: Int, sh: Int): Rect {
+        val vp = ScreenViewportCalibrator.detectViewport(sw, sh, screenBitmap)
         if (screenBitmap != null && sw >= 100 && sh >= 100) {
-            val xMin = (sw * 0.85f).toInt().coerceIn(0, sw - 1)
-            val xMax = (sw * 0.98f).toInt().coerceIn(0, sw)
-            val yMin = (sh * 0.05f).toInt().coerceIn(0, sh - 1)
-            val yMax = (sh * 0.15f).toInt().coerceIn(0, sh)
-
-            var sumX = 0L
-            var sumY = 0L
-            var count = 0
-
-            for (y in yMin until yMax) {
-                for (x in xMin until xMax) {
-                    val p = screenBitmap.getPixel(x, y)
-                    val r = (p shr 16) and 0xFF
-                    val g = (p shr 8) and 0xFF
-                    val b = p and 0xFF
-                    // 偵測白色 "X" 筆畫 (RGB 皆 > 225)
-                    if (r > 225 && g > 225 && b > 225) {
-                        sumX += x
-                        sumY += y
-                        count++
-                    }
-                }
-            }
-
-            // 白色像素點數量落在合適範圍 (通常約 10 ~ 200 像素)
-            if (count in 10..200) {
-                val cx = (sumX / count).toInt()
-                val cy = (sumY / count).toInt()
-                val halfW = (sw * 0.045f).toInt().coerceAtLeast(24)
-                val halfH = (sh * 0.025f).toInt().coerceAtLeast(24)
+            val statusBarSafeH = ScreenViewportCalibrator.getStatusBarSafeHeight(sw, sh, screenBitmap)
+            val zoneTop = kotlin.math.max(statusBarSafeH + 2, vp.mapContentY(0.045f))
+            val zoneBottom = vp.mapContentY(0.180f).coerceAtLeast(zoneTop + 16)
+            val promoZones = listOf(
+                Rect(
+                    vp.mapContentX(0.75f),
+                    zoneTop,
+                    vp.mapContentX(0.985f),
+                    zoneBottom
+                )
+            )
+            val matched = TemplateMatcher.detectGeometricXInZones(
+                screenBitmap = screenBitmap,
+                searchZones = promoZones,
+                vp = vp,
+                blacklistedCoord = { x, y -> FloatingOverlayService.isInsideOverlay(x, y) },
+                isRelaxed = true,
+                skipZone0BingoBox = false,
+                scaleRatio = 0.018f
+            ) ?: TemplateMatcher.detectGeometricXInZones(
+                screenBitmap = screenBitmap,
+                searchZones = promoZones,
+                vp = vp,
+                blacklistedCoord = { x, y -> FloatingOverlayService.isInsideOverlay(x, y) },
+                isRelaxed = true,
+                skipZone0BingoBox = false,
+                scaleRatio = 0.028f
+            )
+            if (matched != null) {
+                val cx = matched.bounds.centerX()
+                val cy = matched.bounds.centerY()
+                val halfW = (vp.contentWidth * 0.042f).toInt().coerceAtLeast(24)
+                val halfH = (vp.contentHeight * 0.022f).toInt().coerceAtLeast(24)
                 return Rect(cx - halfW, cy - halfH, cx + halfW, cy + halfH)
             }
         }
 
-        // 基準幾何座標 (中心錨定 x=92.0%, y=9.25% 且涵蓋 y in 0.065..0.120)
+        // 依有效畫布換算之基準幾何座標 (相容 16:9、20:9、22:9 摺疊機與黑邊視口)
         return Rect(
-            (sw * 0.875f).toInt(),
-            (sh * 0.065f).toInt(),
-            (sw * 0.965f).toInt(),
-            (sh * 0.120f).toInt()
+            vp.mapContentX(0.875f),
+            vp.mapContentY(0.065f),
+            vp.mapContentX(0.965f),
+            vp.mapContentY(0.120f)
         )
     }
 
@@ -1046,14 +1052,17 @@ class OcrRecognizer {
 
     fun detectAdCountdownSeconds(items: List<OcrItem>, screenHeight: Int, screenWidth: Int = 0): Int? {
         val topBarThreshold = (screenHeight * 0.22f).toInt()
+        val topStatusIgnoreY = (screenHeight * 0.028f).toInt()
         val hasLongPeriodTimer = items.any { item ->
             val itText = item.text.replace(" ", "")
             itText.contains("距離下次") || itText.contains("抽選還有") || itText.contains("分鐘") || itText.contains("次抽選")
         }
 
         for (item in items) {
-            if (item.bounds.centerY() > topBarThreshold) continue
+            val cy = item.bounds.centerY()
+            if (cy > topBarThreshold || (screenHeight > 0 && cy < topStatusIgnoreY)) continue
             val t = item.text
+            if (isSystemTelemetryOcr(t)) continue
             // 嚴格排除包含「分」、「分鐘」、「距離」、「下次」、「重置」、時間冒號「:」等長週期倒數計時（如賓果冷卻）！
             if (t.contains("分") || t.contains("距離") || t.contains("下次") ||
                 t.contains("重置") || t.contains("：") || t.contains(":") || t.contains("抽選")
@@ -1092,6 +1101,17 @@ class OcrRecognizer {
 
     companion object {
         private const val TAG = "OcrRecognizer"
+
+        private val POINTER_LOCATION_REGEX = Regex("""^P:\d+/\d+|(?:dX:|dY:|Xv:|Yv:|Prs:|Size:)""")
+
+        /**
+         * 判斷 OCR 文字是否屬於系統狀態列除錯指標（例如 Android 開發人員選項「指標位置」）。
+         */
+        fun isSystemTelemetryOcr(text: String): Boolean {
+            val trimmed = text.trim()
+            if (trimmed.isEmpty()) return false
+            return POINTER_LOCATION_REGEX.containsMatchIn(trimmed)
+        }
 
         private val COUNTDOWN_REGEX = Regex(
             """(?:還有|剩餘|倒數|あと)?\s*(\d{1,2})\s*(?:秒(?:後)?(?:可獲|發放|獲得|可獲得)?(?:獎勵)?|s|S|sec)|(?:in|remaining)\s*(\d{1,2})\s*s""",

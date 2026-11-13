@@ -10,6 +10,8 @@ import android.util.Log
 import android.view.Display
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityWindowInfo
+import com.linewalk.autoad.config.AppConfig
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -45,11 +47,25 @@ class AutoAdAccessibilityService : AccessibilityService() {
         Log.i(TAG, "AutoAdAccessibilityService 已連線啟動")
     }
 
+    private fun isIgnoredOverlayPackage(pkg: String?): Boolean {
+        if (pkg.isNullOrBlank()) return false
+        val selfPkg = try {
+            packageName
+        } catch (_: Exception) {
+            null
+        }
+        return (selfPkg != null && pkg == selfPkg) || AppConfig.isPassiveOverlayUtilityPackage(pkg)
+    }
+
+    fun clearBackRejectReason() {
+        lastBackRejectReason = ""
+    }
+
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
         val pkg = event.packageName?.toString()
-        if (!pkg.isNullOrBlank() && pkg != packageName && pkg != "com.android.systemui") {
-            // 忽略我們自己的懸浮窗套件名稱與系統狀態列 SystemUI，紀錄底層真實前景 App 包名
+        if (!pkg.isNullOrBlank() && !isIgnoredOverlayPackage(pkg)) {
+            // 忽略我們自己的懸浮窗套件、SystemUI 與常駐動態島/輸入法覆蓋 App，紀錄底層真實前景 App 包名
             lastEventPackageName = pkg
         }
     }
@@ -70,7 +86,7 @@ class AutoAdAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * 取得目前前景視窗的 Package Name。
+     * 取得目前前景視窗的 Package Name（優先採用實際應用程式視窗，排除動態島等常駐覆蓋套件）。
      */
     fun getForegroundPackageName(): String? {
         val rootPkg = try {
@@ -78,10 +94,28 @@ class AutoAdAccessibilityService : AccessibilityService() {
         } catch (e: Exception) {
             null
         }
-        if (!rootPkg.isNullOrBlank() && rootPkg != packageName) {
+        if (!rootPkg.isNullOrBlank() && !isIgnoredOverlayPackage(rootPkg)) {
             return rootPkg
         }
-        return lastEventPackageName
+
+        // 若活動視窗焦點暫被 DynamicSpot / 懸浮補助軟體佔據，改掃描 TYPE_APPLICATION 視窗尋找底層真實 App
+        val appWindowPkg = try {
+            val appWindows = windows
+                ?.filter { it.type == AccessibilityWindowInfo.TYPE_APPLICATION }
+                .orEmpty()
+            val prioritized = appWindows.sortedByDescending { if (it.isActive) 1 else 0 }
+            prioritized.firstNotNullOfOrNull { win ->
+                val pkg = win.root?.packageName?.toString()
+                pkg?.takeIf { !isIgnoredOverlayPackage(it) }
+            }
+        } catch (_: Exception) {
+            null
+        }
+        if (!appWindowPkg.isNullOrBlank()) {
+            return appWindowPkg
+        }
+
+        return lastEventPackageName?.takeIf { !isIgnoredOverlayPackage(it) }
     }
 
     /**
