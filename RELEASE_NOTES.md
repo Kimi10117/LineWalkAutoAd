@@ -1,13 +1,47 @@
 # LINE 散步趣自動看廣告助手 (LineWalkAutoAd) 發布說明
 
 ## 版本資訊
+- 版本名稱：v1.15.86
+- 版本代碼：versionCode 119, versionName "1.15.86"
+- 發布類型：正式版本 (Release)
+
+---
+
+## 概述
+LineWalkAutoAd v1.15.86 針對 `v1.15.85` 雙機實機日誌（`SM-F731N` Cash Giraffe 互動試玩廣告與 `SM-S7210` AHEALTH End Card）與截圖所揭露之「左下角圓形倒數漏辨識與 `Reveal Swipe` 誤踢試玩／重觸商店跳轉循環」、「兩層式 Google Play Half-Sheet 僅按 1 次 `Back` 未徹底退回」、「右上角 `[Google Play ×]` 兩段式商店解鎖支援」及「假復原誤入 `IN_GAME_SCAN` 後由步驟 `D3C` 繞過黑名單連點 9 次並被 `onEnterAdMode` 洗白」問題完成徹底修復與單元回歸驗證。
+
+---
+
+## 具體更新與修復內容 (v1.15.86)
+
+### 1. 底部角落圓形倒數辨識與停用破壞性 `Reveal Swipe` 滑動
+- **檔案**：`app/src/main/java/com/linewalk/autoad/vision/OcrRecognizer.kt`、`app/src/main/java/com/linewalk/autoad/engine/AdCloserHandler.kt`
+- `OcrRecognizer.detectAdCountdownSeconds` 擴大支援底部左右兩側角落 (`cy >= 85%`、左/右 `25%` 邊角) 的圓形倒數秒數（如 `Cash Giraffe` 左下角 `@ 8%, 96%`），並自動剝除進度弧造成的括號噪字（如 `"36)"` -> `36`）。
+- `AdCloserHandler` Step `8B`（`Reveal Swipe`）新增商店/結尾卡片/已點擊膠囊或已重定向互斥防護，移除 `"Drag"`、`"Tap"`、`"Swipe"`、`"Hold"`、`"Level"` 關鍵字並嚴禁在含 `"CLAIM"`、`"Try Again"`、`"Google Play"`、`"安裝"`、`"下載"` 或 `"$"` 畫面執行滑動，徹底杜絕反覆滑動試玩球門進而連續觸發 Play 商店的跳針循環。
+
+### 2. 左上角 `[▶| Google Play]` 偏左圖示熱區點擊與 Play 商店兩層 Half-Sheet 雙重返回
+- **檔案**：`app/src/main/java/com/linewalk/autoad/engine/AdCloserHandler.kt`、`app/src/main/java/com/linewalk/autoad/engine/AutomationEngine.kt`
+- Step `4B-2` 點擊 `[▶| Google Play]` 時將點擊座標優先鎖定於左側 `[▶|]` 快轉圖示熱區，並讓 Step `4C` 對左側獨立 `[▶|]` 放行；`AutomationEngine.handleExternalAppGuard` 在 `isLegitSkipRedirect` 發送第 1 次 `Back` 並延遲 350ms 後，若前景仍停留商店背景頁 (`com.android.vending`) 即補發第 2 次 `safeNavigateBack`，確保 Half-Sheet 與 Play Store 主體一併退回並清除過期 `lastClickedAdLabel`。
+
+### 3. `[Google Play ×]` 兩段式解鎖＋失敗永久黑名單，與主畫面／`IN_GAME_SCAN` 循環防堵
+- **檔案**：`app/src/main/java/com/linewalk/autoad/engine/AdCloserHandler.kt`、`app/src/main/java/com/linewalk/autoad/vision/OcrRecognizer.kt`、`app/src/main/java/com/linewalk/autoad/engine/AutomationEngine.kt`
+- `AdCloserHandler` Step `8` 針對右上角 `[Google Play ×]` 右側 `×` 的首次點擊標記為 `"右上角[Google Play ×]關閉鈕"`，走 2.0s + 2x Back 商店緩衝後允許第 2 次點擊嘗試關閉已解鎖之 End Card；若第 2 次仍觸發外部重定向則依一般 `"右上角幾何X"` 規則永久寫入黑名單。
+- `OcrRecognizer.isLineWalkMainScreenVisible` 明確拒認含 `"Google Play"`、`"Not interested"`、`"Interested"`、`"CLAIM!"`、`"Try Again"` 等全螢幕廣告畫面；`IN_GAME_SCAN` 步驟 `D3C` 補上 `!hasPlayableOrStoreAdOcr && adWatchdogCooldownTicks == 0` 與 `AdCloserHandler` 黑名單／膠囊過濾，並在 45 秒內重返 `AD_WATCHING` 時保留近期重定向黑名單，且在 `recoverStuckAdToMainScreen` 升級 `CLEAR_TASK` 前執行 `pressHome()`，徹底阻斷 `Play=10` 無限迴圈。
+
+### 4. `v1.15.86` 單元回歸驗證與版本升級
+- **檔案**：`app/src/test/java/com/linewalk/autoad/test/v11586/V1_15_86SimulationTest.kt`、`app/build.gradle.kts`
+- 新增 `V1_15_86SimulationTest`（4 項雙機情境測試），並將 `versionCode` 升級為 `119`、`versionName` 升級為 `"1.15.86"`（完整保留所有歷代版本紀錄與 APK）。
+
+---
+
+## 版本資訊 (歷史版本: v1.15.85)
 - 版本名稱：v1.15.85
 - 版本代碼：versionCode 118, versionName "1.15.85"
 - 發布類型：正式版本 (Release)
 
 ---
 
-## 概述
+## 概述 (歷史版本: v1.15.85)
 LineWalkAutoAd v1.15.85 針對 v1.15.84 實機日誌與 AHEALTH 結束卡片／Google Play 重定向循環截圖所揭露之「右上角 `[Google Play ×]` 膠囊 `'y'`/`'a'` 筆畫誤觸幾何 `X` 導致 `Play=2` 來回跳轉」、「問卷按鈕列 `✕ Not interested` 誤識別為關閉鈕」、「結束卡片系統返回鍵遭內嵌廣告攔截反覆重試卻無法脫困」以及「`ForceBringGameToFront` 僅執行無效 `bringAppToFront` 而未清棧」問題完成徹底修復與回歸驗證。
 
 ---

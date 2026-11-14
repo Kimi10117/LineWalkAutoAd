@@ -969,6 +969,24 @@ class OcrRecognizer {
             return false
         }
 
+        // 0C. 若畫面包含明確的全螢幕廣告 / 試玩廣告 / End Card 特徵，絕非主畫面！
+        val hasExplicitFullScreenAdMarker = items.any { item ->
+            val t = item.text.trim()
+            val compact = t.replace(" ", "")
+            compact.contains("GooglePlay", ignoreCase = true) ||
+                t.contains("Play 商店") ||
+                compact.contains("PlayStore", ignoreCase = true) ||
+                compact.contains("Notinterested", ignoreCase = true) ||
+                t.equals("Interested", ignoreCase = true) ||
+                compact.contains("CLAIM!", ignoreCase = true) ||
+                compact.contains("TryAgain", ignoreCase = true) ||
+                compact.contains("Dragtoadjust", ignoreCase = true) ||
+                compact.contains("Sponsored", ignoreCase = true)
+        }
+        if (hasExplicitFullScreenAdMarker) {
+            return false
+        }
+
         val sh = screenBitmap.height
 
         // 1. 若看完廣告後的中央領獎彈窗 (『獲得15張票券！ [關閉]』) 正開啟中，代表不在主畫面！
@@ -1160,7 +1178,13 @@ class OcrRecognizer {
     }
 
     fun detectAdCountdownSeconds(items: List<OcrItem>, screenHeight: Int, screenWidth: Int = 0): Int? {
+        val effectiveSw = if (screenWidth > 0) {
+            screenWidth
+        } else {
+            maxOf((screenHeight * 0.45f).toInt(), items.maxOfOrNull { it.bounds.right } ?: 0)
+        }
         val topBarThreshold = (screenHeight * 0.22f).toInt()
+        val bottomCornerMinY = (screenHeight * 0.85f).toInt()
         val topStatusIgnoreY = (screenHeight * 0.028f).toInt()
         val hasLongPeriodTimer = items.any { item ->
             val itText = item.text.replace(" ", "")
@@ -1168,8 +1192,13 @@ class OcrRecognizer {
         }
 
         for (item in items) {
+            val cx = item.bounds.centerX()
             val cy = item.bounds.centerY()
-            if (cy > topBarThreshold || (screenHeight > 0 && cy < topStatusIgnoreY)) continue
+            val inSideCorner = effectiveSw <= 0 ||
+                cx < (effectiveSw * 0.25f).toInt() || cx > (effectiveSw * 0.75f).toInt()
+            val inTopBar = cy <= topBarThreshold && (screenHeight <= 0 || cy >= topStatusIgnoreY)
+            val inBottomCorner = screenHeight > 0 && cy >= bottomCornerMinY && inSideCorner
+            if (!inTopBar && !inBottomCorner) continue
             val t = item.text
             if (isSystemTelemetryOcr(t)) continue
             // 嚴格排除包含「分」、「分鐘」、「距離」、「下次」、「重置」、時間冒號「:」等長週期倒數計時（如賓果冷卻）！
@@ -1185,20 +1214,12 @@ class OcrRecognizer {
                     return sec
                 }
             }
-            // 支援頂部兩側角落純數字圓圈倒數計時 (如 15、25 等)，若存在遊戲內長週期計時器則嚴格略過純數字
+            // 支援頂部與底部兩側角落純數字圓圈倒數計時 (如 15、25、41、36) 等)，若存在遊戲內長週期計時器則嚴格略過純數字
             // 嚴格限定位於左右兩側角落 (cx < 25% 或 cx > 75% 螢幕寬)，避免將抽抽樂結果彈窗正中央「BIG 8獎」的「8」誤認為廣告倒數秒數
             if (!hasLongPeriodTimer) {
-                val trimmed = t.trim()
-                if (trimmed.length in 1..2 && trimmed.all { it.isDigit() }) {
-                    val effectiveSw = if (screenWidth > 0) {
-                        screenWidth
-                    } else {
-                        maxOf((screenHeight * 0.45f).toInt(), items.maxOfOrNull { it.bounds.right } ?: 0)
-                    }
-                    val cx = item.bounds.centerX()
-                    val inSideCorner = effectiveSw <= 0 ||
-                        cx < (effectiveSw * 0.25f).toInt() || cx > (effectiveSw * 0.75f).toInt()
-                    val sec = trimmed.toIntOrNull()
+                val digitCore = t.trim().trim('(', ')', '[', ']', '{', '}', '|', '/', '\\', '°', '.', ',', ' ')
+                if (digitCore.length in 1..2 && digitCore.all { it.isDigit() }) {
+                    val sec = digitCore.toIntOrNull()
                     if (inSideCorner && sec != null && sec in 1..60) {
                         return sec
                     }

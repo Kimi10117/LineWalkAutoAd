@@ -696,10 +696,13 @@ class AutomationEngine private constructor(private val context: Context) {
                 externalAppTicks = 0
                 legitSkipRedirectPkg = null
                 legitSkipRedirectStartMs = 0L
+                adCloserHandler.clearLastClickedAdLabel()
+                adCloserHandler.markStoreGateReturnCooldown()
                 return
             }
             if (postWaitFg != null && (postWaitFg == "com.sec.android.app.launcher" || postWaitFg.contains("launcher", ignoreCase = true))) {
                 appendLog("[防護] 緩衝後前景為系統桌面 ($postWaitFg)，立即強制喚醒散步趣拉回前景！")
+                adCloserHandler.clearLastClickedAdLabel()
                 bringGameToFrontAndRestore(service, preserveWatchingState = true, restoreReason = "預期略過緩衝後桌面喚醒")
                 return
             }
@@ -708,13 +711,23 @@ class AutomationEngine private constructor(private val context: Context) {
                 recordBackRejectIfAny(service, "LegitSkipReturn($externalPkg)")
             }
             delay(350)
-            val postBackFg = service.getForegroundPackageName()
+            var postBackFg = service.getForegroundPackageName()
+            if (postBackFg != null && AppConfig.isPlayStoreOrBrowserPackage(postBackFg)) {
+                appendLog("[防護] 預期略過跳轉首次返回後仍停留商店上層 ($postBackFg)，補發第 2 次安全返回鍵退回廣告頁")
+                if (!service.safeNavigateBack(minIntervalMs = 350L)) {
+                    recordBackRejectIfAny(service, "LegitSkipReturn2($externalPkg)")
+                }
+                delay(350)
+                postBackFg = service.getForegroundPackageName()
+            }
             if (postBackFg != null && (postBackFg == "com.sec.android.app.launcher" || postBackFg.contains("launcher", ignoreCase = true))) {
                 appendLog("[防護] 安全返回後偵測系統桌面 ($postBackFg)，立即強制喚醒散步趣防退回桌面！")
                 bringGameToFrontAndRestore(service, preserveWatchingState = true, restoreReason = "安全返回後桌面喚醒")
             } else if (AppConfig.isGamePackage(postBackFg)) {
                 externalAppTicks = 0
             }
+            adCloserHandler.clearLastClickedAdLabel()
+            adCloserHandler.markStoreGateReturnCooldown()
             legitSkipRedirectPkg = null
             legitSkipRedirectStartMs = 0L
             return
@@ -730,6 +743,11 @@ class AutomationEngine private constructor(private val context: Context) {
         // 外部工具與瀏覽器極速復原：連續 2 個 tick (約 2.5 秒) 前景仍為三星瀏覽器/Chrome/Play 商店，立即強制喚醒散步趣拉回前景！
         if (externalAppTicks >= 2 && isBrowserOrStore) {
             appendLog("[防護] 停留外部瀏覽器/商店 ($externalPkg) 達 2 次 tick，立即強制喚醒散步趣拉回前景！")
+            adCloserHandler.clearLastClickedAdLabel()
+            if (externalPkg == "com.android.vending") {
+                service.safeNavigateBack(minIntervalMs = 400L)
+                delay(300)
+            }
             bringGameToFrontAndRestore(service, preserveWatchingState = true, restoreReason = "外部瀏覽器/商店強制拉回 ($externalPkg)")
             return
         }
@@ -1593,11 +1611,14 @@ class AutomationEngine private constructor(private val context: Context) {
             adWatchdogCooldownTicks--
         }
         val isGameScreen = hasMainScreenMarkers || adCloserHandler.isGameScreenVisible(service, screenBitmap, ocrItems)
+        if (isGameScreen && !hasPlayableOrStoreAdOcr && adWatchdogCooldownTicks == 0) {
+            adCloserHandler.clearRedirectMemory()
+        }
         if (adWatchdogCooldownTicks == 0 && (hasPlayableOrStoreAdOcr || (!isGameScreen && !isAnySubDialog && nonGameScreenTicks >= 2))) {
             nonGameScreenTicks = 0
             geoXConsecutiveClicks = 0
             appendLog("[廣告] 偵測到全螢幕廣告/可玩式廣告/商店宣傳頁，切換至廣告監控流程安全關閉！")
-            adCloserHandler.onEnterAdMode()
+            adCloserHandler.onEnterAdMode(preserveRedirectState = adCloserHandler.hasRecentRedirectWithin(45_000L))
             transitionTo(
                 EngineState.AD_WATCHING,
                 "偵測到廣告/宣傳視窗，安全等待與關閉中...",
@@ -1630,42 +1651,42 @@ class AutomationEngine private constructor(private val context: Context) {
         }
 
         // D3C. 幾何角落 X 偵測器（如『邀請好友』右上角 X，或全螢幕宣傳頁左上/右上角 X！）
-        if (!bingoTask.isBingoDialogOpen(ocrItems, sh)) {
-            if (!isAnySubDialog) {
-                val geoX = templateMatcher.detectCornerGeometricX(
-                    screenBitmap = screenBitmap,
-                    blacklistedCoord = { x, y ->
-                        FloatingOverlayService.isInsideOverlay(x, y) ||
-                        (x in (sw * 0.18f).toInt()..(sw * 0.82f).toInt() && y < sh * 0.08f) ||
-                        y < max((sh * 0.040f).toInt(), 40)
-                    }
-                )
-                if (geoX != null) {
-                    geoXConsecutiveClicks++
-                    if (geoXConsecutiveClicks >= 3) {
-                        appendLog("[關閉] 連續點擊角落關閉鈕 (${geoX.label}) 達 3 次無效，發送安全返回鍵關閉...")
-                        val backDispatched = service.safeNavigateBack(allowInGame = !isGameScreen)
-                        if (!backDispatched) {
-                            recordBackRejectIfAny(service, "GeoXConsecutiveFallback", screenBitmap, ocrItems)
-                        }
-                        geoXConsecutiveClicks = 0
-                        if (!isGameScreen) {
-                            nonGameScreenTicks = 2
-                        }
-                        return
-                    }
-                    if (isGameScreen) {
-                        nonGameScreenTicks = 0
-                    }
-                    appendLog("[關閉] 偵測到全螢幕宣傳頁/彈窗角落關閉鈕 (${geoX.label})，自動點擊關閉！(嘗試: $geoXConsecutiveClicks/3)")
-                    FloatingOverlayService.clickWithOverlayPassthrough(geoX.bounds) {
-                        service.clickRect(geoX.bounds, allowTopSafeZone = true)
-                    }
-                    updateDetail("[關閉] 已點擊關閉按鈕 (${geoX.label})，返回遊戲...", "[關閉] 關閉彈窗中...")
-                    return
-                } else {
-                    geoXConsecutiveClicks = 0
+        if (!bingoTask.isBingoDialogOpen(ocrItems, sh) && !isAnySubDialog && !hasPlayableOrStoreAdOcr && adWatchdogCooldownTicks == 0) {
+            val geoX = templateMatcher.detectCornerGeometricX(
+                screenBitmap = screenBitmap,
+                blacklistedCoord = { x, y ->
+                    FloatingOverlayService.isInsideOverlay(x, y) ||
+                    adCloserHandler.isInvalidOrBlacklisted(x, y) ||
+                    adCloserHandler.isBlockedByCornerPillOrSurveyOcr(x, y, ocrItems, sw, sh) ||
+                    (x in (sw * 0.18f).toInt()..(sw * 0.82f).toInt() && y < sh * 0.08f) ||
+                    y < max((sh * 0.040f).toInt(), 40)
                 }
+            )
+            if (geoX != null) {
+                geoXConsecutiveClicks++
+                if (geoXConsecutiveClicks >= 3) {
+                    appendLog("[關閉] 連續點擊角落關閉鈕 (${geoX.label}) 達 3 次無效，發送安全返回鍵關閉...")
+                    val backDispatched = service.safeNavigateBack(allowInGame = !isGameScreen)
+                    if (!backDispatched) {
+                        recordBackRejectIfAny(service, "GeoXConsecutiveFallback", screenBitmap, ocrItems)
+                    }
+                    geoXConsecutiveClicks = 0
+                    if (!isGameScreen) {
+                        nonGameScreenTicks = 2
+                    }
+                    return
+                }
+                if (isGameScreen) {
+                    nonGameScreenTicks = 0
+                }
+                appendLog("[關閉] 偵測到全螢幕宣傳頁/彈窗角落關閉鈕 (${geoX.label})，自動點擊關閉！(嘗試: $geoXConsecutiveClicks/3)")
+                FloatingOverlayService.clickWithOverlayPassthrough(geoX.bounds) {
+                    service.clickRect(geoX.bounds, allowTopSafeZone = true)
+                }
+                updateDetail("[關閉] 已點擊關閉按鈕 (${geoX.label})，返回遊戲...", "[關閉] 關閉彈窗中...")
+                return
+            } else {
+                geoXConsecutiveClicks = 0
             }
         }
 
@@ -3407,6 +3428,8 @@ class AutomationEngine private constructor(private val context: Context) {
                 adWatchdogCooldownTicks = 4
             } else if (hasVerify2 || hasVerifyBmp) {
                 appendLog("[計時強退] CLEAR_TOP 後仍停留在頑固內嵌廣告，立即升級 Level 2 CLEAR_TASK ($targetGamePkg) 重建主任務！")
+                service.pressHome()
+                delay(450)
                 service.forceResetAppTaskToFront(targetGamePkg, clearTask = true)
                 delay(2200)
                 adWatchdogCooldownTicks = 8

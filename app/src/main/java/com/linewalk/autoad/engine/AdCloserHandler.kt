@@ -53,6 +53,7 @@ class AdCloserHandler(
     private var socialLandingPageTotalRecoveries: Int = 0
     private var googlePlayPillClickCount: Int = 0
     private var lastGooglePlayPillClickTimeMs: Long = 0L
+    private var topRightStoreGateClicks: Int = 0
     private var wasAdLoading: Boolean = false
     private var hasAdActuallyShown: Boolean = false
     private var adLoadingTicks: Int = 0
@@ -101,6 +102,7 @@ class AdCloserHandler(
             socialLandingPageTotalRecoveries = 0
             googlePlayPillClickCount = 0
             lastGooglePlayPillClickTimeMs = 0L
+            topRightStoreGateClicks = 0
             wasAdLoading = false
             hasAdActuallyShown = false
             adLoadingTicks = 0
@@ -135,6 +137,7 @@ class AdCloserHandler(
             closeClickCount = 0
             adChoicesDismissCount = 0
             redirectCount = 0
+            topRightStoreGateClicks = 0
             hasRecentRedirect = false
             disableLeftCornerForCurrentAd = false
             lastClickedAdLabel = null
@@ -154,6 +157,7 @@ class AdCloserHandler(
 
     private fun isExpectedSkipLabel(label: String?): Boolean {
         if (label.isNullOrBlank()) return false
+        if (label.startsWith("右上角")) return false
         return label.contains("Google Play", ignoreCase = true) ||
             label.contains("GooglePlay", ignoreCase = true) ||
             label.contains("略過") ||
@@ -244,6 +248,29 @@ class AdCloserHandler(
      * 取得最近一次點擊的廣告關閉／略過目標標籤（供外部跳轉防護判斷是否為預期略過按鈕）。
      */
     fun getLastClickedAdLabel(): String? = lastClickedAdLabel
+
+    fun clearLastClickedAdLabel() {
+        lastClickedAdLabel = null
+    }
+
+    fun markStoreGateReturnCooldown() {
+        lastRedirectReturnTimeMs = System.currentTimeMillis()
+    }
+
+    fun hasRecentRedirectWithin(windowMs: Long): Boolean {
+        if (redirectCount <= 0 && blacklistedPoints.isEmpty() && topRightStoreGateClicks <= 0) return false
+        val now = System.currentTimeMillis()
+        return (lastRedirectReturnTimeMs > 0L && now - lastRedirectReturnTimeMs in 0L..windowMs) ||
+            (adStartTimeMs > 0L && now - adStartTimeMs in 0L..windowMs)
+    }
+
+    fun clearRedirectMemory() {
+        redirectCount = 0
+        topRightStoreGateClicks = 0
+        lastRedirectReturnTimeMs = 0L
+        redirectPointCounts.clear()
+        blacklistedPoints.clear()
+    }
 
     /**
      * 依螢幕寬度動態換算點擊黑名單半徑（1080px 基準約 64.8px，對應原固定 65.0px；小螢幕保底 28.0px）。
@@ -959,9 +986,16 @@ class AdCloserHandler(
                 lastGooglePlayPillClickTimeMs = nowMsForPill
                 hasAdActuallyShown = true
                 lastFallbackCornerTimeMs = nowMsForPill + 4000L
+                val leftIconX = max((sw * 0.055f).toInt(), topLeftGooglePlayPill.left - (topLeftGooglePlayPill.height() * 0.45f).toInt())
+                val leftTargetRight = min(topLeftGooglePlayPill.right, topLeftGooglePlayPill.left + max(36, (topLeftGooglePlayPill.width() * 0.30f).toInt()))
+                val targetRect = if (leftTargetRight > leftIconX) {
+                    Rect(leftIconX, topLeftGooglePlayPill.top, leftTargetRight, topLeftGooglePlayPill.bottom)
+                } else {
+                    topLeftGooglePlayPill
+                }
                 lastClickedAdLabel = "左上角[▶| Google Play]略過鈕"
-                recordAndClick(service, topLeftGooglePlayPill, allowBlacklist = false)
-                return AdStepResult.ClickedCloseOrSkip("左上角[▶| Google Play]略過鈕", topLeftGooglePlayPill)
+                recordAndClick(service, targetRect, allowBlacklist = false)
+                return AdStepResult.ClickedCloseOrSkip("左上角[▶| Google Play]略過鈕", targetRect)
             }
         }
 
@@ -1034,16 +1068,18 @@ class AdCloserHandler(
                 blacklistedCoord = ::isInvalidOrBlacklisted
             )
             val hasAdjacentCapsuleOcr = if (skipMatch != null) {
+                val isLeftPillIcon = skipMatch.bounds.centerX() < sw * 0.18f
                 ocrItems.any { item ->
                     val sameRow = kotlin.math.abs(item.bounds.centerY() - skipMatch.bounds.centerY()) <= sh * 0.035f
                     val rightExtended = item.bounds.right >= skipMatch.bounds.left &&
                         item.bounds.left <= skipMatch.bounds.right + (sw * 0.14f).toInt()
                     val t = item.text.replace(" ", "")
+                    val hasGooglePlay = !isLeftPillIcon &&
+                        (t.contains("Google", ignoreCase = true) || t.contains("Play", ignoreCase = true))
                     sameRow && rightExtended && t.length >= 2 && (
                         t.contains("秒") ||
                             t.contains("獎勵") ||
-                            t.contains("Google", ignoreCase = true) ||
-                            t.contains("Play", ignoreCase = true) ||
+                            hasGooglePlay ||
                             t.any { it.isDigit() }
                         )
                 }
@@ -1175,15 +1211,29 @@ class AdCloserHandler(
                 includeLeftZone = enableLeftCornerScan
             )
             if (geoMatch != null) {
-                if (isInLeftCornerZone(geoMatch.bounds.centerX(), geoMatch.bounds.centerY())) {
+                val gcx = geoMatch.bounds.centerX()
+                val gcy = geoMatch.bounds.centerY()
+                if (isInLeftCornerZone(gcx, gcy)) {
                     leftCornerGeoXClicks++
                     lastLeftCornerClickTimeMs = System.currentTimeMillis()
                 }
-                recordAndClick(service, geoMatch.bounds, allowBlacklist = true, label = geoMatch.label)
-                if (!isInvalidOrBlacklisted(geoMatch.bounds.centerX(), geoMatch.bounds.centerY())) {
+                val isTopRightGooglePlayCloseX = gcx >= sw * 0.72f && gcy <= sh * 0.16f && ocrItems.any { item ->
+                    val t = item.text.trim()
+                    (t.contains("Google", ignoreCase = true) || t.contains("Play", ignoreCase = true)) &&
+                        kotlin.math.abs(item.bounds.centerY() - gcy) <= sh * 0.035f &&
+                        item.bounds.right <= gcx + (sw * 0.02f).toInt()
+                }
+                val effectiveGeoLabel = if (isTopRightGooglePlayCloseX && topRightStoreGateClicks == 0 && redirectCount == 0) {
+                    topRightStoreGateClicks++
+                    "右上角[Google Play ×]關閉鈕"
+                } else {
+                    geoMatch.label
+                }
+                recordAndClick(service, geoMatch.bounds, allowBlacklist = true, label = effectiveGeoLabel)
+                if (!isInvalidOrBlacklisted(gcx, gcy)) {
                     lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
                 }
-                return AdStepResult.ClickedCloseOrSkip(geoMatch.label, geoMatch.bounds)
+                return AdStepResult.ClickedCloseOrSkip(effectiveGeoLabel, geoMatch.bounds)
             }
             // 若為頂部白底 Sponsored 橫幅廣告 (如 3M 或 Trip.com) 且無倒數計時：
             // 建構熱區前，先對 (x in 0.02..0.15, y in topSponsoredCenterY±r) 執行聚焦幾何 X 偵測，優先採用真實幾何 X；
@@ -1362,17 +1412,27 @@ class AdCloserHandler(
         // 且左上角 [▶| Google Play] 膠囊已淡出隱藏、右上角亦未出現關閉/略過按鈕，
         // 必須在螢幕中下方輕輕滑動一次以喚醒廣告頂部 UI，使略過按鈕或關閉叉叉重新浮現！
         if (elapsedSec >= 3 && remainingSec == null && revealSwipeCount < 4 &&
+            redirectCount == 0 && googlePlayPillClickCount == 0 && topRightStoreGateClicks == 0 &&
             now - lastRevealSwipeTimeMs >= 3500L && now - lastGooglePlayPillClickTimeMs >= 2500L &&
             !isOutsideGame
         ) {
             val hasPlayableKeywords = ocrItems.any { item ->
                 val t = item.text.replace(" ", "")
                 t.contains("立即遊玩") || t.contains("試玩") || t.contains("互動") ||
-                    t.contains("Tap", ignoreCase = true) || t.contains("Drag", ignoreCase = true) ||
-                    t.contains("Swipe", ignoreCase = true) || t.contains("Hold", ignoreCase = true) ||
-                    t.contains("Level") || t.contains("港口") || t.contains("關卡")
+                    t.contains("港口") || t.contains("關卡")
             }
-            if (hasPlayableKeywords || (googlePlayPillClickCount > 0 && elapsedSec >= 6)) {
+            val hasStoreOrEndCardMarkers = ocrItems.any { item ->
+                val t = item.text.replace(" ", "")
+                t.contains("CLAIM", ignoreCase = true) ||
+                    t.contains("TryAgain", ignoreCase = true) ||
+                    t.contains("GooglePlay", ignoreCase = true) ||
+                    t.contains("Install", ignoreCase = true) ||
+                    t.contains("Download", ignoreCase = true) ||
+                    t.contains("安裝") ||
+                    t.contains("下載") ||
+                    t.contains("$")
+            }
+            if (hasPlayableKeywords && !hasStoreOrEndCardMarkers) {
                 revealSwipeCount++
                 lastRevealSwipeTimeMs = now
                 hasAdActuallyShown = true
@@ -1545,6 +1605,7 @@ class AdCloserHandler(
     private fun isGeoXTarget(label: String?): Boolean {
         return label == "左上角幾何X" ||
             label == "右上角幾何X" ||
+            label == "右上角[Google Play ×]關閉鈕" ||
             label == "Meta預覽關閉(幾何X)" ||
             label == "Sponsored頂部左上角X"
     }
@@ -1610,7 +1671,7 @@ class AdCloserHandler(
      * 排除商店膠囊文字 (如 `[Google Play ×]` 中的 `'y'`/`'a'`)、安裝/下載按鈕與問卷調查列 (`✓ Interested` / `✕ Not interested`)，
      * 防止幾何 X 或單字元 OCR 誤點導流進商店或問卷。
      */
-    private fun isBlockedByCornerPillOrSurveyOcr(
+    internal fun isBlockedByCornerPillOrSurveyOcr(
         x: Int,
         y: Int,
         ocrItems: List<OcrItem>,
