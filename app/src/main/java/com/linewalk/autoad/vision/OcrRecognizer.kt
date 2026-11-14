@@ -96,7 +96,13 @@ class OcrRecognizer {
                 val reasonableSize = item.bounds.width() < screenWidth * 0.85f &&
                     item.bounds.height() < screenHeight * 0.14f
                 val excluded = excludeKeywords.any { ex -> item.text.contains(ex, ignoreCase = true) }
-                inRoi && reasonableSize && !excluded && item.text.contains(kw, ignoreCase = true)
+                val matched = if (kw.equals("OK", ignoreCase = true)) {
+                    cleanText.equals("OK", ignoreCase = true) ||
+                        Regex("(?:^|[^A-Za-z])OK(?:$|[^A-Za-z])", RegexOption.IGNORE_CASE).containsMatchIn(item.text)
+                } else {
+                    item.text.contains(kw, ignoreCase = true)
+                }
+                inRoi && reasonableSize && !excluded && matched
             }
             if (match != null) return match
         }
@@ -969,29 +975,50 @@ class OcrRecognizer {
             return false
         }
 
+        val sh = screenBitmap.height
+        val topTabCountPre = items.count { item ->
+            val t = item.text.replace(" ", "")
+            val cy = item.bounds.centerY().toFloat() / sh
+            cy in 0.08f..0.18f && t.length <= 3 && (t == "首頁" || t == "步數" || t == "時間" || t == "遊戲" || t == "移動")
+        }
+        val hasBottomNavPre = items.any { item ->
+            val t = item.text.replace(" ", "")
+            val cy = item.bounds.centerY().toFloat() / sh
+            cy > 0.85f && (
+                t == "集點" ||
+                (t.contains("好友") && !t.contains("邀請") && !t.contains("被") && !t.contains("名單") && t.length <= 4) ||
+                (t.contains("使用") && !t.contains("條款") && t.length <= 4) ||
+                (t.contains("精選") && t.length <= 4)
+            )
+        }
+
         // 0C. 若畫面包含明確的全螢幕廣告 / 試玩廣告 / End Card 特徵，絕非主畫面！
+        // 注意：散步趣主畫面（首頁 / 時間 / 步數）中下方常嵌有小型「Sponsored」原生橫幅廣告，
+        // 若畫面已明確呈現頂部分頁或底部導覽列，不可因內嵌橫幅的 Sponsored 字樣而否決主畫面！
         val hasExplicitFullScreenAdMarker = items.any { item ->
             val t = item.text.trim()
             val compact = t.replace(" ", "")
-            compact.contains("GooglePlay", ignoreCase = true) ||
-                t.contains("Play 商店") ||
-                compact.contains("PlayStore", ignoreCase = true) ||
-                compact.contains("Notinterested", ignoreCase = true) ||
+            val cy = item.bounds.centerY().toFloat() / sh
+            val isTopOrNoMainChrome = cy < 0.55f || topTabCountPre < 2
+            compact.contains("Notinterested", ignoreCase = true) ||
                 t.equals("Interested", ignoreCase = true) ||
                 compact.contains("CLAIM!", ignoreCase = true) ||
                 compact.contains("TryAgain", ignoreCase = true) ||
                 compact.contains("Dragtoadjust", ignoreCase = true) ||
-                compact.contains("Sponsored", ignoreCase = true)
+                (isTopOrNoMainChrome && (
+                    compact.contains("GooglePlay", ignoreCase = true) ||
+                        t.contains("Play 商店") ||
+                        compact.contains("PlayStore", ignoreCase = true)
+                )) ||
+                (topTabCountPre == 0 && !hasBottomNavPre && cy < 0.20f && compact.contains("Sponsored", ignoreCase = true))
         }
         if (hasExplicitFullScreenAdMarker) {
             return false
         }
 
-        val sh = screenBitmap.height
-
         // 1. 若看完廣告後的中央領獎彈窗 (『獲得15張票券！ [關閉]』) 正開啟中，代表不在主畫面！
-        // 遊戲分頁一票否決：街機背景易誤觸 isDimmedCenterModalOpen 假陽性，當為遊戲分頁時徹底屏蔽純像素遮罩判定，唯有真正偵測到領獎彈窗關閉按鈕時方判定不在主畫面
-        // 注意：移除 POINTSGAME / LINEPOINTS / 輕鬆賺 / 開始遊玩，因為首頁與步數分頁下方皆有該輪播橫幅！
+        // 遊戲分頁與完整呈現主畫面分頁/導覽列（且無任何關閉/領獎/中獎彈窗文字）時一票否決純像素遮罩判定，
+        // 避免 SM-F731N 等裝置因角色背景色塊誤觸 isDimmedCenterModalOpen 假陽性，造成主畫面輪詢延遲 6 個 Tick！
         val isGameTabScreen = items.any { item ->
             val t = item.text.replace(" ", "")
             t.contains("秘寶挖挖哇") ||
@@ -999,8 +1026,14 @@ class OcrRecognizer {
             t.contains("接龍高手") ||
             t.contains("簡單賺金幣")
         }
-        if ((!isGameTabScreen && (findCenterRewardModalCloseButton(screenBitmap, items) != null || isDimmedCenterModalOpen(screenBitmap))) ||
-            (isGameTabScreen && findCenterRewardModalCloseButton(screenBitmap, items) != null)
+        val hasModalText = items.any { item ->
+            val t = item.text.replace(" ", "")
+            t.contains("關閉") || t.contains("確認") || t.contains("確定") || t.contains("取消") ||
+                t.contains("獲得15") || t.contains("獲得60") || t.contains("中獎")
+        }
+        val ignorePixelDimmedVeto = isGameTabScreen || (topTabCountPre >= 2 && hasBottomNavPre && !hasModalText)
+        if ((!ignorePixelDimmedVeto && (findCenterRewardModalCloseButton(screenBitmap, items) != null || isDimmedCenterModalOpen(screenBitmap))) ||
+            (ignorePixelDimmedVeto && findCenterRewardModalCloseButton(screenBitmap, items) != null)
         ) {
             return false
         }
@@ -1419,6 +1452,8 @@ class OcrRecognizer {
             "雙方",
             "Hide",
             "Report",
+            "klook",
+            "Klook",
             "動畫效果",
             "關閉動畫",
             "省電模式",
@@ -1508,6 +1543,8 @@ class OcrRecognizer {
             "Play 商店",
             "開啟商店",
             "前往商店",
+            "klook",
+            "Klook",
             "立即預訂",
             "立即購買",
             "BOOK",

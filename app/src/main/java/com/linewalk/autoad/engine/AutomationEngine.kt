@@ -1477,8 +1477,21 @@ class AutomationEngine private constructor(private val context: Context) {
             }
         }
 
+        val hasMainScreenMarkers = ocrItems.any { item ->
+            val cy = item.bounds.centerY().toFloat() / sh
+            val t = item.text.replace(" ", "")
+            (cy in 0.05f..0.30f && (t.contains("首頁") || t.contains("步數") || t.contains("時間") || t.contains("遊戲"))) ||
+            (cy > 0.85f && (
+                t == "集點" ||
+                (t.contains("好友") && !t.contains("邀請") && !t.contains("被") && !t.contains("名單") && t.length <= 4) ||
+                (t.contains("使用") && !t.contains("條款") && t.length <= 4) ||
+                (t.contains("精選") && t.length <= 4)
+            ))
+        }
+
         // D1. 短字按鈕 OCR（跳過 / 略過 / 確認 / 確定 / 關閉，字數 <= 6，覆蓋到 y < 0.94f）
-        val dismissOrSkipOcr = ocrRecognizer.findMatch(
+        // 若畫面已具備散步趣主畫面特徵，禁止對中下方橫幅廣告區 (y in 0.55f..0.85f) 的純英文短詞（如誤判的 OK）觸發點擊
+        val rawDismissOrSkipOcr = ocrRecognizer.findMatch(
             items = ocrItems,
             keywords = OcrRecognizer.GAME_CLAIM_CONFIRM_KEYWORDS,
             screenWidth = sw,
@@ -1487,6 +1500,11 @@ class AutomationEngine private constructor(private val context: Context) {
             excludeKeywords = OcrRecognizer.GAME_CLAIM_EXCLUDE_KEYWORDS,
             maxTextLength = 6
         )
+        val dismissOrSkipOcr = rawDismissOrSkipOcr?.takeUnless { candidate ->
+            val cy = candidate.bounds.centerY()
+            val isAsciiOnly = candidate.text.trim().all { it.code < 128 }
+            hasMainScreenMarkers && isAsciiOnly && cy in (sh * 0.55f).toInt()..(sh * 0.85f).toInt()
+        }
         if (dismissOrSkipOcr != null) {
             nonGameScreenTicks = 0
             appendLog("[關閉] 自動點擊彈窗 [${dismissOrSkipOcr.text}]")
@@ -1571,18 +1589,6 @@ class AutomationEngine private constructor(private val context: Context) {
                              friendGiftTask.isFriendsPage(ocrItems, sh)
 
         // D3A. 檢查是否處於可玩式互動廣告 / 應用商店推廣頁 / 全螢幕廣告 (優先於一般彈窗 X 處理，確保廣告由廣告監控專責處理)
-        val hasMainScreenMarkers = ocrItems.any { item ->
-            val cy = item.bounds.centerY().toFloat() / sh
-            val t = item.text.replace(" ", "")
-            (cy in 0.05f..0.30f && (t.contains("首頁") || t.contains("步數") || t.contains("時間") || t.contains("遊戲"))) ||
-            (cy > 0.85f && (
-                t == "集點" ||
-                (t.contains("好友") && !t.contains("邀請") && !t.contains("被") && !t.contains("名單") && t.length <= 4) ||
-                (t.contains("使用") && !t.contains("條款") && t.length <= 4) ||
-                (t.contains("精選") && t.length <= 4)
-            ))
-        }
-
         val hasPlayableOrStoreAdOcr = !hasMainScreenMarkers && (
             ocrItems.any { item ->
                 val t = item.text
@@ -1732,6 +1738,12 @@ class AutomationEngine private constructor(private val context: Context) {
 
         // Tier 4: 未知畫面嚴重逾時安全返回機制
         if (nonMainScreenIdleTicks >= NON_MAIN_IDLE_SAFETY_BACK_TICKS) {
+            if (hasMainScreenMarkers) {
+                appendLog("[自癒] 輪詢逾時但畫面具備散步趣主畫面特徵，禁止派發 BACK（防誤退至桌面）並轉交主畫面巡邏！")
+                nonMainScreenIdleTicks = 0
+                handleMainScreenPatrol(service, screenBitmap, ocrItems, sw, sh)
+                return
+            }
             appendLog("[自癒] 輪詢達 $nonMainScreenIdleTicks 個 Tick 嚴重逾時，發送安全返回鍵嘗試拉回散步趣...")
             service.safeNavigateBack(allowInGame = true)
             nonMainScreenIdleTicks = 0

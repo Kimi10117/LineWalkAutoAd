@@ -91,42 +91,42 @@ jobs:
       - name: Update Tag and Publish APK to GitHub Releases
         run: |
           git tag -f latest-apk
-          git tag -f v1.15.86
+          git tag -f v1.15.87
           git push -f origin latest-apk || true
-          git push -f origin v1.15.86 || true
+          git push -f origin v1.15.87 || true
 
       - name: Publish APK to GitHub Releases (latest-apk)
         uses: softprops/action-gh-release@v2
         with:
             tag_name: latest-apk
-            name: "散步趣助手 v1.15.86 (左下角倒數識別、停用試玩誤滑、商店雙層返回與 IN_GAME_SCAN D3C 迴圈阻斷 - Run #${{ github.run_number }})"
+            name: "散步趣助手 v1.15.87 (修復 Klook OK 誤配、主畫面內嵌橫幅誤判、誤退桌面與簡體安装/Playio End Card 提前脫困 - Run #${{ github.run_number }})"
             body: |
-              **散步趣助手 v1.15.86 (Run #${{ github.run_number }}) - 左下角倒數識別、停用試玩誤滑、商店雙層返回與 IN_GAME_SCAN D3C 迴圈阻斷 (相容歷代版本 v1.15.85, v1.15.84, v1.15.83, v1.15.82, v1.15.81, v1.15.80, v1.15.79, v1.15.78, v1.15.77, v1.15.76, v1.15.75, v1.15.74, v1.15.73, v1.15.72, v1.15.71, v1.15.70, v1.15.69, v1.15.68, v1.15.67, v1.15.66, v1.15.65, v1.15.64, v1.15.63, v1.15.62, v1.15.61, v1.15.60, v1.15.58, v1.15.57, v1.15.56, v1.15.55, v1.15.54, v1.15.53, v1.15.52, v1.15.51, v1.15.50, v1.15.49, v1.15.48, v1.15.47, v1.15.46, v1.15.45)**
-              1. **【底部角落圓形倒數識別與停用破壞性試玩滑動】**：
-                 - `OcrRecognizer.detectAdCountdownSeconds` 擴大支援底部角落 (`cy >= 85%`) 圓形倒數並剝除括號噪字 (`36)` -> `36`)；Step `8B`（`Reveal Swipe`）移除 `"Drag"`/`"Tap"`/`"Swipe"` 等詞並排除商店與 `CLAIM!` 畫面，杜絕試玩廣告反覆滑動觸發跳轉商店。
-              2. **【左上角 `[▶| Google Play]` 偏左熱區與商店雙層 `Back` 返回】**：
-                 - 優先點擊 `[▶| Google Play]` 左側 `[▶|]` 圖示熱區；`handleExternalAppGuard` 針對 Google Play Half-Sheet + Store 雙層架構自動補發第 2 次 `safeNavigateBack` 並清除過期 `lastClickedAdLabel`。
-              3. **【`[Google Play ×]` 兩段式解鎖與 `IN_GAME_SCAN` `D3C` 迴圈阻斷】**：
-                 - `[Google Play ×]` 首次點擊改走 2.0s + 2x Back 商店緩衝解鎖，二次點擊失敗即永久封鎖；`isLineWalkMainScreenVisible` 拒認含商店/問卷廣告特徵畫面；`IN_GAME_SCAN` `D3C` 加入冷卻、商店廣告與黑名單雙重防護，且 45 秒重進 `AD_WATCHING` 保留重定向黑名單，徹底消除 `Play=10` 無限迴圈。
+              **散步趣助手 v1.15.87 (Run #${{ github.run_number }}) - 修復 Klook OK 誤配、主畫面內嵌橫幅誤判、誤退桌面與簡體安装/Playio End Card 提前脫困 (相容歷代版本 v1.15.86, v1.15.85, v1.15.84, v1.15.83, v1.15.82, v1.15.81, v1.15.80, v1.15.79, v1.15.78, v1.15.77, v1.15.76, v1.15.75, v1.15.74, v1.15.73, v1.15.72, v1.15.71, v1.15.70, v1.15.69, v1.15.68, v1.15.67, v1.15.66, v1.15.65, v1.15.64, v1.15.63, v1.15.62, v1.15.61, v1.15.60, v1.15.58, v1.15.57, v1.15.56, v1.15.55, v1.15.54, v1.15.53, v1.15.52, v1.15.51, v1.15.50, v1.15.49, v1.15.48, v1.15.47, v1.15.46, v1.15.45)**
+              1. **【修復 `OcrRecognizer.findMatch` `"OK"` 誤配 `klook` 開啟瀏覽器】**：
+                 - `"OK"` 改採全字詞邊界比對並排除 `"klook"` / `"Klook"`；`IN_GAME_SCAN` `D1` 具備主畫面特徵時禁止誤點原生橫幅區純英文短詞。
+              2. **【消除主畫面 `Sponsored` 橫幅與純像素遮罩 6-Tick 延遲與誤退桌面】**：
+                 - `isLineWalkMainScreenVisible` 允許主畫面內嵌原生 `Sponsored` 橫幅，完整分頁+導覽列且無彈窗文字時屏蔽純像素遮罩假陽性；Tier 4 逾時自癒具備主畫面特徵時改交 `handleMainScreenPatrol`，嚴禁派發 `Back` 誤退至桌面。
+              3. **【簡體 `安装` 與 `Playio` End Card 識別暨 45 秒後 `超時安全返回鍵` 提前升級】**：
+                 - 補齊簡體 `"安装"` 與 `"Playio"` / `"馬上體驗"` / `"换好禮"` 等 End Card 關鍵字；45 秒後 `超時安全返回鍵` 連續 2 次遭吞噬即升級 `ForceBringGameToFront`，於約 51 秒透過 `Home -> CLEAR_TOP` 清棧返回遊戲。
               4. **【單元測試與版本升級】**：
-                 - 新增 `V1_15_86SimulationTest`（4 項雙機回歸測試），versionCode 119 / versionName 1.15.86（完整保留歷代版本 APK 與發布紀錄）。
+                 - 新增 `V1_15_87SimulationTest`（4 項實機日誌回歸測試），versionCode 120 / versionName 1.15.87（完整保留歷代版本 APK 與發布紀錄）。
             files: LineWalkAutoAd.apk
             prerelease: false
 
-      - name: Publish Versioned APK to GitHub Releases (v1.15.86)
+      - name: Publish Versioned APK to GitHub Releases (v1.15.87)
         uses: softprops/action-gh-release@v2
         with:
-            tag_name: v1.15.86
-            name: "散步趣助手 v1.15.86 (左下角倒數識別、停用試玩誤滑、商店雙層返回與 IN_GAME_SCAN D3C 迴圈阻斷)"
+            tag_name: v1.15.87
+            name: "散步趣助手 v1.15.87 (修復 Klook OK 誤配、主畫面內嵌橫幅誤判、誤退桌面與簡體安装/Playio End Card 提前脫困)"
             body: |
-              **散步趣助手 v1.15.86 (Run #${{ github.run_number }}) - 左下角倒數識別、停用試玩誤滑、商店雙層返回與 IN_GAME_SCAN D3C 迴圈阻斷**
-              1. **【底部角落圓形倒數識別與停用破壞性試玩滑動】**：
-                 - `OcrRecognizer.detectAdCountdownSeconds` 擴大支援底部角落 (`cy >= 85%`) 圓形倒數並剝除括號噪字 (`36)` -> `36`)；Step `8B`（`Reveal Swipe`）移除 `"Drag"`/`"Tap"`/`"Swipe"` 等詞並排除商店與 `CLAIM!` 畫面，杜絕試玩廣告反覆滑動觸發跳轉商店。
-              2. **【左上角 `[▶| Google Play]` 偏左熱區與商店雙層 `Back` 返回】**：
-                 - 優先點擊 `[▶| Google Play]` 左側 `[▶|]` 圖示熱區；`handleExternalAppGuard` 針對 Google Play Half-Sheet + Store 雙層架構自動補發第 2 次 `safeNavigateBack` 並清除過期 `lastClickedAdLabel`。
-              3. **【`[Google Play ×]` 兩段式解鎖與 `IN_GAME_SCAN` `D3C` 迴圈阻斷】**：
-                 - `[Google Play ×]` 首次點擊改走 2.0s + 2x Back 商店緩衝解鎖，二次點擊失敗即永久封鎖；`isLineWalkMainScreenVisible` 拒認含商店/問卷廣告特徵畫面；`IN_GAME_SCAN` `D3C` 加入冷卻、商店廣告與黑名單雙重防護，且 45 秒重進 `AD_WATCHING` 保留重定向黑名單，徹底消除 `Play=10` 無限迴圈。
+              **散步趣助手 v1.15.87 (Run #${{ github.run_number }}) - 修復 Klook OK 誤配、主畫面內嵌橫幅誤判、誤退桌面與簡體安装/Playio End Card 提前脫困**
+              1. **【修復 `OcrRecognizer.findMatch` `"OK"` 誤配 `klook` 開啟瀏覽器】**：
+                 - `"OK"` 改採全字詞邊界比對並排除 `"klook"` / `"Klook"`；`IN_GAME_SCAN` `D1` 具備主畫面特徵時禁止誤點原生橫幅區純英文短詞。
+              2. **【消除主畫面 `Sponsored` 橫幅與純像素遮罩 6-Tick 延遲與誤退桌面】**：
+                 - `isLineWalkMainScreenVisible` 允許主畫面內嵌原生 `Sponsored` 橫幅，完整分頁+導覽列且無彈窗文字時屏蔽純像素遮罩假陽性；Tier 4 逾時自癒具備主畫面特徵時改交 `handleMainScreenPatrol`，嚴禁派發 `Back` 誤退至桌面。
+              3. **【簡體 `安装` 與 `Playio` End Card 識別暨 45 秒後 `超時安全返回鍵` 提前升級】**：
+                 - 補齊簡體 `"安装"` 與 `"Playio"` / `"馬上體驗"` / `"换好禮"` 等 End Card 關鍵字；45 秒後 `超時安全返回鍵` 連續 2 次遭吞噬即升級 `ForceBringGameToFront`，於約 51 秒透過 `Home -> CLEAR_TOP` 清棧返回遊戲。
               4. **【單元測試與版本升級】**：
-                 - 新增 `V1_15_86SimulationTest`（4 項雙機回歸測試），versionCode 119 / versionName 1.15.86（完整保留歷代版本 APK 與發布紀錄）。
+                 - 新增 `V1_15_87SimulationTest`（4 項實機日誌回歸測試），versionCode 120 / versionName 1.15.87（完整保留歷代版本 APK 與發布紀錄）。
             files: LineWalkAutoAd.apk
             prerelease: false

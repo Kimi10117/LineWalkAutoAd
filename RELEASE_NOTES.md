@@ -1,13 +1,48 @@
 # LINE 散步趣自動看廣告助手 (LineWalkAutoAd) 發布說明
 
 ## 版本資訊
+- 版本名稱：v1.15.87
+- 版本代碼：versionCode 120, versionName "1.15.87"
+- 發布類型：正式版本 (Release)
+
+---
+
+## 概述
+LineWalkAutoAd v1.15.87 針對 `v1.15.86` 實機診斷日誌（`SM-F731N`，`1080x2640`，9 輪完整運行）所揭露的 4 項問題完成徹底修復與單元回歸驗證（`[▶| Google Play]` 跳針循環已於 `v1.15.86` 完全根治，本次進一步消除原生橫幅誤點瀏覽器、主畫面誤判 6-Tick 延遲與 Tier 4 誤退桌面，以及未辨識 End Card 空等到 65 秒之卡頓）。
+
+---
+
+## 具體更新與修復內容 (v1.15.87)
+
+### 1. 修復 `OcrRecognizer.findMatch` `"OK"` 子字串誤配 `"klook"` 誤點原生橫幅開啟瀏覽器
+- **檔案**：`app/src/main/java/com/linewalk/autoad/vision/OcrRecognizer.kt`、`app/src/main/java/com/linewalk/autoad/engine/AutomationEngine.kt`
+- `OcrRecognizer.findMatch` 針對 `"OK"` 改採全字詞邊界比對，避免因 `"klook"` 結尾含 `"ok"` 而於 `IN_GAME_SCAN` 步驟 `D1` 誤點內嵌廣告開啟 Samsung Browser；並於 `GAME_CLAIM_EXCLUDE_KEYWORDS` 與 `AD_CLOSE_EXCLUDE_KEYWORDS` 新增 `"klook"` / `"Klook"`。
+- `AutomationEngine.handleInGameScan` 步驟 `D1` 當畫面已具備主畫面特徵 (`hasMainScreenMarkers`) 時，禁止點擊中下方原生橫幅廣告帶 (`y in 0.55f..0.85f`) 的純英文短詞。
+
+### 2. 消除主畫面因內嵌 `Sponsored` 橫幅與純像素遮罩假陽性引發的 6-Tick 延遲與 Tier 4 誤退桌面
+- **檔案**：`app/src/main/java/com/linewalk/autoad/vision/OcrRecognizer.kt`、`app/src/main/java/com/linewalk/autoad/engine/AutomationEngine.kt`
+- `OcrRecognizer.isLineWalkMainScreenVisible` 允許《LINE 散步趣》主畫面同時存在中下方原生 `Sponsored` 橫幅廣告；且當頂部分頁 (`topTabCount >= 2`) 與底部導覽列完整出現並無領獎／關閉彈窗關鍵字時，屏蔽 `isDimmedCenterModalOpen` 純像素假陽性否決。
+- `AutomationEngine.handleInGameScan` Tier 4 逾時自癒機制當 `hasMainScreenMarkers == true` 時嚴禁發送 `safeNavigateBack(allowInGame = true)`，改為重置空轉計數並直接轉交 `handleMainScreenPatrol`，杜絕從主畫面誤退至 Android 桌面 (`LAUNCHER_RECOVERY`)。
+
+### 3. 強化簡體 `安装` 與 `Playio` 結束卡片識別，45 秒後 `超時安全返回鍵` 2 次遭吞噬即提前清棧脫困
+- **檔案**：`app/src/main/java/com/linewalk/autoad/engine/AdCloserHandler.kt`
+- `isEndCard`、`Step 8B` 及 `STORE_PILL_OR_SURVEY_OCR_KEYWORDS` 補充簡體字 `"安装"` (`装`)，並於 `isEndCard` 新增 `"Playio"`、`"馬上體驗"`、`"立即體驗"`、`"免費體驗"`、`"開始體驗"`、`"換好禮"`、`"换好禮"`，完整覆蓋「知識王LIVE」與「Playio」等無 X End Card。
+- 播放滿 45 秒後之 `超時安全返回鍵` 統一改經 `trySafeEndCardOrRedirectBack` 計數，連續 2 次返回鍵遭廣告攔截無效後即於第 3 次（約 51 秒）提前回傳 `ForceBringGameToFront("END_CARD_BACK_SWALLOWED")`，直接以 `Home -> CLEAR_TOP` 清棧奪回遊戲，無須空等至 65 秒強制看門狗。
+
+### 4. `v1.15.87` 單元回歸驗證與版本升級
+- **檔案**：`app/src/test/java/com/linewalk/autoad/test/v11587/V1_15_87SimulationTest.kt`、`app/build.gradle.kts`
+- 新增 `V1_15_87SimulationTest`（4 項實機日誌模擬測試），並將 `versionCode` 升級為 `120`、`versionName` 升級為 `"1.15.87"`（完整保留所有歷代版本紀錄與 APK）。
+
+---
+
+## 版本資訊 (歷史版本: v1.15.86)
 - 版本名稱：v1.15.86
 - 版本代碼：versionCode 119, versionName "1.15.86"
 - 發布類型：正式版本 (Release)
 
 ---
 
-## 概述
+## 概述 (歷史版本: v1.15.86)
 LineWalkAutoAd v1.15.86 針對 `v1.15.85` 雙機實機日誌（`SM-F731N` Cash Giraffe 互動試玩廣告與 `SM-S7210` AHEALTH End Card）與截圖所揭露之「左下角圓形倒數漏辨識與 `Reveal Swipe` 誤踢試玩／重觸商店跳轉循環」、「兩層式 Google Play Half-Sheet 僅按 1 次 `Back` 未徹底退回」、「右上角 `[Google Play ×]` 兩段式商店解鎖支援」及「假復原誤入 `IN_GAME_SCAN` 後由步驟 `D3C` 繞過黑名單連點 9 次並被 `onEnterAdMode` 洗白」問題完成徹底修復與單元回歸驗證。
 
 ---

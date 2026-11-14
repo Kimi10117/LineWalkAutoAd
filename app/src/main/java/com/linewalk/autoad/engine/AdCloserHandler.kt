@@ -1299,7 +1299,12 @@ class AdCloserHandler(
                 t.contains("下載") ||
                 t.contains("立即遊玩") ||
                 t.contains("開啟商店") ||
-                t.contains("安裝")
+                t.contains("安裝") ||
+                t.contains("安装") ||
+                t.contains("馬上體驗") ||
+                t.contains("立即體驗") ||
+                t.contains("免費體驗") ||
+                t.contains("開始體驗")
             } && ocrItems.any { item ->
                 val t = item.text
                 t.contains("Facebook", ignoreCase = true) ||
@@ -1309,10 +1314,14 @@ class AdCloserHandler(
                 t.contains("Download", ignoreCase = true) ||
                 t.contains("下載") ||
                 t.contains("安裝") ||
+                t.contains("安装") ||
                 t.contains("ShopBack", ignoreCase = true) ||
                 t.contains("金幣") ||
                 t.contains("連勝") ||
-                t.contains("現金回饋")
+                t.contains("現金回饋") ||
+                t.contains("Playio", ignoreCase = true) ||
+                t.contains("換好禮") ||
+                t.contains("换好禮")
             }
         // Compatibility contract: isEndCard && elapsedSec >= 15 (upgraded to 42s in v1.15.67 to prevent early cut-off of 30s-40s unskippable video ads)
         if (isEndCard && elapsedSec >= 42 && (elapsedSec >= 15 || rewardGrantedOcr != null) && now - lastBackActionTimeMs >= 2500L) {
@@ -1397,11 +1406,12 @@ class AdCloserHandler(
                     }
                     if ((!isGame || !isGameVisible) && now - lastBackActionTimeMs >= 3000L) {
                         lastBackActionTimeMs = now
-                        if (service.safeNavigateBack(allowInGame = true)) {
-                            return AdStepResult.WatchdogBackTriggered(elapsedSec, "超時安全返回鍵")
-                        } else {
-                            logThrottledBackReject(service, "超時安全返回鍵")
-                        }
+                        trySafeEndCardOrRedirectBack(
+                            service = service,
+                            elapsedSec = elapsedSec,
+                            actionLabel = "超時安全返回鍵",
+                            escalateTag = "END_CARD_BACK_SWALLOWED"
+                        )?.let { return it }
                     }
                 }
             }
@@ -1429,6 +1439,7 @@ class AdCloserHandler(
                     t.contains("Install", ignoreCase = true) ||
                     t.contains("Download", ignoreCase = true) ||
                     t.contains("安裝") ||
+                    t.contains("安装") ||
                     t.contains("下載") ||
                     t.contains("$")
             }
@@ -1856,7 +1867,7 @@ class AdCloserHandler(
         private const val TAG = "AdCloserHandler"
         private val STORE_PILL_OR_SURVEY_OCR_KEYWORDS = listOf(
             "google play", "play store", "play 商店", "play商店",
-            "開啟商店", "前往商店", "下載", "安裝", "download", "install",
+            "開啟商店", "前往商店", "下載", "安裝", "安装", "download", "install",
             "not interested", "interested", "hide ad", "report ad"
         )
     }
