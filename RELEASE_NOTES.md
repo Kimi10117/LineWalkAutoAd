@@ -1,6 +1,39 @@
 # LINE 散步趣自動看廣告助手 (LineWalkAutoAd) 發布說明
 
 ## 版本資訊
+- 版本名稱：v1.15.88
+- 版本代碼：versionCode 121, versionName "1.15.88"
+- 發布類型：正式版本 (Release)
+
+---
+
+## 概述
+LineWalkAutoAd v1.15.88 針對 `v1.15.87` 實機診斷日誌（`15:34:09` 與 `15:48:23` 掛機紀錄）及 Meta 網頁預覽廣告實機截圖（`Preview of ihg.com`）所揭露之 2 項嚴重問題完成根因修復與測試驗證：解決 Meta 網頁預覽廣告重複誤點網頁區誘餌並跳轉瀏覽器、長達 65 秒逾時卡死的問題；並解決《LINE 散步趣》掛機期間帳號登出後無法自動停止、以及「廣告未成功啟動」清空計數造成每 2 秒無限重試的死循環。
+
+---
+
+## 本次重點更新 (v1.15.88)
+
+### 1. Meta 網頁預覽廣告 (`Preview of ...`) 頂部標頭鎖定與快速脫困
+- **問題根因**：`com.facebook.katana` 內嵌 `Preview of ...` 網頁預覽廣告時，前置影片階段可能已耗用 `fastForwardSkipClicks == 2` 次數導致 Step 4C 略過，或使流程穿透至 Step 7 誤點網頁正文誘餌鈕而反覆跳轉 `com.sec.android.app.sbrowser`，同時 Step 4D 未啟用強制切換包名返回，導致長駐 65 秒逾時卡關。
+- **修復方案**：
+  - 於 `AdCloserHandler` 將 `!isMetaWebPreview` 自通用 Step 4C 分離，並於專屬 Step 4D (`if (isMetaWebPreview)`) 嚴格鎖定偵測與點擊區域至頂部標頭 `y <= previewHeaderMaxY`（對齊 `"Preview of..."` 錨點且上限 `<= 11.5%` 螢幕高度）。
+  - 放寬 `fastForwardSkipClicks < 4` 次數配額（僅排除鄰近 `"Google Play"` / `"Play Store"` 膠囊區域），依序執行 `"Meta預覽略過鈕(▶|)"` 與標頭幾何叉叉 `"Meta預覽關閉(幾何X)"`。
+  - 嘗試達 2 次後改採 `"Meta預覽強制返回鍵"`（`safeNavigateBack(..., forceEscapeAdPackage = true)`），進一步觸發 `ForceBringGameToFront`（`"META_PREVIEW_STUCK"` / `"META_PREVIEW_TIMEOUT"`）強迫返遊戲，且全程直接回傳 `AdStepResult.ScanningAd(elapsedSec)`，不再落入 Step 7 / 8 / 8B。
+
+### 2. LINE 帳號登出偵測自動停機與「廣告未成功啟動」防死循環冷卻
+- **問題根因**：凌晨掛機若遇《LINE 散步趣》帳號登出並顯示登入畫面，引擎無登出狀態辨識機制；同時 `AutomationEngine.handleAdWatching` 收到 `"廣告未成功啟動"` 後立即重置 `emptyTicksOnCurrentTab = 0`、移出 `confirmedEmptyTabs` 且未設冷卻間隔，造成主畫面上方與廣告監控之間每 2 秒無限來回重試。
+- **修復方案**：
+  - 於 `OcrRecognizer` 新增 `isLoggedOutOrLoginScreen`，結合 `LOGGED_OUT_STRONG_KEYWORDS` 與 `AD_LOGIN_GUARD_EXCLUDE_KEYWORDS` 辨識未登入／重新登入頁面。
+  - 於 `AdCloserHandler`（彈窗領獎與 `isGameVisible` 分支）先於 `"廣告未成功啟動"` 檢查登出畫面並回傳 `"偵測到LINE散步趣已登出"`；於 `AutomationEngine.handleInGameScan` 與 `handleAdWatching` 同步攔截登出狀態並立即呼叫 `stop(...)` 安全停機。
+  - 修正 `AutomationEngine.handleAdWatching` 收到 `"廣告未成功啟動"` 之狀態更新：設定 `adWatchdogCooldownTicks = maxOf(adWatchdogCooldownTicks, 5)`、`nonGameScreenTicks = 0` 並遞增 `emptyTicksOnCurrentTab`（達 `>= 3` 即加入 `confirmedEmptyTabs`），終止無止盡彈跳重試。
+
+### 3. 驗證結果
+- 新增 `V1_15_88SimulationTest` 單元模擬測試，並與完整 Gradle 單元測試及 M1/M2/M3 Python 壓力測試共同驗收通過。
+
+---
+
+## 版本資訊 (歷史版本: v1.15.87)
 - 版本名稱：v1.15.87
 - 版本代碼：versionCode 120, versionName "1.15.87"
 - 發布類型：正式版本 (Release)

@@ -1613,6 +1613,13 @@ class AutomationEngine private constructor(private val context: Context) {
             } || ocrRecognizer.detectAdCountdownSeconds(ocrItems, sh) != null
         )
 
+        val fgPkgNow = service.getForegroundPackageName()
+        if (ocrRecognizer.isLoggedOutOrLoginScreen(ocrItems, fgPkgNow, screenBitmap.height)) {
+            appendLog("[登入防護] 偵測到《LINE 散步趣》已登出／LINE 帳號登入畫面，自動停止巡邏以避免無效點擊！")
+            stop("偵測到《LINE 散步趣》已登出／需重新登入，自動停止巡邏")
+            return
+        }
+
         if (adWatchdogCooldownTicks > 0) {
             adWatchdogCooldownTicks--
         }
@@ -3619,11 +3626,22 @@ class AutomationEngine private constructor(private val context: Context) {
                     transitionTo(EngineState.IN_GAME_SCAN, "已關閉廣告錯誤彈窗，重試當前分頁...", "[巡邏] 重試分頁中...")
                     return
                 }
+                if (res.label == "偵測到LINE散步趣已登出") {
+                    appendLog("[登入防護] 廣告結束／切換後偵測到《LINE 散步趣》已登出或需重新登入，立即停止巡邏！")
+                    stop("偵測到《LINE 散步趣》已登出／需重新登入，自動停止巡邏")
+                    return
+                }
                 if (res.label == "廣告未成功啟動") {
-                    appendLog("[提示] 廣告未成功啟動或無廣告庫存，重試當前分頁")
-                    emptyTicksOnCurrentTab = 0
-                    confirmedEmptyTabs.remove(currentTab)
-                    transitionTo(EngineState.IN_GAME_SCAN, "廣告未成功啟動，返回重試...", "[巡邏] 巡邏畫面目標中...")
+                    adWatchdogCooldownTicks = maxOf(adWatchdogCooldownTicks, 5)
+                    nonGameScreenTicks = 0
+                    emptyTicksOnCurrentTab = (emptyTicksOnCurrentTab + 1).coerceAtLeast(1)
+                    if (emptyTicksOnCurrentTab >= 3) {
+                        confirmedEmptyTabs.add(currentTab)
+                    } else {
+                        confirmedEmptyTabs.remove(currentTab)
+                    }
+                    appendLog("[提示] 廣告未成功啟動或無廣告庫存 (連續嘗試=$emptyTicksOnCurrentTab)，冷卻後重試安全巡邏")
+                    transitionTo(EngineState.IN_GAME_SCAN, "廣告未成功啟動，冷卻恢復巡邏...", "[巡邏] 巡邏畫面目標中...")
                     return
                 }
                 if (res.label == "已點擊彈窗 [取消]") {

@@ -1262,6 +1262,73 @@ class OcrRecognizer {
         return null
     }
 
+    /**
+     * 偵測《LINE 散步趣》是否處於已登出、工作階段失效或 LINE 帳號登入／授權畫面。
+     * 若為第三方廣告容器（例如 Facebook/瀏覽器網頁內的登入按鈕）或含廣告特徵、遊戲主畫面/子視窗特徵時，嚴格排除。
+     */
+    fun isLoggedOutOrLoginScreen(
+        items: List<OcrItem>,
+        fgPkg: String?,
+        screenHeight: Int = 0
+    ): Boolean {
+        if (items.isEmpty()) return false
+        if (fgPkg != null && fgPkg != "com.linecorp.LGWKTW" && fgPkg != "jp.naver.line.android") {
+            return false
+        }
+
+        val normalizedList = items.map { it.text.replace(" ", "").trim() }.filter { it.isNotEmpty() }
+        val joined = normalizedList.joinToString("\n")
+        val lowerJoined = joined.lowercase()
+
+        // 排除任何廣告畫面特徵（如 Meta Preview 的 IHG 網頁「登入 / 加入」按鈕、Google Play、倒數計時）
+        val hasAdMarkers = AD_LOGIN_GUARD_EXCLUDE_KEYWORDS.any { lowerJoined.contains(it) }
+        if (hasAdMarkers) return false
+        if (screenHeight > 0 && detectAdCountdownSeconds(items, screenHeight) != null) {
+            return false
+        }
+
+        // 排除正常《LINE 散步趣》主畫面與遊戲內子彈窗
+        val topTabCount = listOf("首頁", "步數", "時間", "遊戲").count { tab ->
+            normalizedList.any { it == tab || (it.length <= 4 && it.contains(tab)) }
+        }
+        val bottomNavCount = listOf("集點", "好友", "使用", "精選").count { nav ->
+            normalizedList.any { it == nav || (it.length <= 4 && it.contains(nav)) }
+        }
+        if (topTabCount >= 2 || bottomNavCount >= 2) return false
+
+        val hasGameDialogMarkers = listOf(
+            "抽抽樂", "每日賓果", "好友清單", "贈送金幣", "接收禮物",
+            "跳過廣告", "紅利獲得", "獲得票券", "立即開啟"
+        ).any { joined.contains(it) }
+        if (hasGameDialogMarkers) return false
+
+        // 1. 明確的 LINE 散步趣登出 / LINE 帳號登入字樣
+        if (LOGGED_OUT_STRONG_KEYWORDS.any { lowerJoined.contains(it) }) {
+            return true
+        }
+
+        // 2. 跳轉至 LINE 主程式 (jp.naver.line.android) 的 OAuth 登入／授權確認畫面
+        if (fgPkg == "jp.naver.line.android") {
+            val mentionsApp = lowerJoined.contains("散步趣") || lowerJoined.contains("linewalk") || lowerJoined.contains("lgwktw")
+            val hasAuthAction = listOf("登入", "許可", "同意", "連動").any { lowerJoined.contains(it) }
+            if (mentionsApp && hasAuthAction) return true
+        }
+
+        // 3. 散步趣 onboarding / 登入組合畫面（分開辨識時的補齊）
+        val hasBrand = lowerJoined.contains("散步趣") || lowerJoined.contains("linewalk") ||
+            normalizedList.any { it.equals("LINE", ignoreCase = true) || it.contains("LINE帳號") }
+        val hasLoginButton = normalizedList.any { t ->
+            t == "登入" || t == "立即登入" || t == "開始登入" || t == "帳號登入" ||
+                t == "LINE登入" || t == "重新登入" ||
+                (t.length <= 12 && (t.contains("帳號登入") || t.contains("重新登入")))
+        }
+        if (hasBrand && hasLoginButton && items.size <= 16) {
+            return true
+        }
+
+        return false
+    }
+
     companion object {
         private const val TAG = "OcrRecognizer"
 
@@ -1562,6 +1629,53 @@ class OcrRecognizer {
             "Reward earned",
             "リワードを獲得しました",
             "報酬を獲得しました"
+        )
+
+        val AD_LOGIN_GUARD_EXCLUDE_KEYWORDS = listOf(
+            "ads served",
+            "preview of",
+            "google play",
+            "play store",
+            "sponsored",
+            "贊助",
+            "秒後可獲獎勵",
+            "立即下載",
+            "立即安裝",
+            "安裝",
+            "獲得獎勵",
+            "not interested",
+            "interested",
+            "pangle",
+            "vungle",
+            "applovin",
+            "unity ads",
+            "inmobi",
+            "mintegral",
+            "liftoff",
+            "adchoices"
+        )
+
+        val LOGGED_OUT_STRONG_KEYWORDS = listOf(
+            "使用line帳號登入",
+            "以line帳號登入",
+            "透過line帳號登入",
+            "line帳號登入",
+            "使用line登入",
+            "使用line帳號開始",
+            "loginwithline",
+            "signinwithline",
+            "continuewithline",
+            "帳號已登出",
+            "您已登出",
+            "已被登出",
+            "請重新登入",
+            "需要重新登入",
+            "登入狀態已失效",
+            "登入已失效",
+            "登入已過期",
+            "工作階段已過期",
+            "無法驗證登入",
+            "無法取得登入資訊"
         )
     }
 }

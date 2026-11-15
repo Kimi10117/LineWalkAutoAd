@@ -669,6 +669,9 @@ class AdCloserHandler(
             val hasActiveBadgeClaim = badgeBtn != null &&
                 !ocrRecognizer.isAreaInCooldown(ocrItems, badgeBtn.bounds.top - btnCheckMargin, badgeBtn.bounds.bottom + (sh * 0.06f).toInt())
 
+            if (ocrRecognizer.isLoggedOutOrLoginScreen(ocrItems, fgPkg, sh)) {
+                return AdStepResult.ReturnedToGame(null, "偵測到LINE散步趣已登出")
+            }
             if (hasActivePinkClaim || hasActiveBadgeClaim) {
                 if (elapsedSec >= 3) {
                     return AdStepResult.ReturnedToGame(null, "廣告未成功啟動")
@@ -686,6 +689,9 @@ class AdCloserHandler(
         // 1) 廣告確實已經播放過 (hasAdActuallyShown == true) 且已過至少 3 秒 -> 正常完成廣告並回到散步趣介面
         // 2) 若廣告點擊後完全未啟動 (hasAdActuallyShown == false)，在未滿 4 秒前保持靜候，嚴禁在第 1 秒誤判回到遊戲！
         // 3) 若超過 4 秒畫面仍完全是遊戲畫面且從未出現過廣告特徵 -> 判定為廣告未啟動/無庫存，安全退出且不累計完成次數
+        if (ocrRecognizer.isLoggedOutOrLoginScreen(ocrItems, fgPkg, sh)) {
+            return AdStepResult.ReturnedToGame(null, "偵測到LINE散步趣已登出")
+        }
         if (isGameVisible) {
             if (hasAdActuallyShown && elapsedSec >= 3) {
                 return AdStepResult.ReturnedToGame(null, "已回到散步趣介面")
@@ -1047,17 +1053,19 @@ class AdCloserHandler(
                 t.contains("1/") || t.contains("/3") || t.contains("1 of")
             }) && !hasGooglePlayOnScreen
 
-        val isMetaWebPreview = ocrItems.any { item ->
+        val previewTitleItem = ocrItems.firstOrNull { item ->
             val cy = item.bounds.centerY().toFloat() / sh
             val t = item.text
             (cy < 0.16f && (t.contains("Preview of", ignoreCase = true) || t.contains("Preview", ignoreCase = true) || t.contains("預覽"))) ||
-            t.contains("meganeichiba", ignoreCase = true)
+                t.contains("meganeichiba", ignoreCase = true)
         }
+        val isMetaWebPreview = previewTitleItem != null
 
         // 4C. 【全螢幕快轉/略過按鈕 (▶| 或 >>) 圖示偵測器】
         // 專門應對 Meta Audience Network 等影音廣告右上角的深色圓底高亮快轉略過鈕 (▶|)。
-        // 限制：非頂部白底 Sponsored 橫幅廣告，且單支廣告最多嘗試 2 次，杜絕在右上角連續空點 6~8 次！
+        // 限制：非頂部白底 Sponsored 橫幅廣告、非 Meta 網頁預覽（交由 4D 嚴格限制頂部標題列），且單支廣告最多嘗試 2 次！
         if (!isCurrentAdTopSponsored &&
+            !isMetaWebPreview &&
             fastForwardSkipClicks < 2 &&
             (isMetaAd || isAd || isGame || fgPkg == null) &&
             (elapsedSec >= 5 || rewardGrantedOcr != null) &&
@@ -1097,19 +1105,54 @@ class AdCloserHandler(
             }
         }
 
-        // 4D. 【Meta 網頁預覽 (Web Preview) 秒速關閉】
-        // 應對廣告跳轉或滑動觸發之內嵌網頁預覽層 (如 Preview of meganeichiba.com.tw 或 Trip.com)，優先點擊白叉 X
+        // 4D. 【Meta 網頁預覽 (Web Preview) 頂部標題列秒速關閉與防誤點隔離】
+        // 應對內嵌網頁預覽層（如 Preview of ihg.com）：
+        // 1) 嚴格鎖定頂部預覽標題列區域 (y <= previewHeaderMaxY, 約 <= 11.5% 螢幕高) 尋找真實 [▶|] 或幾何 X，
+        //    徹底杜絕誤點下方網頁卡片內的假 X / 「檢視」/ 語言橫幅「×」(例如 y=12.5%, 19.4%) 觸發三星瀏覽器；
+        // 2) 若無有效頂部關閉鈕或點擊未關閉，直接以 forceEscapeAdPackage=true 強制返回，連吞 2 次即 ForceBringGameToFront，
+        //    絕不穿透至 Step 7 / Step 8 / Step 8B！
         if (isMetaWebPreview) {
             hasAdActuallyShown = true
+            val previewHeaderMaxY = previewTitleItem?.let {
+                (it.bounds.bottom + (sh * 0.025f).toInt()).coerceIn((sh * 0.095f).toInt(), (sh * 0.115f).toInt())
+            } ?: (sh * 0.105f).toInt()
+
+            if (fastForwardSkipClicks < 4) {
+                val previewSkipMatch = templateMatcher.detectCornerFastForwardSkip(
+                    screenBitmap = screenBitmap,
+                    blacklistedCoord = { x, y ->
+                        y > previewHeaderMaxY ||
+                            isInvalidOrBlacklisted(x, y) ||
+                            isBlockedByCornerPillOrSurveyOcr(x, y, ocrItems, sw, sh)
+                    }
+                )
+                val hasStorePillNearSkip = previewSkipMatch != null && ocrItems.any { item ->
+                    val t = item.text
+                    (t.contains("Google Play", ignoreCase = true) || t.contains("Play Store", ignoreCase = true)) &&
+                        kotlin.math.abs(item.bounds.centerY() - previewSkipMatch.bounds.centerY()) <= (sh * 0.045f).toInt() &&
+                        kotlin.math.abs(item.bounds.centerX() - previewSkipMatch.bounds.centerX()) <= (sw * 0.28f).toInt()
+                }
+                if (previewSkipMatch != null && !hasStorePillNearSkip &&
+                    !isInvalidOrBlacklisted(previewSkipMatch.bounds.centerX(), previewSkipMatch.bounds.centerY())
+                ) {
+                    fastForwardSkipClicks++
+                    lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
+                    recordAndClick(service, previewSkipMatch.bounds, allowBlacklist = true, label = "Meta預覽略過鈕(▶|)")
+                    return AdStepResult.ClickedCloseOrSkip("Meta預覽略過鈕(▶|)", previewSkipMatch.bounds)
+                }
+            }
+
             val geoMatch = templateMatcher.detectCornerGeometricX(
                 screenBitmap = screenBitmap,
                 blacklistedCoord = { x, y ->
-                    isInvalidOrBlacklisted(x, y) || isBlockedByCornerPillOrSurveyOcr(x, y, ocrItems, sw, sh)
+                    y > previewHeaderMaxY ||
+                        isInvalidOrBlacklisted(x, y) ||
+                        isBlockedByCornerPillOrSurveyOcr(x, y, ocrItems, sw, sh)
                 },
                 isRelaxed = true,
                 includeLeftZone = !disableLeftCornerForCurrentAd
             )
-            if (geoMatch != null) {
+            if (geoMatch != null && geoMatch.bounds.centerY() <= previewHeaderMaxY) {
                 if (isInLeftCornerZone(geoMatch.bounds.centerX(), geoMatch.bounds.centerY())) {
                     lastLeftCornerClickTimeMs = System.currentTimeMillis()
                 }
@@ -1117,19 +1160,25 @@ class AdCloserHandler(
                 recordAndClick(service, geoMatch.bounds, allowBlacklist = true, label = "Meta預覽關閉(幾何X)")
                 return AdStepResult.ClickedCloseOrSkip("Meta預覽關閉(幾何X)", geoMatch.bounds)
             }
-            // 廢除容易誤觸『以外部瀏覽器開啟』之右上角盲點熱區！
-            // 若為網頁預覽層且畫面無幾何 X，播放達 5 秒或已有重定向紀錄時直接發送安全返回鍵關閉預覽層
+
             if (elapsedSec >= 5 || redirectCount > 0) {
                 val now = System.currentTimeMillis()
                 if (now - lastBackActionTimeMs >= 2500L) {
+                    if (watchdogForceBackAttempts >= 2 || elapsedSec >= config.maxAdWaitSeconds) {
+                        lastBackActionTimeMs = now
+                        val reason = if (elapsedSec >= config.maxAdWaitSeconds) "META_PREVIEW_TIMEOUT" else "META_PREVIEW_STUCK"
+                        return AdStepResult.ForceBringGameToFront(elapsedSec, fgPkg ?: "com.facebook.katana", reason)
+                    }
+                    watchdogForceBackAttempts++
                     lastBackActionTimeMs = now
-                    if (service.safeNavigateBack(allowInGame = false)) {
-                        return AdStepResult.WatchdogBackTriggered(elapsedSec, "Meta預覽安全返回鍵")
+                    if (service.safeNavigateBack(minIntervalMs = 300L, allowInGame = false, forceEscapeAdPackage = true)) {
+                        return AdStepResult.WatchdogBackTriggered(elapsedSec, "Meta預覽強制返回鍵")
                     } else {
-                        logThrottledBackReject(service, "Meta預覽安全返回鍵")
+                        logThrottledBackReject(service, "Meta預覽強制返回鍵")
                     }
                 }
             }
+            return AdStepResult.ScanningAd(elapsedSec)
         }
 
         // 6. 第一層辨識：檢查無障礙節點樹是否有一般廣告關閉節點 (非略過按鈕，如頂部角落 X 節點)
