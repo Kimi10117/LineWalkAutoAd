@@ -12,6 +12,7 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
 import com.linewalk.autoad.config.AppConfig
+import com.linewalk.autoad.ui.MainActivity
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -47,14 +48,45 @@ class AutoAdAccessibilityService : AccessibilityService() {
         Log.i(TAG, "AutoAdAccessibilityService 已連線啟動")
     }
 
-    private fun isIgnoredOverlayPackage(pkg: String?): Boolean {
-        if (pkg.isNullOrBlank()) return false
-        val selfPkg = try {
+    private fun getSelfPackageName(): String? {
+        return try {
             packageName
         } catch (_: Exception) {
             null
         }
+    }
+
+    private fun isIgnoredOverlayPackage(pkg: String?): Boolean {
+        if (pkg.isNullOrBlank()) return false
+        val selfPkg = getSelfPackageName()
         return (selfPkg != null && pkg == selfPkg) || AppConfig.isPassiveOverlayUtilityPackage(pkg)
+    }
+
+    /**
+     * 辨識目前前景是否為《散步趣助手》自己的主設定 Activity (MainActivity)，
+     * 嚴格區分「設定主畫面 (TYPE_APPLICATION)」與「遊戲上層懸浮控制窗 (FloatingOverlayService)」。
+     */
+    internal fun isOwnMainActivityForeground(): Boolean {
+        if (MainActivity.isForegroundVisible) return true
+        val selfPkg = getSelfPackageName() ?: return false
+        val hasActiveOwnAppWindow = try {
+            windows.orEmpty().any { win ->
+                win.type == AccessibilityWindowInfo.TYPE_APPLICATION &&
+                    win.isActive &&
+                    win.root?.packageName?.toString() == selfPkg
+            }
+        } catch (_: Throwable) {
+            false
+        }
+        if (hasActiveOwnAppWindow) return true
+
+        return try {
+            val rootNode = rootInActiveWindow
+            rootNode?.packageName?.toString() == selfPkg &&
+                rootNode.window?.type == AccessibilityWindowInfo.TYPE_APPLICATION
+        } catch (_: Throwable) {
+            false
+        }
     }
 
     fun clearBackRejectReason() {
@@ -63,9 +95,16 @@ class AutoAdAccessibilityService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
-        val pkg = event.packageName?.toString()
-        if (!pkg.isNullOrBlank() && !isIgnoredOverlayPackage(pkg)) {
-            // 忽略我們自己的懸浮窗套件、SystemUI 與常駐動態島/輸入法覆蓋 App，紀錄底層真實前景 App 包名
+        val pkg = event.packageName?.toString() ?: return
+        val selfPkg = getSelfPackageName()
+        if (selfPkg != null && pkg == selfPkg &&
+            event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
+            event.className?.toString() == MainActivity::class.java.name
+        ) {
+            // MainActivity 主設定頁真正切回前景，保留自身包名讓自動化引擎立即暫停點擊
+            lastEventPackageName = selfPkg
+        } else if (!isIgnoredOverlayPackage(pkg)) {
+            // 忽略懸浮控制窗、SystemUI 與常駐動態島/輸入法覆蓋 App，紀錄底層真實前景 App 包名
             lastEventPackageName = pkg
         }
     }
@@ -86,36 +125,74 @@ class AutoAdAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * 取得目前前景視窗的 Package Name（優先採用實際應用程式視窗，排除動態島等常駐覆蓋套件）。
+     * 取得目前前景視窗的 Package Name（優先採用實際應用程式視窗，排除動態島與懸浮控制窗覆蓋；
+     * 若本助手主設定 Activity 位於前景，明確回傳自身套件名以啟動防誤觸保護）。
      */
     fun getForegroundPackageName(): String? {
-        val rootPkg = try {
-            rootInActiveWindow?.packageName?.toString()
+        val selfPkg = getSelfPackageName()
+        val rootNode = try {
+            rootInActiveWindow
         } catch (e: Exception) {
             null
         }
-        if (!rootPkg.isNullOrBlank() && !isIgnoredOverlayPackage(rootPkg)) {
-            return rootPkg
+        val rootPkg = rootNode?.packageName?.toString()
+        if (!rootPkg.isNullOrBlank()) {
+            if (selfPkg != null && rootPkg == selfPkg) {
+                val rootWinType = try {
+                    rootNode.window?.type
+                } catch (_: Throwable) {
+                    null
+                }
+                if (rootWinType == AccessibilityWindowInfo.TYPE_APPLICATION || MainActivity.isForegroundVisible) {
+                    return selfPkg
+                }
+            } else if (!AppConfig.isPassiveOverlayUtilityPackage(rootPkg)) {
+                return rootPkg
+            }
         }
 
         // 若活動視窗焦點暫被 DynamicSpot / 懸浮補助軟體佔據，改掃描 TYPE_APPLICATION 視窗尋找底層真實 App
-        val appWindowPkg = try {
-            val appWindows = windows
+        val appWindows = try {
+            windows
                 ?.filter { it.type == AccessibilityWindowInfo.TYPE_APPLICATION }
                 .orEmpty()
-            val prioritized = appWindows.sortedByDescending { if (it.isActive) 1 else 0 }
-            prioritized.firstNotNullOfOrNull { win ->
-                val pkg = win.root?.packageName?.toString()
-                pkg?.takeIf { !isIgnoredOverlayPackage(it) }
-            }
         } catch (_: Exception) {
-            null
+            emptyList()
         }
-        if (!appWindowPkg.isNullOrBlank()) {
-            return appWindowPkg
+        val prioritized = appWindows.sortedByDescending { if (it.isActive) 1 else 0 }
+        for (win in prioritized) {
+            val pkg = try {
+                win.root?.packageName?.toString()
+            } catch (_: Exception) {
+                null
+            }
+            if (pkg.isNullOrBlank()) continue
+            if (selfPkg != null && pkg == selfPkg) {
+                val otherAppExists = appWindows.any { other ->
+                    val otherPkg = try {
+                        other.root?.packageName?.toString()
+                    } catch (_: Exception) {
+                        null
+                    }
+                    !otherPkg.isNullOrBlank() && otherPkg != selfPkg
+                }
+                if (win.isActive || MainActivity.isForegroundVisible || !otherAppExists) {
+                    return selfPkg
+                }
+                continue
+            }
+            if (!AppConfig.isPassiveOverlayUtilityPackage(pkg)) {
+                return pkg
+            }
         }
 
-        return lastEventPackageName?.takeIf { !isIgnoredOverlayPackage(it) }
+        if (selfPkg != null && MainActivity.isForegroundVisible) {
+            return selfPkg
+        }
+
+        return lastEventPackageName?.takeIf { pkg ->
+            (selfPkg != null && pkg == selfPkg && MainActivity.isForegroundVisible) || !isIgnoredOverlayPackage(pkg)
+        }
     }
 
     /**
@@ -203,6 +280,11 @@ class AutoAdAccessibilityService : AccessibilityService() {
         allowTopSafeZone: Boolean = false
     ): Boolean =
         suspendCancellableCoroutine { cont ->
+            if (isOwnMainActivityForeground()) {
+                Log.w(TAG, "[防護] 前景為《散步趣助手》主設定畫面，拒絕派發自動點擊 ($x, $y)！")
+                if (cont.isActive) cont.resume(false)
+                return@suspendCancellableCoroutine
+            }
             val maxW = if (lastCapturedWidth > 0) lastCapturedWidth else resources.displayMetrics.widthPixels
             val maxH = if (lastCapturedHeight > 0) lastCapturedHeight else resources.displayMetrics.heightPixels
             val offsetX = if (jitterPx > 0) Random.nextInt(-jitterPx, jitterPx + 1) else 0
@@ -259,6 +341,11 @@ class AutoAdAccessibilityService : AccessibilityService() {
         endY: Float,
         durationMs: Long = 320L
     ): Boolean = suspendCancellableCoroutine { cont ->
+        if (isOwnMainActivityForeground()) {
+            Log.w(TAG, "[防護] 前景為《散步趣助手》主設定畫面，拒絕派發滑動手勢！")
+            if (cont.isActive) cont.resume(false)
+            return@suspendCancellableCoroutine
+        }
         val path = Path().apply {
             moveTo(startX, startY)
             lineTo(endX, endY)

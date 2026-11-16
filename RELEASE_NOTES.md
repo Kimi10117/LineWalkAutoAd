@@ -1,6 +1,40 @@
 # LINE 散步趣自動看廣告助手 (LineWalkAutoAd) 發布說明
 
 ## 版本資訊
+- 版本名稱：v1.15.89
+- 版本代碼：versionCode 122, versionName "1.15.89"
+- 發布類型：正式版本 (Release)
+
+---
+
+## 概述
+LineWalkAutoAd v1.15.89 針對 `v1.15.88` 實機掛機日誌回報（`22:18:31`–`00:09:48`，46 輪 / 83 次廣告完成）與前景防誤觸安全稽核結果，修復「本助手設定主畫面 (`MainActivity`) 位於前景時未受套件保護」之漏洞，並全面升級設定異動、點擊座標與非主畫面線索診斷日誌紀錄，協助後續快速追查異常原因。
+
+---
+
+## 本次重點更新 (v1.15.89)
+
+### 1. 本助手主設定畫面 (`MainActivity`) 前景保護與防誤觸攔截
+- **問題根因**：`AutoAdAccessibilityService.isIgnoredOverlayPackage` 與 `getForegroundPackageName` 將 `com.linewalk.autoad` 視為懸浮窗覆蓋層一併過濾，導致使用者或系統於運行期間切回「散步趣助手」設定畫面（`TYPE_APPLICATION`）時，仍回傳底層背景遊戲套件，進而使 `AutomationEngine.evaluateForegroundPackage` 的 `fgPkg == context.packageName` 防護失效、並存在誤觸全寬設定核取方塊之風險。
+- **修復方案**：
+  - 於 `MainActivity` 新增 `isForegroundVisible`（於 `onResume` / `onPause` / `onDestroy` 同步更新）並串接 `engine.onMainActivityResumedWhileRunning()`。
+  - 更新 `AutoAdAccessibilityService.getForegroundPackageName`、`onAccessibilityEvent` 與 `isOwnMainActivityForeground`：嚴格區分 `MainActivity`（`TYPE_APPLICATION` 主視窗）與 `FloatingOverlayService`（懸浮視窗），當本助手主設定頁位於前景時明確回傳 `com.linewalk.autoad`，且於 `performClick` / `performSwipe` 最後閘道直接拒絕派發自動化點擊或滑動。
+  - 更新 `AutomationEngine.executeSingleTick`：當 `fgPkg == context.packageName` 時立刻暫停截圖與點擊，並節流紀錄 `[防護]` 狀態說明。
+
+### 2. 診斷日誌內容強化與子視窗廣告誤觸攔截 (`D3A`)
+- **設定可追溯紀錄 (`[設定]`)**：
+  - `AutomationEngine.start` 啟動當下立即寫入 `[設定] 巡邏啟動參數` 快照；[MainActivity.kt](file:///C:/Users/kimic/.gemini/antigravity/scratch/LineWalkAutoAd/app/src/main/java/com/linewalk/autoad/ui/MainActivity.kt) 所有任務核取方塊（1–9 及無廣告一般領取）、計時器與掃描間隔異動統一透過 `engine.recordSettingChange` 寫入 `[設定]` 時間軸（亦加入「僅看異常／狀態」過濾清單）。
+- **點擊座標與非主畫面卡頓線索**：
+  - 新增 `formatPointCoord` 共用格式（`@ (x, y | nx%, ny%)`），覆蓋主分頁目標點擊 (`[目標]`)、彈窗點擊 (`executePopupAction`)、領獎完成關閉 (`[完成]`)、任務綠色領取鈕及抽抽樂結果視窗關閉 (`[抽抽樂]`)。
+  - 非主畫面輪詢（`nonMainScreenIdleTicks >= 6` 與 Tier 4 逾時）及 `"廣告未成功啟動"` 提示補充當前 `pkg`、巡邏階段與精簡 OCR 摘要線索；`buildPhoneStateSnapshot` (`[狀態Snap]`) 新增 `selfFg=` 與 `tabs=` 欄位。
+- **子視窗 `D3A` 防誤切**：`handleInGameScan` `D3A` 比對 `hasPlayableOrStoreAdOcr` 時補齊 `&& !isAnySubDialog` 互斥條件，防止「每日賓果」等子視窗內建橫幅文字反覆觸發假跳轉。
+
+### 3. 驗證結果
+- 新增 `V1_15_89SimulationTest`（4 項回歸與實機情境測試），並通過 `V1_15_80` 至 `V1_15_89`、`UpdateCheckerTest` 及 M1/M2/M3 Python 壓力測試與正式版 `assembleRelease` 建置。
+
+---
+
+## 版本資訊 (歷史版本: v1.15.88)
 - 版本名稱：v1.15.88
 - 版本代碼：versionCode 121, versionName "1.15.88"
 - 發布類型：正式版本 (Release)

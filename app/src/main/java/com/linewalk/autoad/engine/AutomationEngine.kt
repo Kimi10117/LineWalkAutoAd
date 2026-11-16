@@ -17,6 +17,7 @@ import com.linewalk.autoad.tasks.MoveGaugeTask
 import com.linewalk.autoad.tasks.ReceiveGiftTask
 import com.linewalk.autoad.tasks.StepBottleTask
 import com.linewalk.autoad.ui.FloatingOverlayService
+import com.linewalk.autoad.ui.MainActivity
 import com.linewalk.autoad.vision.NodeInspector
 import com.linewalk.autoad.vision.OcrItem
 import com.linewalk.autoad.vision.OcrRecognizer
@@ -204,6 +205,7 @@ class AutomationEngine private constructor(private val context: Context) {
     internal var nonGameScreenTicks = 0
     internal var geoXConsecutiveClicks = 0
     private var externalAppTicks = 0
+    private var lastSelfForegroundLogMs: Long = 0L
     private var lastActiveGamePackage: String? = null
     private var legitSkipRedirectPkg: String? = null
     private var legitSkipRedirectStartMs: Long = 0L
@@ -349,6 +351,7 @@ class AutomationEngine private constructor(private val context: Context) {
         legitSkipRedirectPkg = null
         legitSkipRedirectStartMs = 0L
         lastLoggedBackRejectReason = null
+        lastSelfForegroundLogMs = 0L
         resetClickCircuitBreaker()
         inGameLinePromoRetryCount = 0
         popupRetryTicks = 0
@@ -402,6 +405,10 @@ class AutomationEngine private constructor(private val context: Context) {
             PatrolPhase.FRIEND_GIFT -> "好友送禮"
             PatrolPhase.COMPLETED -> "已完成"
         }
+
+        val startTasks = config.getEnabledTaskNames().ifEmpty { listOf("無") }.joinToString("、")
+        val startClaimNormal = if (config.claimNormalWhenNoAd) "開啟" else "關閉"
+        appendLog("[設定] 巡邏啟動參數：計時器=${config.maxAdWaitSeconds}s, 間隔=${config.loopIntervalMs}ms, 無廣告一般領取=$startClaimNormal, 啟用任務=[$startTasks]")
 
         transitionTo(
             newState = EngineState.IN_GAME_SCAN,
@@ -462,6 +469,26 @@ class AutomationEngine private constructor(private val context: Context) {
     }
 
     /**
+     * 記錄使用者或介面對設定項目之變更（含變更時巡邏是否運行中），協助後續診斷追蹤。
+     */
+    fun recordSettingChange(settingName: String, newValue: String) {
+        val runState = if (_uiStatus.value.isRunning) "運行中" else "待命"
+        appendLog("[設定] 「$settingName」已設為：$newValue（狀態=$runState）")
+    }
+
+    /**
+     * 當巡邏運行期間《散步趣助手》主設定畫面回到前景時，記錄防護通知供日誌追溯。
+     */
+    fun onMainActivityResumedWhileRunning() {
+        if (!_uiStatus.value.isRunning) return
+        val now = System.currentTimeMillis()
+        if (now - lastSelfForegroundLogMs >= 5000L) {
+            lastSelfForegroundLogMs = now
+            appendLog("[防護] 偵測到《散步趣助手》設定主畫面回到前景（巡邏運行中），已暫停手勢點擊以防誤觸設定")
+        }
+    }
+
+    /**
      * 動態解析使用者已安裝／偏好之《LINE 散步趣》套件名稱（支援台灣版 LGWKTW 與日版／國際版 LGWALK）。
      */
     internal fun resolvePreferredGamePackage(
@@ -504,7 +531,7 @@ class AutomationEngine private constructor(private val context: Context) {
         }
     }
 
-    private suspend fun executeSingleTick() {
+    internal suspend fun executeSingleTick() {
         val service = AutoAdAccessibilityService.instance.value
         if (service == null) {
             stop("無障礙服務已中斷")
@@ -573,10 +600,20 @@ class AutomationEngine private constructor(private val context: Context) {
             handleExternalAppGuard(service, fgPkg)
             return
         } else if (!guardDecision.regularClicksAllowed) {
-            updateDetail("[等待] 等待《LINE 散步趣》回到前景...", "[等待] 等待散步趣前景")
+            if (fgPkg == context.packageName) {
+                val now = System.currentTimeMillis()
+                if (now - lastSelfForegroundLogMs >= 8000L) {
+                    lastSelfForegroundLogMs = now
+                    appendLog("[防護] 前景為《散步趣助手》主畫面 ($fgPkg)，自動暫停掃描與點擊以防誤觸設定")
+                }
+                updateDetail("[等待] 位於助手主畫面，已暫停點擊保護設定...", "[等待] 保護設定暫停中")
+            } else {
+                updateDetail("[等待] 等待《LINE 散步趣》回到前景...", "[等待] 等待散步趣前景")
+            }
             return
         } else {
             externalAppTicks = 0
+            lastSelfForegroundLogMs = 0L
             legitSkipRedirectPkg = null
             legitSkipRedirectStartMs = 0L
             lastLoggedBackRejectReason = null
@@ -1116,7 +1153,7 @@ class AutomationEngine private constructor(private val context: Context) {
                 delay(600)
                 return
             }
-            appendLog("[完成] 點擊領獎完成彈窗: ${modalCloseBtn.first}")
+            appendLog("[完成] 點擊領獎完成彈窗: ${modalCloseBtn.first} ${formatPointCoord(modalCloseBtn.second, sw, sh)}")
             FloatingOverlayService.clickWithOverlayPassthrough(modalCloseBtn.second) {
                 service.clickRect(modalCloseBtn.second)
             }
@@ -1627,10 +1664,11 @@ class AutomationEngine private constructor(private val context: Context) {
         if (isGameScreen && !hasPlayableOrStoreAdOcr && adWatchdogCooldownTicks == 0) {
             adCloserHandler.clearRedirectMemory()
         }
-        if (adWatchdogCooldownTicks == 0 && (hasPlayableOrStoreAdOcr || (!isGameScreen && !isAnySubDialog && nonGameScreenTicks >= 2))) {
+        if (adWatchdogCooldownTicks == 0 && ((hasPlayableOrStoreAdOcr && !isAnySubDialog) || (!isGameScreen && !isAnySubDialog && nonGameScreenTicks >= 2))) {
             nonGameScreenTicks = 0
             geoXConsecutiveClicks = 0
-            appendLog("[廣告] 偵測到全螢幕廣告/可玩式廣告/商店宣傳頁，切換至廣告監控流程安全關閉！")
+            val adTriggerReason = if (hasPlayableOrStoreAdOcr) "OCR廣告/商店特徵" else "連續非遊戲畫面"
+            appendLog("[廣告] 偵測到全螢幕廣告/可玩式廣告/商店宣傳頁 ($adTriggerReason, pkg=${fgPkgNow ?: "unknown"})，切換至廣告監控流程安全關閉！")
             adCloserHandler.onEnterAdMode(preserveRedirectState = adCloserHandler.hasRecentRedirectWithin(45_000L))
             transitionTo(
                 EngineState.AD_WATCHING,
@@ -1715,7 +1753,13 @@ class AutomationEngine private constructor(private val context: Context) {
         // Tier 1: 週期性心跳日誌，防止 100 秒無聲空轉
         if (nonMainScreenIdleTicks % NON_MAIN_IDLE_HEARTBEAT_TICKS == 1) {
             val screenType = if (hasMainScreenMarkers) "具備主畫面特徵" else if (isGameScreen) "遊戲內畫面" else "未知畫面"
-            appendLog("[巡邏] 非主畫面輪詢中 ($screenType，當前【${currentTab.tabName}】，已等待 $nonMainScreenIdleTicks 個 Tick)...")
+            val clueSuffix = if (nonMainScreenIdleTicks >= NON_MAIN_IDLE_FALLBACK_TICKS) {
+                val digest = formatStagnationOcrDigest(ocrItems, sw, sh, maxItems = 5)
+                if (digest.isNotBlank()) " | pkg=${fgPkgNow ?: "unknown"} | OCR: $digest" else " | pkg=${fgPkgNow ?: "unknown"}"
+            } else {
+                ""
+            }
+            appendLog("[巡邏] 非主畫面輪詢中 ($screenType，當前【${currentTab.tabName}】，已等待 $nonMainScreenIdleTicks 個 Tick)$clueSuffix")
         }
 
         // Tier 2: 降級主畫面重測機制 (Degraded Retest Fallback)
@@ -1751,7 +1795,11 @@ class AutomationEngine private constructor(private val context: Context) {
                 handleMainScreenPatrol(service, screenBitmap, ocrItems, sw, sh)
                 return
             }
-            appendLog("[自癒] 輪詢達 $nonMainScreenIdleTicks 個 Tick 嚴重逾時，發送安全返回鍵嘗試拉回散步趣...")
+            appendLog("[自癒] 輪詢達 $nonMainScreenIdleTicks 個 Tick 嚴重逾時 (pkg=${fgPkgNow ?: "unknown"})，發送安全返回鍵嘗試拉回散步趣...")
+            val timeoutDigest = formatStagnationOcrDigest(ocrItems, sw, sh, maxItems = 5)
+            if (timeoutDigest.isNotBlank()) {
+                appendLog("[畫面線索] 非主畫面逾時 OCR: $timeoutDigest")
+            }
             service.safeNavigateBack(allowInGame = true)
             nonMainScreenIdleTicks = 0
             delay(500)
@@ -1958,7 +2006,7 @@ class AutomationEngine private constructor(private val context: Context) {
             }
             lotteryResultRewardWaitTicks = 0
             currentPhaseEmptyTicks = 0
-            appendLog("[抽獎]【抽抽樂結果】已完成看廣告獲票，點擊結果視窗 [關閉] 按鈕 (嘗試: $lotteryResultCloseAttempts)")
+            appendLog("[抽獎]【抽抽樂結果】已完成看廣告獲票，點擊結果視窗 [關閉] 按鈕 (嘗試: $lotteryResultCloseAttempts) ${formatPointCoord(resultCloseBtn, sw, sh)}")
             FloatingOverlayService.clickWithOverlayPassthrough(resultCloseBtn) {
                 service.clickRect(resultCloseBtn, allowTopSafeZone = true)
             }
@@ -2069,7 +2117,7 @@ class AutomationEngine private constructor(private val context: Context) {
         val claimBtn = missionTask.findClaimableMissionButton(screenBitmap, ocrItems)
         if (claimBtn != null) {
             currentPhaseEmptyTicks = 0
-            appendLog("[目標]【任務-$activeTab】點擊綠色「領取」按鈕！")
+            appendLog("[目標]【任務-$activeTab】點擊綠色「領取」按鈕 ${formatPointCoord(claimBtn, sw, sh)}")
             FloatingOverlayService.clickWithOverlayPassthrough(claimBtn) {
                 service.clickRect(claimBtn)
             }
@@ -2700,7 +2748,7 @@ class AutomationEngine private constructor(private val context: Context) {
                         confirmedEmptyTabs.remove(currentTab)
                         val newTaskCount = _uiStatus.value.tasksTriggeredCount + 1
                         _uiStatus.value = _uiStatus.value.copy(tasksTriggeredCount = newTaskCount)
-                        appendLog("[目標]【${currentTab.tabName}】點擊: ${target.targetLabel}")
+                        appendLog("[目標]【${currentTab.tabName}】點擊: ${target.targetLabel} ${formatPointCoord(target.bounds, sw, sh)}")
                         FloatingOverlayService.clickWithOverlayPassthrough(target.bounds) {
                             service.clickRect(target.bounds)
                         }
@@ -3378,7 +3426,7 @@ class AutomationEngine private constructor(private val context: Context) {
                 consecutiveWatchdogTimeouts = 0
                 val newCount = _uiStatus.value.adsCompletedCount + 1
                 _uiStatus.value = _uiStatus.value.copy(adsCompletedCount = newCount)
-                appendLog("[糖果] 偵測到可用糖果！點擊 [${action.label}] 直接跳過廣告！(累計 $newCount 次)")
+                appendLog("[糖果] 偵測到可用糖果！點擊 [${action.label}] 直接跳過廣告！(累計 $newCount 次) ${formatPointCoord(action.bounds)}")
                 FloatingOverlayService.clickWithOverlayPassthrough(action.bounds) {
                     service.clickRect(action.bounds)
                 }
@@ -3391,7 +3439,7 @@ class AutomationEngine private constructor(private val context: Context) {
             }
 
             is PopupActionTarget.WatchAd -> {
-                appendLog("[廣告] 點擊彈窗看廣告按鈕: ${action.label}")
+                appendLog("[廣告] 點擊彈窗看廣告按鈕: ${action.label} ${formatPointCoord(action.bounds)}")
                 FloatingOverlayService.clickWithOverlayPassthrough(action.bounds) {
                     service.clickRect(action.bounds)
                 }
@@ -3573,11 +3621,7 @@ class AutomationEngine private constructor(private val context: Context) {
                 if (res.bounds.isEmpty || res.sourceLabel.contains("返回鍵")) {
                     appendLog("[點擊] 執行關閉/略過動作: ${res.sourceLabel}")
                 } else {
-                    val cx = res.bounds.centerX()
-                    val cy = res.bounds.centerY()
-                    val nx = if (sw > 0) String.format(Locale.US, "%.1f", cx * 100f / sw) else "0.0"
-                    val ny = if (sh > 0) String.format(Locale.US, "%.1f", cy * 100f / sh) else "0.0"
-                    appendLog("[點擊] 點擊關閉/略過按鈕: ${res.sourceLabel} @ ($cx, $cy | ${nx}%, ${ny}%)")
+                    appendLog("[點擊] 點擊關閉/略過按鈕: ${res.sourceLabel} ${formatPointCoord(res.bounds, sw, sh)}")
                 }
                 updateDetail(
                     "[點擊] 已點擊 ${res.sourceLabel}，確認是否回到遊戲...",
@@ -3640,7 +3684,14 @@ class AutomationEngine private constructor(private val context: Context) {
                     } else {
                         confirmedEmptyTabs.remove(currentTab)
                     }
-                    appendLog("[提示] 廣告未成功啟動或無廣告庫存 (連續嘗試=$emptyTicksOnCurrentTab)，冷卻後重試安全巡邏")
+                    val fgNow = service.getForegroundPackageName() ?: "unknown"
+                    val clue = if (emptyTicksOnCurrentTab == 1 || emptyTicksOnCurrentTab % 3 == 0) {
+                        val d = formatStagnationOcrDigest(ocrItems, sw, sh, maxItems = 4)
+                        if (d.isNotBlank()) " | OCR: $d" else ""
+                    } else {
+                        ""
+                    }
+                    appendLog("[提示] 廣告未成功啟動或無廣告庫存 (連續嘗試=$emptyTicksOnCurrentTab, 階段=${currentPhase.name}, pkg=$fgNow)，冷卻後重試安全巡邏$clue")
                     transitionTo(EngineState.IN_GAME_SCAN, "廣告未成功啟動，冷卻恢復巡邏...", "[巡邏] 巡邏畫面目標中...")
                     return
                 }
@@ -4062,6 +4113,21 @@ class AutomationEngine private constructor(private val context: Context) {
     }
 
     /**
+     * 將點擊矩形中心格式化為易讀座標字串 (`@ (x, y | nx%, ny%)`)，便於日誌追蹤每次手勢落點。
+     */
+    internal fun formatPointCoord(
+        rect: Rect,
+        sw: Int = lastCapturedScreenWidth,
+        sh: Int = lastCapturedScreenHeight
+    ): String {
+        val cx = rect.centerX()
+        val cy = rect.centerY()
+        val nx = if (sw > 0) String.format(Locale.US, "%.1f", cx * 100f / sw) else "0.0"
+        val ny = if (sh > 0) String.format(Locale.US, "%.1f", cy * 100f / sh) else "0.0"
+        return "@ ($cx, $cy | ${nx}%, ${ny}%)"
+    }
+
+    /**
      * 將螢幕像素矩形格式化為 AI 友善診斷座標字串 (含絕對邊界、中心點與百分比座標)。
      */
     internal fun formatRectForLog(rect: Rect, sw: Int, sh: Int): String {
@@ -4159,7 +4225,8 @@ class AutomationEngine private constructor(private val context: Context) {
         val ui = _uiStatus.value
         val adFields = adCloserHandler.getDiagnosticsSnapshotFields()
         val lastAdLabel = adCloserHandler.getLastClickedAdLabel() ?: "none"
-        return "[狀態Snap] cause=$cause | pkg=$fgPkg | state=${ui.state.name} | round=$currentRound | phase=${currentPhase.name} | tab=${currentTab.name} | screen=${sw}x$sh | nav=$navMode | bounds=[${vp.effectiveLeftX}..${vp.effectiveRightX},${vp.effectiveTopY}..${vp.effectiveBottomY}] | backReject=$rejectReason(累計=$backRejectCount) | adClk=$lastAdLabel | $adFields"
+        val activeTabNames = tabPriorityOrder.filter { it.isEnabled(config) }.joinToString(",") { it.shortLabel }
+        return "[狀態Snap] cause=$cause | pkg=$fgPkg | state=${ui.state.name} | round=$currentRound | phase=${currentPhase.name} | tab=${currentTab.name} | screen=${sw}x$sh | nav=$navMode | bounds=[${vp.effectiveLeftX}..${vp.effectiveRightX},${vp.effectiveTopY}..${vp.effectiveBottomY}] | backReject=$rejectReason(累計=$backRejectCount) | adClk=$lastAdLabel | $adFields | selfFg=${MainActivity.isForegroundVisible} | tabs=$activeTabNames"
     }
 
     /**

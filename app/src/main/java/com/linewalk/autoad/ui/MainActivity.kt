@@ -17,6 +17,7 @@ import android.provider.MediaStore
 import android.provider.Settings
 import android.view.View
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.SeekBar
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
@@ -66,52 +67,58 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        isForegroundVisible = true
+        syncTaskCheckboxesFromConfig()
         syncRuntimeControlsFromConfig()
         refreshPermissionStatus()
+        engine.onMainActivityResumedWhileRunning()
+    }
+
+    override fun onPause() {
+        isForegroundVisible = false
+        super.onPause()
+    }
+
+    override fun onDestroy() {
+        isForegroundVisible = false
+        super.onDestroy()
+    }
+
+    private fun taskCheckboxBindings(): List<Triple<CheckBox, String, kotlin.reflect.KMutableProperty0<Boolean>>> {
+        val cfg = engine.config
+        return listOf(
+            Triple(binding.cbStepBottle, "4.【步數】", cfg::enableStepBottleTask),
+            Triple(binding.cbMoveGauge, "1.【移動】", cfg::enableMoveGaugeTask),
+            Triple(binding.cbIdleReward, "2.【時間】", cfg::enableIdleRewardTask),
+            Triple(binding.cbGachaTask, "3.【遊戲】", cfg::enableGachaTask),
+            Triple(binding.cbBingoTask, "5.【賓果】", cfg::enableBingoTask),
+            Triple(binding.cbLotteryTask, "6.【抽抽樂】", cfg::enableLotteryTask),
+            Triple(binding.cbDailyMissionTask, "7.【任務】", cfg::enableDailyMissionTask),
+            Triple(binding.cbFriendGiftTask, "8.【好友送禮】", cfg::enableFriendGiftTask),
+            Triple(binding.cbReceiveGiftTask, "9.【接收禮物】", cfg::enableReceiveGiftTask),
+            Triple(binding.cbClaimNormalWhenNoAd, "無廣告一般領取", cfg::claimNormalWhenNoAd)
+        )
+    }
+
+    private fun syncTaskCheckboxesFromConfig() {
+        for ((checkbox, _, prop) in taskCheckboxBindings()) {
+            val targetState = prop.get()
+            if (checkbox.isChecked != targetState) {
+                checkbox.isChecked = targetState
+            }
+        }
     }
 
     private fun setupTaskCheckboxes() {
-        val cfg = engine.config
-        binding.cbStepBottle.isChecked = cfg.enableStepBottleTask
-        binding.cbMoveGauge.isChecked = cfg.enableMoveGaugeTask
-        binding.cbIdleReward.isChecked = cfg.enableIdleRewardTask
-        binding.cbGachaTask.isChecked = cfg.enableGachaTask
-        binding.cbBingoTask.isChecked = cfg.enableBingoTask
-        binding.cbLotteryTask.isChecked = cfg.enableLotteryTask
-        binding.cbDailyMissionTask.isChecked = cfg.enableDailyMissionTask
-        binding.cbFriendGiftTask.isChecked = cfg.enableFriendGiftTask
-        binding.cbReceiveGiftTask.isChecked = cfg.enableReceiveGiftTask
-        binding.cbClaimNormalWhenNoAd.isChecked = cfg.claimNormalWhenNoAd
-
-        binding.cbStepBottle.setOnCheckedChangeListener { _, isChecked ->
-            cfg.enableStepBottleTask = isChecked
-        }
-        binding.cbMoveGauge.setOnCheckedChangeListener { _, isChecked ->
-            cfg.enableMoveGaugeTask = isChecked
-        }
-        binding.cbIdleReward.setOnCheckedChangeListener { _, isChecked ->
-            cfg.enableIdleRewardTask = isChecked
-        }
-        binding.cbGachaTask.setOnCheckedChangeListener { _, isChecked ->
-            cfg.enableGachaTask = isChecked
-        }
-        binding.cbBingoTask.setOnCheckedChangeListener { _, isChecked ->
-            cfg.enableBingoTask = isChecked
-        }
-        binding.cbLotteryTask.setOnCheckedChangeListener { _, isChecked ->
-            cfg.enableLotteryTask = isChecked
-        }
-        binding.cbDailyMissionTask.setOnCheckedChangeListener { _, isChecked ->
-            cfg.enableDailyMissionTask = isChecked
-        }
-        binding.cbFriendGiftTask.setOnCheckedChangeListener { _, isChecked ->
-            cfg.enableFriendGiftTask = isChecked
-        }
-        binding.cbReceiveGiftTask.setOnCheckedChangeListener { _, isChecked ->
-            cfg.enableReceiveGiftTask = isChecked
-        }
-        binding.cbClaimNormalWhenNoAd.setOnCheckedChangeListener { _, isChecked ->
-            cfg.claimNormalWhenNoAd = isChecked
+        for ((checkbox, label, prop) in taskCheckboxBindings()) {
+            checkbox.isChecked = prop.get()
+            checkbox.setOnCheckedChangeListener { _, isChecked ->
+                val prev = prop.get()
+                if (prev != isChecked) {
+                    prop.set(isChecked)
+                    engine.recordSettingChange(label, if (isChecked) "開啟" else "關閉")
+                }
+            }
         }
     }
 
@@ -135,20 +142,27 @@ class MainActivity : AppCompatActivity() {
                 val newSec = (MIN_AD_WAIT_SECONDS + (seekBar?.progress ?: 0))
                     .coerceIn(MIN_AD_WAIT_SECONDS, MAX_AD_WAIT_SECONDS)
                 cfg.maxAdWaitSeconds = newSec
+                engine.recordSettingChange("廣告強制退回計時器", "${newSec}s")
             }
         })
 
         binding.btnDecreaseAdWait.setOnClickListener {
             val nextSec = (cfg.maxAdWaitSeconds - AD_WAIT_STEP_SECONDS)
                 .coerceIn(MIN_AD_WAIT_SECONDS, MAX_AD_WAIT_SECONDS)
-            cfg.maxAdWaitSeconds = nextSec
+            if (cfg.maxAdWaitSeconds != nextSec) {
+                cfg.maxAdWaitSeconds = nextSec
+                engine.recordSettingChange("廣告強制退回計時器", "${nextSec}s")
+            }
             updateAdWaitControlsUi(nextSec)
         }
 
         binding.btnIncreaseAdWait.setOnClickListener {
             val nextSec = (cfg.maxAdWaitSeconds + AD_WAIT_STEP_SECONDS)
                 .coerceIn(MIN_AD_WAIT_SECONDS, MAX_AD_WAIT_SECONDS)
-            cfg.maxAdWaitSeconds = nextSec
+            if (cfg.maxAdWaitSeconds != nextSec) {
+                cfg.maxAdWaitSeconds = nextSec
+                engine.recordSettingChange("廣告強制退回計時器", "${nextSec}s")
+            }
             updateAdWaitControlsUi(nextSec)
         }
 
@@ -159,7 +173,10 @@ class MainActivity : AppCompatActivity() {
         )
         for ((button, intervalMs) in speedOptions) {
             button.setOnClickListener {
-                cfg.loopIntervalMs = intervalMs
+                if (cfg.loopIntervalMs != intervalMs) {
+                    cfg.loopIntervalMs = intervalMs
+                    engine.recordSettingChange("巡邏掃描間隔", "${intervalMs}ms")
+                }
                 updateSpeedButtonsUi(intervalMs)
             }
         }
@@ -461,13 +478,17 @@ class MainActivity : AppCompatActivity() {
     }
 
     companion object {
+        @Volatile
+        var isForegroundVisible: Boolean = false
+            internal set
+
         const val MIN_AD_WAIT_SECONDS = 40
         const val MAX_AD_WAIT_SECONDS = 90
         private const val AD_WAIT_STEP_SECONDS = 5
 
         private val IMPORTANT_LOG_KEYWORDS = listOf(
             "[錯誤]", "[警報]", "[逾時]", "[無庫存]", "[防護]", "[計時強退]",
-            "[狀態]", "[狀態Snap]", "[斷路器]", "[任務斷路器]", "[抽獎斷路器]",
+            "[狀態]", "[狀態Snap]", "[設定]", "[斷路器]", "[任務斷路器]", "[抽獎斷路器]",
             "[自癒]", "[待命]", "[控制]", "[成功]", "[完成]",
             "失敗", "異常", "遭拒"
         )
