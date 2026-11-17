@@ -1643,6 +1643,9 @@ class AutomationEngine private constructor(private val context: Context) {
                 t.contains("インストール") ||
                 t.contains("立即观看") ||
                 t.contains("立即觀看") ||
+                t.contains("立即購買") ||
+                t.contains("coupang", ignoreCase = true) ||
+                t.contains("酷澎") ||
                 t.contains("youtu.be", ignoreCase = true) ||
                 t.contains("youtube.com", ignoreCase = true) ||
                 OcrRecognizer.AD_REWARD_GRANTED_KEYWORDS.any { kw -> t.contains(kw, ignoreCase = true) } ||
@@ -1669,7 +1672,7 @@ class AutomationEngine private constructor(private val context: Context) {
             geoXConsecutiveClicks = 0
             val adTriggerReason = if (hasPlayableOrStoreAdOcr) "OCR廣告/商店特徵" else "連續非遊戲畫面"
             appendLog("[廣告] 偵測到全螢幕廣告/可玩式廣告/商店宣傳頁 ($adTriggerReason, pkg=${fgPkgNow ?: "unknown"})，切換至廣告監控流程安全關閉！")
-            adCloserHandler.onEnterAdMode(preserveRedirectState = adCloserHandler.hasRecentRedirectWithin(45_000L))
+            adCloserHandler.onEnterAdMode(preserveRedirectState = adCloserHandler.hasRecentRedirectWithin(180_000L))
             transitionTo(
                 EngineState.AD_WATCHING,
                 "偵測到廣告/宣傳視窗，安全等待與關閉中...",
@@ -3345,6 +3348,9 @@ class AutomationEngine private constructor(private val context: Context) {
                 t.contains("連勝中") ||
                 t.contains("立即观看") ||
                 t.contains("立即觀看") ||
+                t.contains("立即購買") ||
+                t.contains("coupang", ignoreCase = true) ||
+                t.contains("酷澎") ||
                 t.contains("youtu.be", ignoreCase = true) ||
                 t.contains("youtube.com", ignoreCase = true) ||
                 OcrRecognizer.AD_REWARD_GRANTED_KEYWORDS.any { kw -> t.contains(kw, ignoreCase = true) }
@@ -3496,20 +3502,20 @@ class AutomationEngine private constructor(private val context: Context) {
             } else if (hasVerify2 || hasVerifyBmp) {
                 appendLog("[計時強退] CLEAR_TOP 後仍停留在頑固內嵌廣告，立即升級 Level 2 CLEAR_TASK ($targetGamePkg) 重建主任務！")
                 service.pressHome()
-                delay(450)
+                delay(700)
                 service.forceResetAppTaskToFront(targetGamePkg, clearTask = true)
                 delay(2200)
-                adWatchdogCooldownTicks = 8
+                adWatchdogCooldownTicks = 3
             } else {
-                adWatchdogCooldownTicks = 4
+                adWatchdogCooldownTicks = 3
             }
         } else {
             appendLog("[計時強退] 連續第 $consecutiveWatchdogTimeouts 次逾時（或無截圖回傳），直接執行 Level 2 CLEAR_TASK ($targetGamePkg) 重建主任務！")
             service.pressHome()
-            delay(450)
+            delay(700)
             service.forceResetAppTaskToFront(targetGamePkg, clearTask = true)
             delay(2200)
-            adWatchdogCooldownTicks = 8
+            adWatchdogCooldownTicks = 3
         }
     }
 

@@ -513,21 +513,25 @@ class AutoAdAccessibilityService : AccessibilityService() {
         val candidates = listOf(targetPackage, "com.linecorp.LGWKTW", "com.linecorp.LGWALK")
         for (pkg in candidates) {
             try {
-                val intent = packageManager.getLaunchIntentForPackage(pkg)?.apply {
-                    flags = if (clearTask) {
-                        android.content.Intent.FLAG_ACTIVITY_NEW_TASK or
-                            android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK
-                    } else {
-                        android.content.Intent.FLAG_ACTIVITY_NEW_TASK or
-                            android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                            android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP or
-                            android.content.Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED
+                val baseIntent = packageManager.getLaunchIntentForPackage(pkg) ?: continue
+                val restartComponent = baseIntent.component
+                val intent = if (clearTask && restartComponent != null) {
+                    android.content.Intent.makeRestartActivityTask(restartComponent)
+                } else {
+                    baseIntent.apply {
+                        flags = if (clearTask) {
+                            android.content.Intent.FLAG_ACTIVITY_NEW_TASK or
+                                android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK
+                        } else {
+                            android.content.Intent.FLAG_ACTIVITY_NEW_TASK or
+                                android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                                android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                                android.content.Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED
+                        }
                     }
                 }
-                if (intent != null) {
-                    startActivity(intent)
-                    return true
-                }
+                startActivity(intent)
+                return true
             } catch (_: Exception) {
             }
         }

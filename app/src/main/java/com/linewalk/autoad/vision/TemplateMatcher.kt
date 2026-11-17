@@ -654,6 +654,30 @@ class TemplateMatcher {
      * 支援細線條 X（含 3x3 鄰域容錯）與深色圓底白 X / 淺色圓底黑 X。
      * 預設僅掃描畫面右上角 (x=75%~98%, y=4.2%~24%)，嚴格排除左上角靜音喇叭/贊助商圖示以杜絕誤判。
      */
+    /**
+     * 偵測右上角灰底／深色圓形白色 (X) 關閉按鈕（例如 Coupang 酷澎輪播卡片上小×下圓形白叉 (X)）。
+     * 複用免樣本幾何 (X) 掃描核心並限定為低色度單色圓底＋亮白叉，直接精準命中真實關閉圓鈕。
+     */
+    suspend fun detectCornerGrayCircleCloseX(
+        screenBitmap: Bitmap,
+        blacklistedCoord: ((Int, Int) -> Boolean)? = null
+    ): TemplateMatchResult? = withContext(Dispatchers.Default) {
+        val sw = screenBitmap.width
+        val sh = screenBitmap.height
+        val vp = ScreenViewportCalibrator.detectViewport(sw, sh, screenBitmap)
+        val statusBarSafeH = ScreenViewportCalibrator.getStatusBarSafeHeight(sw, sh, screenBitmap)
+        val searchZones = buildCornerSearchZones(sw, sh, vp, statusBarSafeH, includeLeftZone = false)
+        detectGeometricXInZones(
+            screenBitmap = screenBitmap,
+            searchZones = listOf(searchZones.last()),
+            vp = vp,
+            blacklistedCoord = blacklistedCoord,
+            isRelaxed = true,
+            skipZone0BingoBox = false,
+            circleBrightOnly = true
+        )
+    }
+
     suspend fun detectCornerGeometricX(
         screenBitmap: Bitmap,
         blacklistedCoord: ((Int, Int) -> Boolean)? = null,
@@ -663,28 +687,8 @@ class TemplateMatcher {
         val sw = screenBitmap.width
         val sh = screenBitmap.height
         val vp = ScreenViewportCalibrator.detectViewport(sw, sh, screenBitmap)
-        val ch = vp.contentHeight
         val statusBarSafeH = ScreenViewportCalibrator.getStatusBarSafeHeight(sw, sh, screenBitmap)
-
-        val topLimitY = max(vp.mapContentY(0.082f), statusBarSafeH + max(2, (ch * 0.012f).toInt()))
-        val searchZones = mutableListOf(
-            // 右上角 (廣告標準關閉鈕位置，收斂左側起點至 80% 避免誤判廣告創意內縮圖示 @ ~78%，並控制下緣使中心點止於 ~13.06% 以排除 13.5% 橫幅促銷美術圖)
-            Rect(vp.mapContentX(0.80f), topLimitY, vp.mapContentX(0.98f), vp.mapContentY(0.140f))
-        )
-        val rightUpperTopLimitY = max(vp.mapContentY(0.048f), max(1, (ch * 0.020f).toInt()))
-        val rightUpperBottomLimitY = max(vp.mapContentY(0.140f), topLimitY)
-        searchZones.add(Rect(vp.mapContentX(0.80f), rightUpperTopLimitY, vp.mapContentX(0.98f), rightUpperBottomLimitY))
-
-        if (includeLeftZone) {
-            // 左上角 (Meta Sponsored / CACO / 全比例左上角關閉鈕，收斂為 x in 2.0%..16.2%、y in 1.4%..14.0% 扣內縮安全距約 13.0%，避免誤點 13.5%~15.7% 橫幅圖示及 16.6% 廣告主專頁圖示)
-            val leftTopLimitY = max(vp.mapContentY(0.014f), max(1, (ch * 0.008f).toInt()))
-            val leftBottomLimitY = vp.mapContentY(0.140f)
-            if (vp.effectiveLeftX == 0 && vp.effectiveRightX == sw) {
-                searchZones.add(Rect((sw * 0.020f).toInt(), leftTopLimitY, (sw * 0.162f).toInt(), leftBottomLimitY))
-            } else {
-                searchZones.add(Rect(vp.mapContentX(0.020f), leftTopLimitY, vp.mapContentX(0.162f), leftBottomLimitY))
-            }
-        }
+        val searchZones = buildCornerSearchZones(sw, sh, vp, statusBarSafeH, includeLeftZone)
 
         detectGeometricXInZones(
             screenBitmap = screenBitmap,
@@ -697,6 +701,63 @@ class TemplateMatcher {
     }
 
     companion object {
+        internal fun resolveTopLetterboxSafeY(
+            sh: Int,
+            vp: ScreenViewportCalibrator.ViewportMetrics,
+            statusBarSafeH: Int
+        ): Int {
+            val ch = vp.contentHeight
+            val hasTopLetterbox = vp.effectiveTopY >= max(16, (sh * 0.015f).toInt())
+            return if (hasTopLetterbox) {
+                max(
+                    max(statusBarSafeH + 2, (sh * 0.020f).toInt()),
+                    vp.effectiveTopY + max(4, (ch * 0.004f).toInt())
+                )
+            } else {
+                max(vp.mapContentY(0.048f), max(1, (ch * 0.020f).toInt()))
+            }
+        }
+
+        private fun buildCornerSearchZones(
+            sw: Int,
+            sh: Int,
+            vp: ScreenViewportCalibrator.ViewportMetrics,
+            statusBarSafeH: Int,
+            includeLeftZone: Boolean
+        ): List<Rect> {
+            val ch = vp.contentHeight
+            val topLimitY = max(vp.mapContentY(0.082f), statusBarSafeH + max(2, (ch * 0.012f).toInt()))
+            val rightUpperTopLimitY = resolveTopLetterboxSafeY(sh, vp, statusBarSafeH)
+            // 若頂部存在黑邊 (effectiveTopY > 0)，限制搜尋下緣不得超過螢幕 14.0% 或卡片頂緣 + 8.5%，
+            // 避免捲動／輪播商品圖 (14.2%~14.9%) 遭 vp.mapContentY(0.140f) 下推誤掃！
+            val rightBottomMaxY = min(
+                vp.mapContentY(0.140f),
+                max((sh * 0.140f).toInt(), vp.effectiveTopY + (ch * 0.085f).toInt())
+            )
+            val rightUpperBottomLimitY = max(rightBottomMaxY, topLimitY)
+            val rightZoneMaxX = vp.mapContentX(0.992f)
+            val searchZones = mutableListOf(
+                // 右上角 (廣告標準關閉鈕位置，收斂左側起點至 80% 避免誤判廣告創意內縮圖示 @ ~78%，並嚴格控制下緣排除商品美術圖)
+                Rect(vp.mapContentX(0.80f), topLimitY, rightZoneMaxX, rightBottomMaxY),
+                Rect(vp.mapContentX(0.80f), rightUpperTopLimitY, rightZoneMaxX, rightUpperBottomLimitY)
+            )
+
+            if (includeLeftZone) {
+                // 左上角 (Meta Sponsored / CACO / 全比例左上角關閉鈕，收斂為 x in 2.0%..16.2%、y in 1.4%..14.0% 扣內縮安全距約 13.0%)
+                val leftTopLimitY = max(vp.mapContentY(0.014f), max(1, (ch * 0.008f).toInt()))
+                val leftBottomLimitY = min(
+                    vp.mapContentY(0.140f),
+                    max((sh * 0.140f).toInt(), vp.effectiveTopY + (ch * 0.085f).toInt())
+                )
+                if (vp.effectiveLeftX == 0 && vp.effectiveRightX == sw) {
+                    searchZones.add(Rect((sw * 0.020f).toInt(), leftTopLimitY, (sw * 0.162f).toInt(), leftBottomLimitY))
+                } else {
+                    searchZones.add(Rect(vp.mapContentX(0.020f), leftTopLimitY, vp.mapContentX(0.162f), leftBottomLimitY))
+                }
+            }
+            return searchZones
+        }
+
         /**
          * 共用免樣本幾何 (X) 交叉輪廓偵測核心，同時服務全螢幕廣告角落偵測與 LINE 內部宣傳廣告右上角關閉定位。
          */
@@ -711,7 +772,8 @@ class TemplateMatcher {
             blacklistedCoord: ((Int, Int) -> Boolean)? = null,
             isRelaxed: Boolean = false,
             skipZone0BingoBox: Boolean = true,
-            scaleRatio: Float = 0.018f
+            scaleRatio: Float = 0.018f,
+            circleBrightOnly: Boolean = false
         ): TemplateMatchResult? {
             val sw = screenBitmap.width
             val sh = screenBitmap.height
@@ -721,9 +783,19 @@ class TemplateMatcher {
             val rHalf = max(1, (r * 0.65f).toInt())
             val step = max(1, cw / 240)
             val tol = max(1, cw / 360)
+            val hasTopLetterbox = vp.effectiveTopY >= max(16, (sh * 0.015f).toInt())
+            val rightZoneMinTopY = if (hasTopLetterbox) {
+                vp.effectiveTopY + max(2, (ch * 0.004f).toInt())
+            } else {
+                max(vp.mapContentY(0.040f), max(1, (ch * 0.018f).toInt()))
+            }
 
             var bestCandidate: TemplateMatchResult? = null
-            var bestRawScore = if (isRelaxed) 58f else 82f
+            var bestRawScore = when {
+                circleBrightOnly -> 52f
+                isRelaxed -> 58f
+                else -> 82f
+            }
             val centerContrastMin = if (isRelaxed) 28f else 45f
             val contrastMin = if (isRelaxed) 40f else 55f
             val minArmContrastMin = if (isRelaxed) 20f else 35f
@@ -741,6 +813,14 @@ class TemplateMatcher {
                     return 0.299f * ((c shr 16) and 0xFF) +
                         0.587f * ((c shr 8) and 0xFF) +
                         0.114f * (c and 0xFF)
+                }
+
+                fun chroma(x: Int, y: Int): Int {
+                    val c = pixels[y * zw + x]
+                    val cr = (c shr 16) and 0xFF
+                    val cg = (c shr 8) and 0xFF
+                    val cb = c and 0xFF
+                    return max(cr, max(cg, cb)) - min(cr, min(cg, cb))
                 }
 
                 fun armLum(px: Int, py: Int, brightX: Boolean): Float {
@@ -781,7 +861,7 @@ class TemplateMatcher {
                                 continue
                             }
                         } else {
-                            if (absY - r < max(vp.mapContentY(0.040f), max(1, (ch * 0.018f).toInt()))) {
+                            if (absY - r < rightZoneMinTopY) {
                                 cx += step
                                 continue
                             }
@@ -797,11 +877,30 @@ class TemplateMatcher {
                                 abs(lLeft - cardMean) + abs(lRight - cardMean)
 
                             if (cardDiff <= 58f) {
-                                val isBrightX = cardMean < 150f
-
                                 val centerPixelLum = lum(cx, cy)
+                                val isNeutralCircleBg = cardDiff <= 18f &&
+                                    chroma(cx, cy - r) <= 24 &&
+                                    chroma(cx, cy + r) <= 24 &&
+                                    chroma(cx - r, cy) <= 24 &&
+                                    chroma(cx + r, cy) <= 24 &&
+                                    chroma(cx, cy) <= 24
+                                // 支援淺灰／中灰單色圓底白 (X) 按鈕 (cardMean ≈ 150..208，如 Coupang 圓形灰底 X)
+                                val isUniformMidGrayCircleBrightX = isNeutralCircleBg &&
+                                    cardMean in 120f..208f &&
+                                    centerPixelLum > cardMean
+                                if (circleBrightOnly && !(isNeutralCircleBg && cardMean in 45f..208f && centerPixelLum > cardMean)) {
+                                    cx += step
+                                    continue
+                                }
+                                val isBrightX = if (circleBrightOnly) {
+                                    true
+                                } else {
+                                    cardMean < 150f || isUniformMidGrayCircleBrightX
+                                }
+
                                 val centerContrast = if (isBrightX) centerPixelLum - cardMean else cardMean - centerPixelLum
-                                if (centerContrast < centerContrastMin) {
+                                val effCenterContrastMin = if (isUniformMidGrayCircleBrightX) 42f else centerContrastMin
+                                if (centerContrast < effCenterContrastMin) {
                                     cx += step
                                     continue
                                 }
@@ -814,7 +913,8 @@ class TemplateMatcher {
                                     max(abs(vTop - cardMean), abs(vBot - cardMean)),
                                     max(abs(vLeft - cardMean), abs(vRight - cardMean))
                                 )
-                                if (maxVGapDiff > 35f) {
+                                val effMaxVGap = if (isUniformMidGrayCircleBrightX || circleBrightOnly) 18f else 35f
+                                if (maxVGapDiff > effMaxVGap) {
                                     cx += step
                                     continue
                                 }
@@ -833,8 +933,11 @@ class TemplateMatcher {
                                     cardMean - max(cLum, max(max(d1, d2), max(d3, d4)))
                                 }
 
-                                if (contrast > contrastMin && minArmContrast > minArmContrastMin) {
-                                    val rawScore = contrast - (cardDiff * 0.5f)
+                                val effContrastMin = if (isUniformMidGrayCircleBrightX || circleBrightOnly) 54f else contrastMin
+                                val effMinArmMin = if (isUniformMidGrayCircleBrightX || circleBrightOnly) 42f else minArmContrastMin
+                                if (contrast > effContrastMin && minArmContrast > effMinArmMin) {
+                                    val circleBonus = if (isUniformMidGrayCircleBrightX && maxVGapDiff <= 15f) 20f else 0f
+                                    val rawScore = contrast + circleBonus - (cardDiff * 0.5f)
                                     if (rawScore > bestRawScore) {
                                         bestRawScore = rawScore
                                         bestCandidate = TemplateMatchResult(

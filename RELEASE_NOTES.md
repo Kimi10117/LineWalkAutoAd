@@ -1,6 +1,37 @@
 # LINE 散步趣自動看廣告助手 (LineWalkAutoAd) 發布說明
 
 ## 版本資訊
+- 版本名稱：v1.15.90
+- 版本代碼：versionCode 123, versionName "1.15.90"
+- 發布類型：正式版本 (Release)
+
+---
+
+## 概述
+LineWalkAutoAd v1.15.90 針對 `v1.15.89` 實機回報無法關閉的 Coupang 酷澎輪播卡片廣告（頂部雙重 X 圖示且誤觸商品區反覆跳轉三星瀏覽器達 24 次／逾時重入達 25 次）進行根因修復：強化頂部黑邊卡片幾何 `(X)` 邊界校準、原生支援中灰單色圓底白色 `(X)` 關閉按鈕、優先命中 Coupang 雙層真實圓形關閉鈕，並徹底修復 `clearAdSessionTimer()` 與過短時間窗導致重定向黑名單在逾時重進後遭清空的漏洞。
+
+---
+
+## 本次重點更新 (v1.15.90)
+
+### 1. 幾何 `(X)` 視口校準修復與中灰圓底白叉 `(X)` 偵測 (`TemplateMatcher`)
+- **解決頂部黑邊卡片雙重偏移與商品圖誤判**：當廣告卡片頂部存在黑色留白（如 `effectiveTopY ≈ 154px`），不再對 `rightUpperTopLimitY` 重複疊加 `0.048 * ch` 而漏看頂部雙層關閉鈕，同時將搜尋下緣鎖定於 `min(vp.mapContentY(0.140f), max(0.140f * sh, effectiveTopY + 0.085 * ch))`，徹底排除 `y = 14.2%~14.9%` 商品美術區（如 `(926, 393)`）誤觸與右緣裁切問題。
+- **原生支援中灰圓底亮白 `(X)` 關閉鈕**：新增 `isUniformMidGrayCircleBrightX` 與共用篩選模式 `detectCornerGrayCircleCloseX`，解除原本 `cardMean >= 150f` 一律視為深色叉叉的限制，精準識別低色度中灰圓底（`lum ≈ 120..208`）內嵌白色 `(X)`（如實機 Coupang `(978, 259 | 90.6%, 9.8%)`）。
+
+### 2. Coupang 酷澎雙層 `X` 優先策略與無重定向點緊縮黑名單半徑 (`AdCloserHandler`)
+- **Coupang 酷澎卡片直擊下方圓形 `(X)`**：於無障礙節點 (`Step 6`)、`OCR-角落[X]` (`Step 7A2`) 及幾何 `X` (`Step 8`) 辨識到 Coupang 廣告或曾點擊右上角頂端無效小 `×` 時，優先掃描並點擊正下方真正的圓形灰底 `(X)`（`酷澎圓形關閉(X)`）。
+- **快速封鎖無效小 `×` 且不吞噬鄰近真實圓鈕**：無效 `OCR-角落` 連點門檻由 4 次降至 2 次（已重定向廣告下 `GeoX` 亦縮短為 2 次）；對「未曾引發外部跳轉」之無效點擊採用緊縮黑名單半徑（`max(20.0, sw * 0.032)` 約 `34.5px`），避免封鎖上方假 `×` (`y ≈ 192`) 時連帶覆蓋下方僅距約 `65px` 的真實圓形 `(X)` (`y ≈ 259`)。
+
+### 3. 修復跨 Watchdog 逾時重進之黑名單遺失與任務重建 (`AdCloserHandler` / `AutomationEngine` / `AutoAdAccessibilityService`)
+- **保留跨逾時會期之重定向黑名單**：修復 `onEnterAdMode(preserveRedirectState = true)` 在 `clearAdSessionTimer()` 將 `adStartTimeMs` 歸零後誤清空 `redirectPointCounts`、`clickedHistory` 與 `blacklistedPoints` 的錯誤；並於 `AutomationEngine.handleInGameScan` `D3A` 將跨逾時保存視窗由 `45 秒` 延長至 `180 秒`，補入 Coupang OCR 特徵（`coupang`、`酷澎`、`立即購買`），僅在確認回到遊戲主畫面時清除記憶。
+- **主任務重建改善**：`AutoAdAccessibilityService.forceResetAppTaskToFront(clearTask = true)` 改用 `Intent.makeRestartActivityTask` 徹底重建目標主任務，並調降 Level 2 逾時後冷卻 ticks 至 `3`，縮短卡頓等待時間。
+
+### 4. 驗證結果
+- 新增 `V1_15_90SimulationTest`（4 項測試，含直接讀取 `local_archive/screenshots/` 真實 Coupang 截圖執行像素掃描與日誌重播），並通過 `V1_15_80` 至 `V1_15_90`（共 54 項單元測試）、`UpdateCheckerTest`、M1/M2/M3 Python 壓力測試與正式版 `assembleRelease` 建置。
+
+---
+
+## 歷史版本資訊 (v1.15.89)
 - 版本名稱：v1.15.89
 - 版本代碼：versionCode 122, versionName "1.15.89"
 - 發布類型：正式版本 (Release)

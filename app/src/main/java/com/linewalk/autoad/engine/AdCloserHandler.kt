@@ -79,6 +79,7 @@ class AdCloserHandler(
     private var linePromoCloseClicks: Int = 0
     private var lastLeftCornerClickTimeMs: Long = 0L
     private var lastRedirectReturnTimeMs: Long = 0L
+    private var lastBlacklistTimeMs: Long = 0L
     private var lastBackRejectLogTimeMs: Long = 0L
     private var lastLoggedRejectReason: String = ""
     private val redirectPointCounts = mutableListOf<Point>()
@@ -96,13 +97,13 @@ class AdCloserHandler(
 
     fun onEnterAdMode(preserveRedirectState: Boolean = false) {
         val now = System.currentTimeMillis()
-        if (!preserveRedirectState || adStartTimeMs == 0L || now - adStartTimeMs > 120_000L) {
+        val needFreshAttemptTimer = !preserveRedirectState || adStartTimeMs == 0L || now - adStartTimeMs > 120_000L
+        if (needFreshAttemptTimer) {
             adStartTimeMs = now
             socialLandingPageTicks = 0
             socialLandingPageTotalRecoveries = 0
             googlePlayPillClickCount = 0
             lastGooglePlayPillClickTimeMs = 0L
-            topRightStoreGateClicks = 0
             wasAdLoading = false
             hasAdActuallyShown = false
             adLoadingTicks = 0
@@ -120,19 +121,16 @@ class AdCloserHandler(
             fallbackCornerCycle = 0
             fastForwardSkipClicks = 0
             leftCornerGeoXClicks = 0
-            leftCornerRedirectCount = 0
             sponsoredTopLeftProbeCount = 0
             watchdogForceBackAttempts = 0
             swallowedEndCardBackAttempts = 0
             linePromoCloseClicks = 0
             lastLeftCornerClickTimeMs = 0L
-            lastRedirectReturnTimeMs = 0L
             lastBackRejectLogTimeMs = 0L
             lastLoggedRejectReason = ""
-            redirectPointCounts.clear()
-            clickedHistory.clear()
-            blacklistedPoints.clear()
         }
+        // 僅當完全進入新廣告（非逾時重試延續黑名單）時才清空重定向／黑名單記憶；
+        // 若 clearAdSessionTimer() 曾將 adStartTimeMs 歸零，preserveRedirectState=true 仍須完整保留已封鎖誤觸座標！
         if (!preserveRedirectState) {
             closeClickCount = 0
             adChoicesDismissCount = 0
@@ -140,13 +138,13 @@ class AdCloserHandler(
             topRightStoreGateClicks = 0
             hasRecentRedirect = false
             disableLeftCornerForCurrentAd = false
+            leftCornerRedirectCount = 0
             lastClickedAdLabel = null
-            sponsoredTopLeftProbeCount = 0
-            watchdogForceBackAttempts = 0
-            swallowedEndCardBackAttempts = 0
             lastRedirectReturnTimeMs = 0L
-            lastBackRejectLogTimeMs = 0L
-            lastLoggedRejectReason = ""
+            lastBlacklistTimeMs = 0L
+            redirectPointCounts.clear()
+            clickedHistory.clear()
+            blacklistedPoints.clear()
         }
     }
 
@@ -210,6 +208,7 @@ class AdCloserHandler(
 
     /** 將座標納入黑名單（以 16px 半徑去重，避免相同 OCR 座標重複塞滿快照與清單） */
     private fun addBlacklistPoint(pt: Point) {
+        lastBlacklistTimeMs = System.currentTimeMillis()
         val alreadyBlocked = blacklistedPoints.any { existing ->
             hypot((existing.x - pt.x).toDouble(), (existing.y - pt.y).toDouble()) < 16.0
         }
@@ -261,6 +260,7 @@ class AdCloserHandler(
         if (redirectCount <= 0 && blacklistedPoints.isEmpty() && topRightStoreGateClicks <= 0) return false
         val now = System.currentTimeMillis()
         return (lastRedirectReturnTimeMs > 0L && now - lastRedirectReturnTimeMs in 0L..windowMs) ||
+            (lastBlacklistTimeMs > 0L && now - lastBlacklistTimeMs in 0L..windowMs) ||
             (adStartTimeMs > 0L && now - adStartTimeMs in 0L..windowMs)
     }
 
@@ -268,6 +268,7 @@ class AdCloserHandler(
         redirectCount = 0
         topRightStoreGateClicks = 0
         lastRedirectReturnTimeMs = 0L
+        lastBlacklistTimeMs = 0L
         redirectPointCounts.clear()
         blacklistedPoints.clear()
     }
@@ -365,8 +366,14 @@ class AdCloserHandler(
             if (hitsTopRightRedirectPillStrip) return true
         }
 
+        val swBase = if (currentScreenWidth > 0) currentScreenWidth else 1080
+        val tightNoRedirectRadius = kotlin.math.max(20.0, swBase * 0.032)
         return blacklistedPoints.any { pt ->
-            hypot((pt.x - x).toDouble(), (pt.y - y).toDouble()) < radiusPx
+            val isRedirectBlocked = redirectPointCounts.any { rp ->
+                hypot((rp.x - pt.x).toDouble(), (rp.y - pt.y).toDouble()) < 24.0
+            }
+            val effectiveRadius = if (isRedirectBlocked) radiusPx else tightNoRedirectRadius
+            hypot((pt.x - x).toDouble(), (pt.y - y).toDouble()) < effectiveRadius
         }
     }
 
@@ -1181,9 +1188,30 @@ class AdCloserHandler(
             return AdStepResult.ScanningAd(elapsedSec)
         }
 
+        val isCoupangAd = ocrItems.any { item ->
+            val t = item.text.lowercase()
+            t.contains("coupang") || t.contains("酷澎") ||
+                (t.contains("立即購買") && ocrItems.any { other ->
+                    other.bounds.centerY() < sh * 0.16f && Regex("""-\d+%""").containsMatchIn(other.text)
+                })
+        }
+
         // 6. 第一層辨識：檢查無障礙節點樹是否有一般廣告關閉節點 (非略過按鈕，如頂部角落 X 節點)
         val closeNode = nodeInspector.findAdCloseNode(rootNode, sw, sh, ::isInvalidOrBlacklisted, isFullScreenAd = true)
         if (closeNode != null) {
+            if (isCoupangAd && closeNode.bounds.centerY() < (sh * 0.088f).toInt() && closeNode.bounds.centerX() > (sw * 0.78f).toInt()) {
+                val coupangCircle = templateMatcher.detectCornerGrayCircleCloseX(screenBitmap) { x, y ->
+                    y <= closeNode.bounds.centerY() + (sh * 0.012f).toInt() ||
+                        isInvalidOrBlacklisted(x, y) ||
+                        isBlockedByCornerPillOrSurveyOcr(x, y, ocrItems, sw, sh)
+                }
+                if (coupangCircle != null) {
+                    lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
+                    hasAdActuallyShown = true
+                    recordAndClick(service, coupangCircle.bounds, allowBlacklist = true, label = "酷澎圓形關閉(X)")
+                    return AdStepResult.ClickedCloseOrSkip("酷澎圓形關閉(X)", coupangCircle.bounds)
+                }
+            }
             lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
             recordAndClick(service, closeNode.bounds, label = closeNode.label)
             return AdStepResult.ClickedCloseOrSkip(closeNode.label, closeNode.bounds)
@@ -1215,6 +1243,20 @@ class AdCloserHandler(
             isInvalidOrBlacklisted(cx, cy) || isBlockedByCornerPillOrSurveyOcr(cx, cy, ocrItems, sw, sh)
         }
         if (cornerAsciiClose != null) {
+            // 若為 Coupang 酷澎廣告且上方小 × (y < 8.8% sh) 下方緊鄰真實圓形灰底 (X)，優先點擊下方圓形 (X)
+            if (isCoupangAd && cornerAsciiClose.bounds.centerY() < (sh * 0.088f).toInt() && cornerAsciiClose.bounds.centerX() > (sw * 0.78f).toInt()) {
+                val coupangCircle = templateMatcher.detectCornerGrayCircleCloseX(screenBitmap) { x, y ->
+                    y <= cornerAsciiClose.bounds.centerY() + (sh * 0.012f).toInt() ||
+                        isInvalidOrBlacklisted(x, y) ||
+                        isBlockedByCornerPillOrSurveyOcr(x, y, ocrItems, sw, sh)
+                }
+                if (coupangCircle != null) {
+                    lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
+                    hasAdActuallyShown = true
+                    recordAndClick(service, coupangCircle.bounds, allowBlacklist = true, label = "酷澎圓形關閉(X)")
+                    return AdStepResult.ClickedCloseOrSkip("酷澎圓形關閉(X)", coupangCircle.bounds)
+                }
+            }
             lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
             hasAdActuallyShown = true
             val cornerLabel = "OCR-角落[${cornerAsciiClose.text.trim()}]"
@@ -1236,13 +1278,27 @@ class AdCloserHandler(
         // 8. 第三層辨識：啟動「高精度免樣本幾何角落 X 偵測器」（現場框選取樣已全面移除）
         // 全面支援右上角與左上角幾何 (X) 偵測（解決 CACO 雙11 等左上角白底黑邊圓形 (X) 廣告與 Meta 左上角 (X) 廣告）！
         val noActiveCountdown = remainingSec == null || remainingSec <= 1
-        val shouldCheckGeoX = if (isMetaAd) {
+        val shouldCheckGeoX = if (isMetaAd || isCoupangAd) {
             elapsedSec >= 5 || noActiveCountdown || rewardGrantedOcr != null
         } else {
             (elapsedSec >= 6 && noActiveCountdown) || elapsedSec >= 10 || rewardGrantedOcr != null
         }
 
         if (shouldCheckGeoX) {
+            if (isCoupangAd || clickedHistory.any { it.x > (sw * 0.78f).toInt() && it.y < (sh * 0.088f).toInt() }) {
+                val coupangCircle = templateMatcher.detectCornerGrayCircleCloseX(
+                    screenBitmap = screenBitmap,
+                    blacklistedCoord = { x, y ->
+                        isInvalidOrBlacklisted(x, y) || isBlockedByCornerPillOrSurveyOcr(x, y, ocrItems, sw, sh)
+                    }
+                )
+                if (coupangCircle != null) {
+                    lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
+                    hasAdActuallyShown = true
+                    recordAndClick(service, coupangCircle.bounds, allowBlacklist = true, label = "酷澎圓形關閉(X)")
+                    return AdStepResult.ClickedCloseOrSkip("酷澎圓形關閉(X)", coupangCircle.bounds)
+                }
+            }
             val isRelaxed = elapsedSec >= 14 || rewardGrantedOcr != null || isCurrentAdTopSponsored
             // 左上角掃描防護：若本支廣告已累積 2 次左上角外部跳轉 (永久封鎖)，或非 Meta 廣告已嘗試 2 次左上角幾何 X 仍未關閉，封鎖左上角；並加入冷卻防止連擊
             val leftCornerAllowedForAd = !disableLeftCornerForCurrentAd && (isMetaAd || leftCornerGeoXClicks < 2)
@@ -1665,6 +1721,7 @@ class AdCloserHandler(
     private fun isGeoXTarget(label: String?): Boolean {
         return label == "左上角幾何X" ||
             label == "右上角幾何X" ||
+            label == "酷澎圓形關閉(X)" ||
             label == "右上角[Google Play ×]關閉鈕" ||
             label == "Meta預覽關閉(幾何X)" ||
             label == "Sponsored頂部左上角X"
@@ -1802,10 +1859,16 @@ class AdCloserHandler(
         clickedHistory.add(pt)
         val nearbyClicks = countNearbyPoints(clickedHistory, pt)
         val isGeoX = isGeoXTarget(effectiveLabel)
+        val isCornerOcrX = effectiveLabel?.startsWith("OCR-角落") == true
         val isHighConfidence = isHighConfidenceAdTarget(effectiveLabel)
         if (allowBlacklist) {
-            // 幾何 X 同區連點 3 次無效（例如誤中廣告圖示）即納入黑名單，避免 80+ 次無效空點；非高可信目標保留 4 次
-            if ((isGeoX && nearbyClicks >= 3) || (!isHighConfidence && nearbyClicks >= 4)) {
+            // OCR-角落[X] 若連點 2 次仍無效（如上方裝飾 ×），立即封鎖以免遮蔽下方真正圓形 (X)；
+            // 幾何 X 在已發生過外部重定向時亦縮短為 2 次即封鎖，否則保留 3 次；其餘非高可信目標保留 4 次
+            val geoLimit = if (redirectCount > 0) 2 else 3
+            if ((isCornerOcrX && nearbyClicks >= 2) ||
+                (isGeoX && nearbyClicks >= geoLimit) ||
+                (!isHighConfidence && nearbyClicks >= 4)
+            ) {
                 addBlacklistPoint(pt)
             }
         }
