@@ -1162,7 +1162,11 @@ class OcrRecognizer {
             val t = item.text.replace(" ", "")
             t == "首頁" || t == "步數" || t == "時間" || t == "遊戲" || t == "移動" ||
                 t == "集點" || t == "好友" || t == "使用" || t == "精選" ||
-                t.contains("每日賓果") || t.contains("抽抽樂")
+                t.contains("每日賓果") || t.contains("抽抽樂") ||
+                t.contains("獲得票券") || t.contains("獲得金幣") ||
+                t.contains("GooglePlay", ignoreCase = true) ||
+                t.contains("立即下載") || t.contains("免費下載") ||
+                t.contains("Skip", ignoreCase = true)
         }
         if (hasGameOrDialogChrome) return false
 
@@ -1173,7 +1177,13 @@ class OcrRecognizer {
                 t.contains("深夜回顧") ||
                 t.contains("又是新的一天") ||
                 t.contains("滑動即可解鎖") ||
-                t.contains("輸入PIN碼")
+                t.contains("輸入PIN碼") ||
+                t.contains("請勿打擾") ||
+                t.contains("請勿打摄") ||
+                t.contains("睡眠模式") ||
+                t.contains("緊急電話") ||
+                t.contains("緊急通話") ||
+                t.contains("常亮螢幕")
         }
         if (hasStrongLockMarker) return true
 
@@ -1186,7 +1196,38 @@ class OcrRecognizer {
             t.contains("週一") || t.contains("週二") || t.contains("週三") ||
                 t.contains("週四") || t.contains("週五") || t.contains("週六") || t.contains("週日")
         }
-        return hasChargingEstimate && hasWeekday
+        if (hasChargingEstimate && hasWeekday) return true
+
+        val lockClockRegex = Regex("""^\d{1,2}:\d{2}$""")
+        val hasStandaloneClock = items.any { lockClockRegex.matches(it.text.trim()) }
+        if (items.size <= 5 && (hasWeekday || hasStandaloneClock)) {
+            val isAllLockStatusTokens = items.all { item ->
+                val t = item.text.replace(" ", "")
+                t.contains("週") || t.contains("星期") || t.contains("°") || t.contains("。") ||
+                    lockClockRegex.containsMatchIn(t) || t.contains("請勿打") || t.contains("開啟") ||
+                    t.contains("月") || t.contains("日") || t.length <= 3
+            }
+            if (isAllLockStatusTokens) return true
+        }
+        return false
+    }
+
+    /**
+     * 偵測《LINE 散步趣》啟動或重新載入之白底／綠底 Splash 過渡畫面（中央僅顯示「LINE 散步趣」Logo 文字）。
+     */
+    fun isLineWalkSplashOrLoadingScreen(items: List<OcrItem>, sh: Int): Boolean {
+        if (sh <= 0 || items.size !in 1..4) return false
+        val forbiddenKeywords = listOf("登入", "授權", "Google", "Play", "Skip", "下載", "安裝")
+        if (items.any { item -> forbiddenKeywords.any { kw -> item.text.contains(kw, ignoreCase = true) } }) {
+            return false
+        }
+        val minY = (sh * 0.30f).toInt()
+        val maxY = (sh * 0.75f).toInt()
+        return items.any { item ->
+            val compact = item.text.replace(" ", "")
+            item.bounds.centerY() in minY..maxY &&
+                (compact.equals("LINE散步趣", ignoreCase = true) || compact.equals("LINEWalk", ignoreCase = true))
+        }
     }
 
     /**
@@ -1205,15 +1246,15 @@ class OcrRecognizer {
         val candidates = items.filter { item ->
             if (isSystemTelemetryOcr(item.text)) return@filter false
             val trimmed = item.text.trim()
-            val isCornerXToken = trimmed.equals("X", ignoreCase = true) ||
-                trimmed == "✕" ||
-                trimmed == "✖" ||
-                trimmed == "×" ||
-                trimmed == "╳" ||
-                trimmed == "⊗" ||
-                trimmed == "ⓧ" ||
-                trimmed.equals("[X]", ignoreCase = true) ||
-                trimmed.equals("(X)", ignoreCase = true)
+            if (trimmed.length > 3) return@filter false
+            val core = trimmed.trim('(', ')', '[', ']', '{', '}', '•', '·', ' ')
+            val isCornerXToken = core.equals("X", ignoreCase = true) ||
+                core == "✕" ||
+                core == "✖" ||
+                core == "×" ||
+                core == "╳" ||
+                core == "⊗" ||
+                core == "ⓧ"
             if (!isCornerXToken) return@filter false
 
             val cx = item.bounds.centerX()

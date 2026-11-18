@@ -98,8 +98,12 @@ class NodeInspector {
                         val isExcluded = EXCLUDE_TEXTS.any {
                             text.contains(it, ignoreCase = true) || desc.contains(it, ignoreCase = true)
                         } || viewId.contains("adjoe")
+                        val isBareHostContainerClose = !isFullScreenAd &&
+                            viewId.endsWith("close_button_container") &&
+                            text.isEmpty() &&
+                            desc.isEmpty()
 
-                        if (!isCountingDown && !isExcluded && (idMatch || exactSymbolMatch || keywordMatch)) {
+                        if (!isCountingDown && !isExcluded && !isBareHostContainerClose && (idMatch || exactSymbolMatch || keywordMatch)) {
                             if (blacklistedCoord?.invoke(cx, cy) != true) {
                                 candidates.add(
                                     MatchedNode(

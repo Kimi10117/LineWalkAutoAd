@@ -207,6 +207,7 @@ class AutomationEngine private constructor(private val context: Context) {
     private var externalAppTicks = 0
     private var lastSelfForegroundLogMs: Long = 0L
     private var lastLockscreenStandbyLogMs: Long = 0L
+    private var lastLockscreenStandbyTimeMs: Long = 0L
     private var lastActiveGamePackage: String? = null
     private var legitSkipRedirectPkg: String? = null
     private var legitSkipRedirectStartMs: Long = 0L
@@ -354,6 +355,7 @@ class AutomationEngine private constructor(private val context: Context) {
         lastLoggedBackRejectReason = null
         lastSelfForegroundLogMs = 0L
         lastLockscreenStandbyLogMs = 0L
+        lastLockscreenStandbyTimeMs = 0L
         resetClickCircuitBreaker()
         inGameLinePromoRetryCount = 0
         popupRetryTicks = 0
@@ -449,6 +451,8 @@ class AutomationEngine private constructor(private val context: Context) {
         consecutiveNetworkErrorCount = 0
         consecutiveWatchdogTimeouts = 0
         inGameLinePromoRetryCount = 0
+        lastLockscreenStandbyLogMs = 0L
+        lastLockscreenStandbyTimeMs = 0L
         _uiStatus.value = _uiStatus.value.copy(
             isRunning = false,
             state = EngineState.IDLE,
@@ -540,6 +544,7 @@ class AutomationEngine private constructor(private val context: Context) {
         consecutiveWatchdogTimeouts = 0
         adCloserHandler.clearAdSessionTimer()
         val now = System.currentTimeMillis()
+        lastLockscreenStandbyTimeMs = now
         if (now - lastLockscreenStandbyLogMs >= 30_000L) {
             lastLockscreenStandbyLogMs = now
             appendLog("[待機] 偵測到螢幕鎖定或 Always-On Display 待機畫面 ($sourceLabel)，暫停巡邏與點擊，待解鎖後自動恢復...")
@@ -617,6 +622,11 @@ class AutomationEngine private constructor(private val context: Context) {
         )
 
         if (guardDecision.isExternal) {
+            val isLauncherFg = fgPkg != null && (fgPkg == "com.sec.android.app.launcher" || fgPkg.contains("launcher", ignoreCase = true))
+            if (isLauncherFg && System.currentTimeMillis() - lastLockscreenStandbyTimeMs in 1L..25_000L) {
+                pauseForLockscreenStandby("launcher-after-lockscreen")
+                return
+            }
             handleExternalAppGuard(service, fgPkg)
             return
         } else if (!guardDecision.regularClicksAllowed) {
@@ -1548,6 +1558,12 @@ class AutomationEngine private constructor(private val context: Context) {
                 (t.contains("使用") && !t.contains("條款") && t.length <= 4) ||
                 (t.contains("精選") && t.length <= 4)
             ))
+        }
+
+        if (!hasMainScreenMarkers && ocrRecognizer.isLineWalkSplashOrLoadingScreen(ocrItems, sh)) {
+            nonGameScreenTicks = 0
+            updateDetail("[等待] 散步趣啟動載入中，靜候主畫面...", "[等待] 遊戲載入中...")
+            return
         }
 
         // D1. 短字按鈕 OCR（跳過 / 略過 / 確認 / 確定 / 關閉，字數 <= 6，覆蓋到 y < 0.94f）
@@ -3771,7 +3787,9 @@ class AutomationEngine private constructor(private val context: Context) {
 
             is AdStepResult.WatchdogBackTriggered -> {
                 appendLog("[監控] 廣告等待 (${res.elapsedSec}s)：嘗試發送 ${res.actionLabel} 關閉廣告")
-                recordBackRejectIfAny(service, "AdCloserWatchdog(${res.elapsedSec}s)", screenBitmap, ocrItems)
+                if (res.actionLabel.contains("返回")) {
+                    recordBackRejectIfAny(service, "AdCloserWatchdog(${res.elapsedSec}s)", screenBitmap, ocrItems)
+                }
                 updateDetail(
                     "[監控] 嘗試 ${res.actionLabel} 關閉廣告 (${res.elapsedSec}s)...",
                     "[監控] 嘗試關閉 (${res.elapsedSec}s)..."

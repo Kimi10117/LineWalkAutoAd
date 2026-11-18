@@ -542,7 +542,12 @@ class AutoAdAccessibilityService : AccessibilityService() {
         return try {
             val km = getSystemService(android.app.KeyguardManager::class.java)
             val pm = getSystemService(android.os.PowerManager::class.java)
-            (km != null && km.isKeyguardLocked) || (pm != null && !pm.isInteractive)
+            val dm = getSystemService(android.hardware.display.DisplayManager::class.java)
+            val defaultDisplay = dm?.getDisplay(android.view.Display.DEFAULT_DISPLAY)
+            val isDisplayOffOrDoze = defaultDisplay != null && defaultDisplay.state != android.view.Display.STATE_ON
+            (km != null && (km.isKeyguardLocked || km.isDeviceLocked)) ||
+                (pm != null && !pm.isInteractive) ||
+                isDisplayOffOrDoze
         } catch (_: Throwable) {
             false
         }

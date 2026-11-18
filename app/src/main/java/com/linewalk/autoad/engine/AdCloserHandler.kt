@@ -129,17 +129,18 @@ class AdCloserHandler(
             lastBackRejectLogTimeMs = 0L
             lastLoggedRejectReason = ""
         }
-        // 僅當完全進入新廣告（非逾時重試延續黑名單）時才清空重定向／黑名單記憶；
-        // 若 clearAdSessionTimer() 曾將 adStartTimeMs 歸零，preserveRedirectState=true 仍須完整保留已封鎖誤觸座標！
+        // 每次進入 AD_WATCHING（含 Watchdog 重試重入）皆重置本輪動作與計數，避免殘留 redirectCount / closeClickCount
+        // 封鎖後續 Reveal Swipe、備援盲點或觸發連續 LATE_REDIRECT_BACK_SWALLOWED 強退；
+        // 當 preserveRedirectState = true 時，僅保留跨逾時座標封鎖紀錄 (blacklistedPoints / redirectPointCounts) 與左上角保護。
+        closeClickCount = 0
+        adChoicesDismissCount = 0
+        redirectCount = 0
+        topRightStoreGateClicks = 0
+        hasRecentRedirect = false
+        lastClickedAdLabel = null
         if (!preserveRedirectState) {
-            closeClickCount = 0
-            adChoicesDismissCount = 0
-            redirectCount = 0
-            topRightStoreGateClicks = 0
-            hasRecentRedirect = false
             disableLeftCornerForCurrentAd = false
             leftCornerRedirectCount = 0
-            lastClickedAdLabel = null
             lastRedirectReturnTimeMs = 0L
             lastBlacklistTimeMs = 0L
             redirectPointCounts.clear()
@@ -257,7 +258,7 @@ class AdCloserHandler(
     }
 
     fun hasRecentRedirectWithin(windowMs: Long): Boolean {
-        if (redirectCount <= 0 && blacklistedPoints.isEmpty() && topRightStoreGateClicks <= 0) return false
+        if (redirectCount <= 0 && redirectPointCounts.isEmpty() && blacklistedPoints.isEmpty() && topRightStoreGateClicks <= 0) return false
         val now = System.currentTimeMillis()
         return (lastRedirectReturnTimeMs > 0L && now - lastRedirectReturnTimeMs in 0L..windowMs) ||
             (lastBlacklistTimeMs > 0L && now - lastBlacklistTimeMs in 0L..windowMs) ||
@@ -698,13 +699,6 @@ class AdCloserHandler(
                     })
                 ) {
                     return AdStepResult.ReturnedToGame(null, "廣告未成功啟動")
-                } else if ((hasAdActuallyShown || closeClickCount > 0 || redirectCount > 0) && elapsedSec >= 3 && !isGameVisible &&
-                    ocrItems.any {
-                        val t = it.text.replace(" ", "")
-                        t.contains("紅利") || t.contains("取消") || t.contains("獲得票券") || t.contains("獲得金幣")
-                    }
-                ) {
-                    return AdStepResult.ReturnedToGame(null, "已回到散步趣介面")
                 }
             } else {
                 val cancelBtn = ocrRecognizer.findPopupCancelButton(screenBitmap, ocrItems, templateMatcher)
@@ -868,6 +862,9 @@ class AdCloserHandler(
             blacklistedCoord = ::isInvalidOrBlacklisted,
             isFullScreenAd = true
         )?.takeIf { node ->
+            if (isEarlyInertInmobiNode(node, elapsedSec)) {
+                return@takeIf false
+            }
             val txt = node.text?.toString().orEmpty()
             val desc = node.contentDesc?.toString().orEmpty()
             val vid = node.viewId?.toString().orEmpty()
@@ -1224,7 +1221,7 @@ class AdCloserHandler(
 
         // 6. 第一層辨識：檢查無障礙節點樹是否有一般廣告關閉節點 (非略過按鈕，如頂部角落 X 節點)
         val closeNode = nodeInspector.findAdCloseNode(rootNode, sw, sh, ::isInvalidOrBlacklisted, isFullScreenAd = true)
-        if (closeNode != null) {
+        if (closeNode != null && !isEarlyInertInmobiNode(closeNode, elapsedSec)) {
             if (isCoupangAd && closeNode.bounds.centerY() < (sh * 0.088f).toInt() && closeNode.bounds.centerX() > (sw * 0.78f).toInt()) {
                 val coupangCircle = templateMatcher.detectCornerGrayCircleCloseX(screenBitmap) { x, y ->
                     y <= closeNode.bounds.centerY() + (sh * 0.012f).toInt() ||
@@ -1568,7 +1565,12 @@ class AdCloserHandler(
             val hasPlayableKeywords = ocrItems.any { item ->
                 val t = item.text.replace(" ", "")
                 t.contains("立即遊玩") || t.contains("試玩") || t.contains("互動") ||
-                    t.contains("港口") || t.contains("關卡")
+                    t.contains("港口") || t.contains("關卡") ||
+                    t.contains("JOINLIVE", ignoreCase = true) ||
+                    t.contains("SPINNER", ignoreCase = true) ||
+                    t.contains("FRUIT", ignoreCase = true) ||
+                    t.contains("立即開玩") ||
+                    t.contains("CashGiraffe", ignoreCase = true)
             }
             val hasStoreOrEndCardMarkers = ocrItems.any { item ->
                 val t = item.text.replace(" ", "")
@@ -1577,12 +1579,18 @@ class AdCloserHandler(
                     t.contains("GooglePlay", ignoreCase = true) ||
                     t.contains("Install", ignoreCase = true) ||
                     t.contains("Download", ignoreCase = true) ||
+                    t.contains("Drag", ignoreCase = true) ||
                     t.contains("安裝") ||
                     t.contains("安装") ||
                     t.contains("下載") ||
                     t.contains("$")
             }
-            if (hasPlayableKeywords && !hasStoreOrEndCardMarkers) {
+            val shouldMidAdRevealSwipe = elapsedSec in 12..40 &&
+                closeClickCount == 0 &&
+                revealSwipeCount < 2 &&
+                !isMetaAd &&
+                !hasStoreOrEndCardMarkers
+            if ((hasPlayableKeywords && !hasStoreOrEndCardMarkers) || shouldMidAdRevealSwipe) {
                 revealSwipeCount++
                 lastRevealSwipeTimeMs = now
                 hasAdActuallyShown = true
@@ -1761,10 +1769,25 @@ class AdCloserHandler(
             label == "Sponsored頂部左上角X"
     }
 
+    private fun isEarlyInertInmobiNode(
+        node: com.linewalk.autoad.vision.MatchedNode,
+        elapsedSec: Int
+    ): Boolean {
+        return node.viewId?.contains("inmobi_enhanced_skip_close_btn", ignoreCase = true) == true &&
+            node.text.isNullOrBlank() &&
+            node.contentDesc.isNullOrBlank() &&
+            elapsedSec < 14
+    }
+
     private fun isHighConfidenceAdTarget(label: String?): Boolean {
         if (label.isNullOrBlank()) return false
         return label.contains("Google Play", ignoreCase = true) ||
-            label.contains("GooglePlay", ignoreCase = true)
+            label.contains("GooglePlay", ignoreCase = true) ||
+            (label.startsWith("Node[") && (
+                label.contains("inmobi_", ignoreCase = true) ||
+                    label.contains("close", ignoreCase = true) ||
+                    label.contains("skip", ignoreCase = true)
+            ))
     }
 
     private fun trySafeEndCardOrRedirectBack(
@@ -1864,7 +1887,7 @@ class AdCloserHandler(
                 val endsWithCloseChar = trimmed.length >= 4 &&
                     trimmed.last() in charArrayOf('×', '✕', '✖', 'x', 'X') &&
                     trimmed[trimmed.length - 2].let { it == ' ' || it == '|' || it == '·' || it == '•' || it == ':' }
-                val effectiveRight = if (redirectCount == 0 && endsWithCloseChar) {
+                val effectiveRight = if (redirectCount == 0 && redirectPointCounts.isEmpty() && endsWithCloseChar) {
                     b.right - max(28, (b.width() * 0.22f).toInt())
                 } else {
                     b.right + padX
@@ -1873,7 +1896,7 @@ class AdCloserHandler(
                     return true
                 }
                 // 若先前已在同列右側觸發過重定向，連帶封鎖該商店文字右側整段膠囊區
-                if (redirectCount > 0 && b.centerY() <= sh * 0.25f) {
+                if ((redirectCount > 0 || redirectPointCounts.isNotEmpty()) && b.centerY() <= sh * 0.25f) {
                     val hasSameRowRedirect = redirectPointCounts.any { pt ->
                         pt.x >= b.left && kotlin.math.abs(pt.y - b.centerY()) <= rowTolY
                     }
@@ -1910,13 +1933,16 @@ class AdCloserHandler(
         if (allowBlacklist) {
             // OCR-角落[X] 若連點 2 次仍無效（如上方裝飾 ×），立即封鎖以免遮蔽下方真正圓形 (X)；
             // 幾何 X 在已發生過外部重定向時亦縮短為 2 次即封鎖，否則保留 3 次；其餘非高可信目標保留 4 次
-            val geoLimit = if (redirectCount > 0) 2 else 3
+            val geoLimit = if (redirectCount > 0 || redirectPointCounts.isNotEmpty()) 2 else 3
             if ((isCornerOcrX && nearbyClicks >= 2) ||
                 (isGeoX && nearbyClicks >= geoLimit) ||
                 (!isHighConfidence && nearbyClicks >= 4)
             ) {
                 addBlacklistPoint(pt)
             }
+        }
+        if (effectiveLabel?.startsWith("備援盲點") != true && effectiveLabel != "Meta備援左上角熱區") {
+            lastBackActionTimeMs = max(lastBackActionTimeMs, System.currentTimeMillis() + 2000L)
         }
         closeClickCount++
         FloatingOverlayService.clickWithOverlayPassthrough(rect) {

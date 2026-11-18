@@ -1,6 +1,38 @@
 # LINE 散步趣自動看廣告助手 (LineWalkAutoAd) 發布說明
 
 ## 版本資訊
+- 版本名稱：v1.15.92
+- 版本代碼：versionCode 125, versionName "1.15.92"
+- 發布類型：正式版本 (Release)
+
+---
+
+## 概述
+LineWalkAutoAd v1.15.92 針對 `v1.15.90` 實機長時日誌回報（`samsung SM-F731N`，`1080x2640`，含夜間鎖屏待機與多輪巡邏）中顯露的五大殘留問題進行根因修復：補強三星 AOD `Display.state != STATE_ON` 與「請勿打擾／時鐘／日期」鎖屏 OCR 及 `launcher-after-lockscreen` 抑制；徹底根除 InMobi 早期惰性 `inmobi_enhanced_skip_close_btn` 自封、跨 Watchdog `redirectCount` 鎖死（4 分鐘 `JOIN LIVE` 連跳循環）及 `IN_GAME_SCAN` 宿主 `close_button_container` 誤點；擴大 `Step 8B Reveal Swipe` 喚醒自動隱藏的 `[▶| Google Play]` 略過膠囊；延後關閉點擊後的返回鍵排程防止 `LAUNCHER_RECOVERY` 誤退桌面；並辨識「LINE 散步趣」啟動過渡畫面與半括號 `"(X"` 關閉字元。
+
+---
+
+## 本次重點更新 (v1.15.92)
+
+### 1. InMobi 早期惰性節點防護、半括號 `"(X"` 與宿主容器防誤閉 (`AdCloserHandler` / `OcrRecognizer` / `NodeInspector`)
+- **延後點擊早期惰性節點並保護 `Node[` 不自封**：於 `AdCloserHandler` 提取共用 `isEarlyInertInmobiNode` 判斷（同步套用於 Step 4A 與 Step 6），當無字且無描述之 `inmobi_enhanced_skip_close_btn` 在 14 秒前尚未就緒時先略過不點擊；並將 `Node[` 含 `inmobi_`／`close`／`skip` 加入 `isHighConfidenceAdTarget`，避免早期惰性節點自我封鎖真實關閉位置（若觸發外部跳轉仍由 `redirectPointCounts` 即時封鎖）。
+- **辨識半括號圓框關閉符號與排除宿主容器**：於 `OcrRecognizer.findCornerAsciiCloseButton` 正規化移除括號外框字元，支援如 `"(X"` 之半截圓弧 OCR 字樣；於 `NodeInspector.findAdCloseNode` 在 `!isFullScreenAd` (`IN_GAME_SCAN` D2) 模式下排除無文字無描述之 `close_button_container`，避免誤觸散步趣宿主視窗右上關閉容器。
+
+### 2. 跨 Watchdog `redirectCount` 解鎖與自動隱藏 `[▶| Google Play]` 膠囊喚醒 (`AdCloserHandler`)
+- **重置每輪重試計數同時保留座標封鎖**：修正 `onEnterAdMode(preserveRedirectState = true)` 時連帶繼承舊 `redirectCount` 的問題，改於每次重入 `AD_WATCHING` 重置 `redirectCount`、`closeClickCount`、`adChoicesDismissCount`、`topRightStoreGateClicks`、`hasRecentRedirect` 與 `lastClickedAdLabel`，僅保留跨逾時 `blacklistedPoints`／`redirectPointCounts` 與左上角保護（並更新 `isBlockedByCornerPillOrSurveyOcr` 與 `hasRecentRedirectWithin` 改由 `redirectPointCounts` 延續同列膠囊封鎖），消除 `JOIN LIVE` 連續 4 次 `LATE_REDIRECT_BACK_SWALLOWED` 死鎖。
+- **擴大 `Step 8B` 輕滑喚醒**：擴充 `hasPlayableKeywords` 納入 `JOINLIVE`、`SPINNER`、`FRUIT`、`立即開玩`、`CashGiraffe`，並於 12–40 秒無關閉鈕且無結束卡特徵時觸發 `SwipedToReveal`（同時將 `Drag` 納入 `hasStoreOrEndCardMarkers` 排除清單），主動喚醒淡出隱藏之 `[▶| Google Play]` 略過膠囊；並移除 Step 2B `!isGameVisible` 提前返回路徑，確保未真正回到遊戲時不提前結束監控。
+
+### 3. 關閉點擊後延後返回鍵與鎖屏「請勿打擾」／Splash 過渡保護 (`AutoAdAccessibilityService` / `OcrRecognizer` / `AutomationEngine`)
+- **防誤退回桌面 (`LAUNCHER_RECOVERY`) 與 stale reject 清理**：於 `AdCloserHandler.recordAndClick` 點擊非盲點關閉／略過鈕後將 `lastBackActionTimeMs` 至少推遲 2 秒，避免 1.5–2 秒後緊接送出「超時／末期安全返回鍵」將剛切回的散步趣退出到系統桌面；並於 `AutomationEngine.handleAdWatching` 限定僅在「返回」動作後呼叫 `recordBackRejectIfAny`。
+- **補全三星熄屏／DOZE／請勿打擾待機與載入 Splash 防護**：`AutoAdAccessibilityService.isDeviceLockedOrNonInteractive` 新增 `DisplayManager` 預設螢幕狀態 (`Display.STATE_ON`) 與 `KeyguardManager.isDeviceLocked` 檢查；`OcrRecognizer.isLockscreenOrAodOcr` 納入「請勿打擾／請勿打摄／睡眠模式／緊急通話／常亮螢幕」及時鐘／星期狀態判斷；`AutomationEngine.executeSingleTick` 新增 `launcher-after-lockscreen` 25 秒內桌面過渡抑制，且 `stop` 同步重置鎖屏待機時間戳；另於 `OcrRecognizer` 新增 `isLineWalkSplashOrLoadingScreen` 辨識置中「LINE 散步趣」Splash 載入畫面，避免 `handleInGameScan` 誤轉入廣告監控。
+
+### 4. 驗證結果
+- 新增 `V1_15_92SimulationTest`（4 項專項測試：InMobi 惰性節點與半括號 `"(X"` 及 `close_button_container` 防護、`preserveRedirectState` 重置 `redirectCount` 與 `JOIN LIVE` 喚醒滑動、關閉後延後返回鍵防退回桌面、請勿打擾鎖屏 OCR／`launcher-after-lockscreen` 與 LINE 散步趣 Splash 等待）。
+- 通過 `--tests "com.linewalk.autoad.test.v1159*" --tests "com.linewalk.autoad.test.v1158*" --tests "com.linewalk.autoad.util.UpdateCheckerTest"` 目標測試集（共 14 測試類別、62 項測試全數通過，`failures = 0`、`errors = 0`、`skipped = 0`，非未過濾全量測試集）、M1 / M2 / M3 Python 壓力測試以及 `:app:assembleRelease` 正式版 APK 建置（尚未於實機環境完成更新後長時驗證）。
+
+---
+
+## 歷史版本資訊 (v1.15.91)
 - 版本名稱：v1.15.91
 - 版本代碼：versionCode 124, versionName "1.15.91"
 - 發布類型：正式版本 (Release)
