@@ -1,6 +1,41 @@
 # LINE 散步趣自動看廣告助手 (LineWalkAutoAd) 發布說明
 
 ## 版本資訊
+- 版本名稱：v1.15.91
+- 版本代碼：versionCode 124, versionName "1.15.91"
+- 發布類型：正式版本 (Release)
+
+---
+
+## 概述
+LineWalkAutoAd v1.15.91 針對 `v1.15.89` 夜間掛機實機日誌回報（`SM-S7210`，1080x2340）所顯露的五大異常問題進行根因修復：新增鎖屏與三星 AOD (`AlwaysOnDisplay`) 低耗電待機暫停以消除無效外部防護與重啟迴圈；攔截誤入 Facebook 限時動態／動態消息之假錯誤關窗循環並完整撤離；修正 `detectCornerFastForwardSkip` 右上角幾何搜尋下界溢位並整列封鎖 `Pre-register` 橫幅以消除反覆跳轉 Google Play 商店；補全 60 秒預註冊展示廣告 `56s` 保護與 Step 2B/2C 已完成廣告誤判修正（含移除備援盲點右上角自封與 `ReturnedToGame` 重置計時）；並解決【首頁(移動)】向下捲動誤觸「輕鬆賺」的問題。
+
+---
+
+## 本次重點更新 (v1.15.91)
+
+### 1. 鎖屏與三星 AOD 低耗電待機暫停 (`AppConfig` / `AutoAdAccessibilityService` / `OcrRecognizer` / `AutomationEngine`)
+- **消除熄屏待機誤判迴圈**：於 `AppConfig` 新增 `LOCKSCREEN_OR_AOD_PACKAGES`（涵蓋 `aodservice`、`biometrics.app.setting`、鎖屏系統介面等）與 `isLockscreenOrAodPackage`；於 `AutoAdAccessibilityService` 新增 `isDeviceLockedOrNonInteractive`（結合 `KeyguardManager` 與 `PowerManager.isInteractive`）；並於 `OcrRecognizer` 擴充 `isLockscreenOrAodOcr`。
+- **溫和待機不觸發返回與強開重入**：`AutomationEngine.executeSingleTick` 優先透過 `pauseForLockscreenStandby` 進入待機並節流記錄狀態，不再將鎖屏誤當外部 App 觸發返回鍵、`EXTERNAL_APP_TIMEOUT` 或 `LAUNCHER_RECOVERY`，避免整晚無效閃屏與中斷恢復。
+
+### 2. Facebook 限時動態／外部社群頁面防卡死 (`NodeInspector` / `AdCloserHandler`)
+- **過濾社群容器誤點文字**：於 `NodeInspector.EXCLUDE_TEXTS` 新增「限時動態」、「關閉限時動態匣」、「動態消息」、「粉絲專頁」、「分享這則」，避免對外部社群容器反覆執行無效節點點擊。
+- **切斷 `findAdLoadErrorCloseButton` 假迴圈並允許無限安全退回**：在 `AdCloserHandler.processAdTick` 將 `fgPkg`、`isAd`、`isGame` 判斷提前至 Step 0，限定 `findAdLoadErrorCloseButton` 僅於遊戲前景或未知套件下生效；新增 `hasSocialStoryOrFeedOcr` 辨識限時動態／動態消息特徵並放寬 `isSocialLandingPage` 呼叫 `navigateBackFromExternalSocialApp` 之次數上限，確保即時退回廣告或遊戲。
+
+### 3. Pre-register 橫幅幾何下界修復與 60 秒展示廣告完播防護 (`TemplateMatcher` / `AdCloserHandler` / `AutomationEngine`)
+- **修正 `detectCornerFastForwardSkip` 視口下緣溢位**：將 `rightBottomY` 與 `leftBottomY` 上下界夾緊改為 `min(vp.mapContentY(...), max(..., vp.effectiveTopY + (ch * 0.085f).toInt()))`（取代原本誤用 `max(...)` 導致的區域下推），同時在 `AdCloserHandler` Step 4C 導入 `isBlockedByCornerPillOrSurveyOcr` 檢查，並於 `STORE_PILL_OR_SURVEY_OCR_KEYWORDS` 整列封鎖 `Pre-register` 橫幅，大幅減少誤觸 Play 商店按鈕跳轉。
+- **60 秒展示廣告穩定等待至結束**：針對 `isPreRegisterShowcaseAd` 提供 `56s` 安全等候期以免於 48s–50s 提前返回放棄獎勵；將「備援盲點」設為 `allowBlacklist = false` 避免自我封鎖 `(1017, 210)` 等右上角關閉座標；於 `ReturnedToGame` 補上 `adCloserHandler.clearAdSessionTimer()`；同步於 `Step 2B / 2C` 結合 `!hasAdActuallyShown`、`closeClickCount`、`redirectCount` 與 `lastCountdownSecForDiag` 防護，並透過 `hasExplicitAdMarkerInSubCheck` 與精簡 `任務` 條件防止廣告文案誤判回到遊戲，解決每日賓果關閉廣告後誤報「廣告未成功啟動」問題。
+
+### 4. 【首頁(移動)】向下捲動誤入輕鬆賺導航修復 (`AutomationEngine`)
+- **先切分頁並回滑頂部**：於 `ensureOnTabWithDailyIcons` 與 `BINGO` / `LOTTERY` / `MISSION` 第 3 次重試階段，當偵測畫面已向下捲動出現「秘寶挖挖哇 / 輕鬆賺 / 簡單賺金幣」或停留於遊戲功能列表時，優先執行下滑手勢返回頂部，不直接誤點「輕鬆賺」圖示並保留穩定進入【抽抽樂】之路徑。
+
+### 5. 驗證結果
+- 新增 `V1_15_91SimulationTest`（4 項專項測試：鎖屏/AOD 待機、Facebook 限時動態隔離逃離、Pre-register 橫幅封鎖與 56s 守護及右上角不自封、首頁回滑頂部與賓果正常結算）。
+- 通過 targeted 單元測試 `--tests "com.linewalk.autoad.test.v1159*" --tests "com.linewalk.autoad.test.v1158*" --tests "com.linewalk.autoad.util.UpdateCheckerTest"`（共 13 測試類別、58 項測試全數通過，0 失敗 / 0 錯誤 / 0 略過）、M1 / M2 / M3 Python 壓力測試以及 `:app:assembleRelease` 正式版 APK 建置（尚未於實機過夜掛機驗證）。
+
+---
+
+## 歷史版本資訊 (v1.15.90)
 - 版本名稱：v1.15.90
 - 版本代碼：versionCode 123, versionName "1.15.90"
 - 發布類型：正式版本 (Release)

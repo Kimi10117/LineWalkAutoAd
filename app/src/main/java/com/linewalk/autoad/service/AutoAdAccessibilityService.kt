@@ -538,6 +538,16 @@ class AutoAdAccessibilityService : AccessibilityService() {
         return false
     }
 
+    fun isDeviceLockedOrNonInteractive(): Boolean {
+        return try {
+            val km = getSystemService(android.app.KeyguardManager::class.java)
+            val pm = getSystemService(android.os.PowerManager::class.java)
+            (km != null && km.isKeyguardLocked) || (pm != null && !pm.isInteractive)
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
     companion object {
         private const val TAG = "AutoAdAccService"
 

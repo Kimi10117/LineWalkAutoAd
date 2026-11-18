@@ -1153,6 +1153,43 @@ class OcrRecognizer {
     }
 
     /**
+     * 偵測裝置處於鎖定畫面 / Samsung Always-On Display 充電待機畫面：
+     * 只要畫面出現任何《LINE 散步趣》主畫面分頁、底部導覽列或日常任務彈窗即排除，絕不誤停遊戲。
+     */
+    fun isLockscreenOrAodOcr(items: List<OcrItem>): Boolean {
+        if (items.isEmpty()) return false
+        val hasGameOrDialogChrome = items.any { item ->
+            val t = item.text.replace(" ", "")
+            t == "首頁" || t == "步數" || t == "時間" || t == "遊戲" || t == "移動" ||
+                t == "集點" || t == "好友" || t == "使用" || t == "精選" ||
+                t.contains("每日賓果") || t.contains("抽抽樂")
+        }
+        if (hasGameOrDialogChrome) return false
+
+        val hasStrongLockMarker = items.any { item ->
+            val t = item.text.replace(" ", "")
+            t.contains("即充飽") ||
+                t.contains("完全充電") ||
+                t.contains("深夜回顧") ||
+                t.contains("又是新的一天") ||
+                t.contains("滑動即可解鎖") ||
+                t.contains("輸入PIN碼")
+        }
+        if (hasStrongLockMarker) return true
+
+        val hasChargingEstimate = items.any { item ->
+            val t = item.text.replace(" ", "")
+            t.contains("還有") && t.contains("分鐘")
+        }
+        val hasWeekday = items.any { item ->
+            val t = item.text
+            t.contains("週一") || t.contains("週二") || t.contains("週三") ||
+                t.contains("週四") || t.contains("週五") || t.contains("週六") || t.contains("週日")
+        }
+        return hasChargingEstimate && hasWeekday
+    }
+
+    /**
      * 角落獨立單字 X 關閉按鈕識別：
      * 部分全螢幕廣告（如起漲K線、股市廣告）無障礙節點樹未暴露 desc=Close，
      * 僅於左上角或右上角繪製獨立字元 "X"@6%,6%（無包圍文字）。

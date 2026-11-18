@@ -979,7 +979,10 @@ class TemplateMatcher {
         val ch = vp.contentHeight
 
         val rightTopY = max(vp.mapContentY(0.042f), max(2, (ch * 0.019f).toInt()))
-        val rightBottomY = kotlin.math.min(sh - 1, max(vp.mapContentY(0.135f), (sh * 0.135f).toInt()))
+        val rightBottomY = kotlin.math.min(
+            sh - 1,
+            min(vp.mapContentY(0.135f), max((sh * 0.135f).toInt(), vp.effectiveTopY + (ch * 0.085f).toInt()))
+        )
         val rightMatch = scanCornerSkipZone(
             screenBitmap = screenBitmap,
             sw = sw,
@@ -995,7 +998,10 @@ class TemplateMatcher {
         if (rightMatch != null) return@withContext rightMatch
 
         val leftTopY = max(2, kotlin.math.min(vp.mapContentY(0.038f), (sh * 0.035f).toInt()))
-        val leftBottomY = kotlin.math.min(sh - 1, max(vp.mapContentY(0.140f), (sh * 0.140f).toInt()))
+        val leftBottomY = kotlin.math.min(
+            sh - 1,
+            min(vp.mapContentY(0.140f), max((sh * 0.140f).toInt(), vp.effectiveTopY + (ch * 0.085f).toInt()))
+        )
         val leftStartX = if (vp.effectiveLeftX == 0 && vp.effectiveRightX == sw) {
             (sw * 0.025f).toInt()
         } else {

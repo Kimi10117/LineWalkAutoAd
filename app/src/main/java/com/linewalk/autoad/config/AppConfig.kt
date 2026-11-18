@@ -277,5 +277,21 @@ class AppConfig(context: Context) {
                 lower.contains("inmobi") ||
                 lower.contains("customtabs")
         }
+
+        val LOCKSCREEN_OR_AOD_PACKAGES = setOf(
+            "com.samsung.android.app.aodservice",
+            "com.samsung.android.biometrics.app.setting",
+            "com.android.keyguard",
+            "com.samsung.android.lock"
+        )
+
+        fun isLockscreenOrAodPackage(pkg: String?): Boolean {
+            if (pkg.isNullOrBlank()) return false
+            if (pkg in LOCKSCREEN_OR_AOD_PACKAGES) return true
+            val lower = pkg.lowercase()
+            return lower.contains("aodservice") ||
+                lower.contains("biometrics.app.setting") ||
+                lower.contains("keyguard")
+        }
     }
 }

@@ -206,6 +206,7 @@ class AutomationEngine private constructor(private val context: Context) {
     internal var geoXConsecutiveClicks = 0
     private var externalAppTicks = 0
     private var lastSelfForegroundLogMs: Long = 0L
+    private var lastLockscreenStandbyLogMs: Long = 0L
     private var lastActiveGamePackage: String? = null
     private var legitSkipRedirectPkg: String? = null
     private var legitSkipRedirectStartMs: Long = 0L
@@ -352,6 +353,7 @@ class AutomationEngine private constructor(private val context: Context) {
         legitSkipRedirectStartMs = 0L
         lastLoggedBackRejectReason = null
         lastSelfForegroundLogMs = 0L
+        lastLockscreenStandbyLogMs = 0L
         resetClickCircuitBreaker()
         inGameLinePromoRetryCount = 0
         popupRetryTicks = 0
@@ -531,6 +533,20 @@ class AutomationEngine private constructor(private val context: Context) {
         }
     }
 
+    private fun pauseForLockscreenStandby(sourceLabel: String) {
+        externalAppTicks = 0
+        nonGameScreenTicks = 0
+        nonMainScreenIdleTicks = 0
+        consecutiveWatchdogTimeouts = 0
+        adCloserHandler.clearAdSessionTimer()
+        val now = System.currentTimeMillis()
+        if (now - lastLockscreenStandbyLogMs >= 30_000L) {
+            lastLockscreenStandbyLogMs = now
+            appendLog("[待機] 偵測到螢幕鎖定或 Always-On Display 待機畫面 ($sourceLabel)，暫停巡邏與點擊，待解鎖後自動恢復...")
+        }
+        updateDetail("[待機] 螢幕鎖定/AOD 待機中，暫停操作...", "[待機] 螢幕鎖定暫停中")
+    }
+
     internal suspend fun executeSingleTick() {
         val service = AutoAdAccessibilityService.instance.value
         if (service == null) {
@@ -540,6 +556,10 @@ class AutomationEngine private constructor(private val context: Context) {
 
         var currentState = _uiStatus.value.state
         val fgPkg = service.getForegroundPackageName()
+        if (AppConfig.isLockscreenOrAodPackage(fgPkg) || service.isDeviceLockedOrNonInteractive()) {
+            pauseForLockscreenStandby(fgPkg ?: "keyguard")
+            return
+        }
         if (AppConfig.isGamePackage(fgPkg)) {
             lastActiveGamePackage = fgPkg
             if (config.lastDetectedGamePackage != fgPkg) {
@@ -628,6 +648,10 @@ class AutomationEngine private constructor(private val context: Context) {
             val rawOcrItems = ocrRecognizer.recognize(screenBitmap)
             val ocrItems = rawOcrItems.filterNot { item ->
                 FloatingOverlayService.isInsideOverlay(item.bounds.centerX(), item.bounds.centerY())
+            }
+            if (ocrRecognizer.isLockscreenOrAodOcr(ocrItems)) {
+                pauseForLockscreenStandby(fgPkg ?: "lockscreen-ocr")
+                return
             }
             lastCapturedScreenWidth = screenBitmap.width
             lastCapturedScreenHeight = screenBitmap.height
@@ -2541,31 +2565,42 @@ class AutomationEngine private constructor(private val context: Context) {
     ): Boolean {
         val activeTab = detectTabFromScreen(screenBitmap, ocrItems)
 
+        val hasGamePageFeatures = ocrItems.any { item ->
+            val t = item.text.replace(" ", "")
+            t.contains("秘寶挖挖哇") || t.contains("數獨達人") || t.contains("接龍高手") ||
+                t.contains("簡單賺金幣") || t.contains("輕鬆賺")
+        }
+        val hasDailyIconsVisible = ocrItems.any { item ->
+            val cy = item.bounds.centerY().toFloat() / sh
+            val t = item.text.replace(" ", "")
+            cy in 0.32f..0.50f && (t == "賓果" || t == "抽抽樂" || t == "糖果" || t == "任務" || t.contains("抽抽樂"))
+        }
+
         // 1. 直接放行條件：若畫面上已經看得到「賓果 / 抽抽樂 / 糖果 / 任務」日常任務圖示列，
-        // 或具有【首頁(移動) / 步數 / 時間】上半部看板特徵，代表 100% 已經在有日常任務圖示的分頁上！
+        // 或無遊戲推薦版位特徵且具有【首頁(移動) / 步數 / 時間】上半部看板特徵，代表已經處於有日常任務圖示的頂部視區！
         val hasDailyIconsOrNonGameBoard = ocrItems.any { item ->
             val cy = item.bounds.centerY().toFloat() / sh
             val t = item.text.replace(" ", "")
             (cy in 0.34f..0.47f && (t == "賓果" || t == "抽抽樂" || t == "糖果" || t == "任務" || t.contains("抽抽樂") || t.contains("可領取獎勵"))) ||
             (cy in 0.16f..0.36f && (t.contains("累積數量") || t.contains("距離下次") || t.contains("今天的步數") || t.contains("步數瓶") || t.contains("速度") || t.contains("放置")))
         }
-        if (hasDailyIconsOrNonGameBoard || activeTab == MainTab.MOVE || activeTab == MainTab.STEP || activeTab == MainTab.TIME) {
+        if (hasDailyIconsVisible || (!hasGamePageFeatures && (hasDailyIconsOrNonGameBoard || activeTab == MainTab.MOVE || activeTab == MainTab.STEP || activeTab == MainTab.TIME))) {
             tabSwitchRetries = 0
             return true
         }
 
-        // 2. 嚴格判定【遊戲】分頁專屬特徵（移除會在首頁/步數下方橫幅出現的 POINTSGAME / 輕鬆賺 / 開始遊玩）
-        val hasGamePageFeatures = ocrItems.any { item ->
-            val t = item.text.replace(" ", "")
-            t.contains("秘寶挖挖哇") || t.contains("數獨達人") || t.contains("接龍高手") || t.contains("簡單賺金幣")
-        }
-        if ((activeTab == MainTab.GAME || hasGamePageFeatures) && tabSwitchRetries < 2) {
+        // 2. 若位於【遊戲】分頁，或【首頁(移動)】向下捲動導致「輕鬆賺 / 秘寶挖挖哇」佔據中央區域，先切換分頁並下滑回頂部
+        if ((activeTab == MainTab.GAME || hasGamePageFeatures) && tabSwitchRetries < 3) {
             tabSwitchRetries++
-            val targetTab = if (tabSwitchRetries >= 2) MainTab.STEP else MainTab.MOVE
+            val targetTab = if (tabSwitchRetries >= 3) MainTab.STEP else MainTab.MOVE
             val tabRect = getTabRect(targetTab, sw, sh, ocrItems, screenBitmap)
-            appendLog("[切換] 目前位於【遊戲】分頁（無日常任務圖示），切換至【${targetTab.tabName}】以開啟【${currentPhase.title}】(嘗試:$tabSwitchRetries)...")
+            appendLog("[切換] 目前位於【遊戲】或已向下捲動（無日常任務圖示），切換至【${targetTab.tabName}】並滑回頂部以開啟【${currentPhase.title}】(嘗試:$tabSwitchRetries)...")
             FloatingOverlayService.clickWithOverlayPassthrough(tabRect) {
                 service.clickRect(tabRect)
+            }
+            if (tabSwitchRetries >= 2 || (activeTab == MainTab.MOVE && hasGamePageFeatures)) {
+                delay(350)
+                service.performSwipe(sw * 0.5f, sh * 0.28f, sw * 0.5f, sh * 0.78f, 350L)
             }
             updateDetail("[切換] 切換至【${targetTab.shortLabel}】準備開啟${currentPhase.title}...", "[切換] 切換分頁...")
             delay(600)
@@ -2816,8 +2851,10 @@ class AutomationEngine private constructor(private val context: Context) {
                 subDialogOpenAttempts++
                 if (subDialogOpenAttempts == 3) {
                     val moveTabRect = getTabRect(MainTab.MOVE, sw, sh, ocrItems, screenBitmap)
-                    appendLog("[切換] 開啟【每日賓果】重試中，點擊【首頁(移動)】校準畫面分頁...")
+                    appendLog("[切換] 開啟【每日賓果】重試中，點擊【首頁(移動)】並滑回頂部校準畫面分頁...")
                     FloatingOverlayService.clickWithOverlayPassthrough(moveTabRect) { service.clickRect(moveTabRect) }
+                    delay(350)
+                    service.performSwipe(sw * 0.5f, sh * 0.28f, sw * 0.5f, sh * 0.78f, 350L)
                     delay(500)
                     return
                 }
@@ -2846,8 +2883,10 @@ class AutomationEngine private constructor(private val context: Context) {
                 subDialogOpenAttempts++
                 if (subDialogOpenAttempts == 3) {
                     val moveTabRect = getTabRect(MainTab.MOVE, sw, sh, ocrItems, screenBitmap)
-                    appendLog("[切換] 開啟【抽抽樂】重試中，點擊【首頁(移動)】校準畫面分頁...")
+                    appendLog("[切換] 開啟【抽抽樂】重試中，點擊【首頁(移動)】並滑回頂部校準畫面分頁...")
                     FloatingOverlayService.clickWithOverlayPassthrough(moveTabRect) { service.clickRect(moveTabRect) }
+                    delay(350)
+                    service.performSwipe(sw * 0.5f, sh * 0.28f, sw * 0.5f, sh * 0.78f, 350L)
                     delay(500)
                     return
                 }
@@ -2886,8 +2925,10 @@ class AutomationEngine private constructor(private val context: Context) {
                 subDialogOpenAttempts++
                 if (subDialogOpenAttempts == 3) {
                     val moveTabRect = getTabRect(MainTab.MOVE, sw, sh, ocrItems, screenBitmap)
-                    appendLog("[切換] 開啟【任務】重試中，點擊【首頁(移動)】校準畫面分頁...")
+                    appendLog("[切換] 開啟【任務】重試中，點擊【首頁(移動)】並滑回頂部校準畫面分頁...")
                     FloatingOverlayService.clickWithOverlayPassthrough(moveTabRect) { service.clickRect(moveTabRect) }
+                    delay(350)
+                    service.performSwipe(sw * 0.5f, sh * 0.28f, sw * 0.5f, sh * 0.78f, 350L)
                     delay(500)
                     return
                 }
@@ -3637,6 +3678,7 @@ class AutomationEngine private constructor(private val context: Context) {
 
             is AdStepResult.ReturnedToGame -> {
                 consecutiveWatchdogTimeouts = 0
+                adCloserHandler.clearAdSessionTimer()
                 if (res.label == "廣告載入逾時已取消") {
                     appendLog("[逾時] 廣告伺服器載入逾時 (超過 18 秒)，已自動取消並返回遊戲！")
                     // 若當前在日常子視窗，關閉該視窗並推進至下一項目，避免無廣告庫存時持續重試

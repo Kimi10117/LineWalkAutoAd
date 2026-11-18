@@ -91,38 +91,38 @@ jobs:
       - name: Update Tag and Publish APK to GitHub Releases
         run: |
           git tag -f latest-apk
-          git tag -f v1.15.90
+          git tag -f v1.15.91
           git push -f origin latest-apk || true
-          git push -f origin v1.15.90 || true
+          git push -f origin v1.15.91 || true
 
       - name: Publish APK to GitHub Releases (latest-apk)
         uses: softprops/action-gh-release@v2
         with:
             tag_name: latest-apk
-            name: "散步趣助手 v1.15.90 (修復 Coupang 酷澎雙層圓形 (X) 關閉偵測、黑邊視口校準與跨逾時黑名單保留 - Run #${{ github.run_number }})"
+            name: "散步趣助手 v1.15.91 (鎖屏AOD待機暫停、FB限動防卡死、Pre-register橫幅封鎖與首頁捲動回頂部修復 - Run #${{ github.run_number }})"
             body: |
-              **散步趣助手 v1.15.90 (Run #${{ github.run_number }}) - 修復 Coupang 酷澎雙層圓形 (X) 關閉偵測、黑邊視口校準與跨逾時黑名單保留 (相容歷代版本 v1.15.89, v1.15.88, v1.15.87, v1.15.86, v1.15.85, v1.15.84, v1.15.83, v1.15.82, v1.15.81, v1.15.80, v1.15.79, v1.15.78, v1.15.77, v1.15.76, v1.15.75, v1.15.74, v1.15.73, v1.15.72, v1.15.71, v1.15.70, v1.15.69, v1.15.68, v1.15.67, v1.15.66, v1.15.65, v1.15.64, v1.15.63, v1.15.62, v1.15.61, v1.15.60, v1.15.58, v1.15.57, v1.15.56, v1.15.55, v1.15.54, v1.15.53, v1.15.52, v1.15.51, v1.15.50, v1.15.49, v1.15.48, v1.15.47, v1.15.46, v1.15.45)**
-              1. **【幾何 `(X)` 視口校準與中灰圓底白色 `(X)` 原生偵測】**：
-                 - 修正 `TemplateMatcher.detectCornerGeometricX` 在頂部黑邊卡片 (`effectiveTopY ≈ 154`) 重複位移與下緣過度下推問題，徹底排除 `y = 14.2%~14.9%` 商品圖誤觸點，並新增低色度中灰圓底白叉 `(X)` 識別與 `detectCornerGrayCircleCloseX` 專責掃描。
-              2. **【Coupang 雙層 `(X)` 直擊與緊縮失敗半徑防護】**：
-                 - `AdCloserHandler` 於 `Step 6 / 7A2 / 8` 偵測 Coupang 輪播卡片或無效頂部小 `×` 後優先命中下方真實灰底圓形 `(X)` (`酷澎圓形關閉(X)`)；無效 `OCR-角落` 門檻降至 2 次並對非跳轉點採緊縮封鎖半徑，避免遮蔽下方真實圓鈕。
-              3. **【修復 Watchdog 重置清空黑名單漏洞與任務重建】**：
-                 - 修正 `onEnterAdMode(preserveRedirectState = true)` 於 `clearAdSessionTimer()` 歸零後誤清空 `blacklistedPoints`／`redirectPointCounts` 的問題，延長跨逾時保留視窗至 `180s`；`forceResetAppTaskToFront(clearTask = true)` 改用 `Intent.makeRestartActivityTask`，新增 `V1_15_90SimulationTest`，versionCode 123 / versionName 1.15.90（完整保留歷代版本 APK 與發布紀錄）。
+              **散步趣助手 v1.15.91 (Run #${{ github.run_number }}) - 鎖屏AOD待機暫停、FB限動防卡死、Pre-register橫幅封鎖與首頁捲動回頂部修復 (相容歷代版本 v1.15.90, v1.15.89, v1.15.88, v1.15.87, v1.15.86, v1.15.85, v1.15.84, v1.15.83, v1.15.82, v1.15.81, v1.15.80, v1.15.79, v1.15.78, v1.15.77, v1.15.76, v1.15.75, v1.15.74, v1.15.73, v1.15.72, v1.15.71, v1.15.70, v1.15.69, v1.15.68, v1.15.67, v1.15.66, v1.15.65, v1.15.64, v1.15.63, v1.15.62, v1.15.61, v1.15.60, v1.15.58, v1.15.57, v1.15.56, v1.15.55, v1.15.54, v1.15.53, v1.15.52, v1.15.51, v1.15.50, v1.15.49, v1.15.48, v1.15.47, v1.15.46, v1.15.45)**
+              1. **【鎖屏／三星 AOD 低耗電待機暫停】**：
+                 - 新增 `LOCKSCREEN_OR_AOD_PACKAGES`、`isLockscreenOrAodPackage`、`isDeviceLockedOrNonInteractive` 與 `isLockscreenOrAodOcr`；於 `AutomationEngine.executeSingleTick` 透過 `pauseForLockscreenStandby` 安全待機，消除整晚 `EXTERNAL_APP_TIMEOUT` 與 `LAUNCHER_RECOVERY` 迴圈。
+              2. **【Facebook 限時動態防卡死與安全退回】**：
+                 - `NodeInspector.EXCLUDE_TEXTS` 排除「限時動態」、「關閉限時動態匣」、「動態消息」等文字；`AdCloserHandler` 限定 `findAdLoadErrorCloseButton` 作用範圍，補齊 `hasSocialStoryOrFeedOcr` 並解除 `isSocialLandingPage` 次數上限以便立即安全撤離。
+              3. **【Pre-register 橫幅幾何修復、60 秒展示護欄與首頁捲動修正】**：
+                 - 修正 `TemplateMatcher.detectCornerFastForwardSkip` 下緣邊界 (`min(...)`) 與整列封鎖 `Pre-register` 橫幅，延長 `isPreRegisterShowcaseAd` 至 `56s` 等待，停止備援盲點自我封鎖右上角，修復 `Step 2B/2C`「廣告未成功啟動」誤判及 `ReturnedToGame` 重置計時，並讓【首頁(移動)】向下捲動時先回滑頂部；新增 `V1_15_91SimulationTest`，versionCode 124 / versionName 1.15.91（完整保留歷代版本 APK 與發布紀錄）。
             files: LineWalkAutoAd.apk
             prerelease: false
 
-      - name: Publish Versioned APK to GitHub Releases (v1.15.90)
+      - name: Publish Versioned APK to GitHub Releases (v1.15.91)
         uses: softprops/action-gh-release@v2
         with:
-            tag_name: v1.15.90
-            name: "散步趣助手 v1.15.90 (修復 Coupang 酷澎雙層圓形 (X) 關閉偵測、黑邊視口校準與跨逾時黑名單保留)"
+            tag_name: v1.15.91
+            name: "散步趣助手 v1.15.91 (鎖屏AOD待機暫停、FB限動防卡死、Pre-register橫幅封鎖與首頁捲動回頂部修復)"
             body: |
-              **散步趣助手 v1.15.90 (Run #${{ github.run_number }}) - 修復 Coupang 酷澎雙層圓形 (X) 關閉偵測、黑邊視口校準與跨逾時黑名單保留**
-              1. **【幾何 `(X)` 視口校準與中灰圓底白色 `(X)` 原生偵測】**：
-                 - 修正 `TemplateMatcher.detectCornerGeometricX` 在頂部黑邊卡片 (`effectiveTopY ≈ 154`) 重複位移與下緣過度下推問題，徹底排除 `y = 14.2%~14.9%` 商品圖誤觸點，並新增低色度中灰圓底白叉 `(X)` 識別與 `detectCornerGrayCircleCloseX` 專責掃描。
-              2. **【Coupang 雙層 `(X)` 直擊與緊縮失敗半徑防護】**：
-                 - `AdCloserHandler` 於 `Step 6 / 7A2 / 8` 偵測 Coupang 輪播卡片或無效頂部小 `×` 後優先命中下方真實灰底圓形 `(X)` (`酷澎圓形關閉(X)`)；無效 `OCR-角落` 門檻降至 2 次並對非跳轉點採緊縮封鎖半徑，避免遮蔽下方真實圓鈕。
-              3. **【修復 Watchdog 重置清空黑名單漏洞與任務重建】**：
-                 - 修正 `onEnterAdMode(preserveRedirectState = true)` 於 `clearAdSessionTimer()` 歸零後誤清空 `blacklistedPoints`／`redirectPointCounts` 的問題，延長跨逾時保留視窗至 `180s`；`forceResetAppTaskToFront(clearTask = true)` 改用 `Intent.makeRestartActivityTask`，新增 `V1_15_90SimulationTest`，versionCode 123 / versionName 1.15.90（完整保留歷代版本 APK 與發布紀錄）。
+              **散步趣助手 v1.15.91 (Run #${{ github.run_number }}) - 鎖屏AOD待機暫停、FB限動防卡死、Pre-register橫幅封鎖與首頁捲動回頂部修復**
+              1. **【鎖屏／三星 AOD 低耗電待機暫停】**：
+                 - 新增 `LOCKSCREEN_OR_AOD_PACKAGES`、`isLockscreenOrAodPackage`、`isDeviceLockedOrNonInteractive` 與 `isLockscreenOrAodOcr`；於 `AutomationEngine.executeSingleTick` 透過 `pauseForLockscreenStandby` 安全待機，消除整晚 `EXTERNAL_APP_TIMEOUT` 與 `LAUNCHER_RECOVERY` 迴圈。
+              2. **【Facebook 限時動態防卡死與安全退回】**：
+                 - `NodeInspector.EXCLUDE_TEXTS` 排除「限時動態」、「關閉限時動態匣」、「動態消息」等文字；`AdCloserHandler` 限定 `findAdLoadErrorCloseButton` 作用範圍，補齊 `hasSocialStoryOrFeedOcr` 並解除 `isSocialLandingPage` 次數上限以便立即安全撤離。
+              3. **【Pre-register 橫幅幾何修復、60 秒展示護欄與首頁捲動修正】**：
+                 - 修正 `TemplateMatcher.detectCornerFastForwardSkip` 下緣邊界 (`min(...)`) 與整列封鎖 `Pre-register` 橫幅，延長 `isPreRegisterShowcaseAd` 至 `56s` 等待，停止備援盲點自我封鎖右上角，修復 `Step 2B/2C`「廣告未成功啟動」誤判及 `ReturnedToGame` 重置計時，並讓【首頁(移動)】向下捲動時先回滑頂部；新增 `V1_15_91SimulationTest`，versionCode 124 / versionName 1.15.91（完整保留歷代版本 APK 與發布紀錄）。
             files: LineWalkAutoAd.apk
             prerelease: false

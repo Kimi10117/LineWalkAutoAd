@@ -414,18 +414,21 @@ class AdCloserHandler(
         }
         val elapsedSec = getElapsedSeconds()
 
-        // 0. 最優先檢查：是否跳出「無法載入廣告 / 請稍後再試。」錯誤彈窗
-        val adErrorClose = ocrRecognizer.findAdLoadErrorCloseButton(screenBitmap, ocrItems)
-        if (adErrorClose != null) {
-            hasAdActuallyShown = false
-            recordAndClick(service, adErrorClose.second, allowBlacklist = false, label = "廣告載入失敗彈窗")
-            return AdStepResult.ReturnedToGame(adErrorClose.second, "廣告載入失敗彈窗")
-        }
-
-        // 1A. 防迷路檢查：若誤觸跳轉到 Google Play 商店或外部瀏覽器/Chrome Custom Tabs，立即按 BACK 並標記跳轉恢復
         val fgPkg = service.getForegroundPackageName()
         val isAd = fgPkg != null && AppConfig.isAdPackage(fgPkg)
         val isGame = fgPkg != null && (AppConfig.isGamePackage(fgPkg) || fgPkg == "jp.naver.line.android")
+
+        // 0. 最優先檢查：僅限遊戲本體內跳出「無法載入廣告 / 請稍後再試。」錯誤彈窗時關閉（嚴禁於外部社群 App 誤觸發）
+        if (isGame || fgPkg == null) {
+            val adErrorClose = ocrRecognizer.findAdLoadErrorCloseButton(screenBitmap, ocrItems)
+            if (adErrorClose != null) {
+                hasAdActuallyShown = false
+                recordAndClick(service, adErrorClose.second, allowBlacklist = false, label = "廣告載入失敗彈窗")
+                return AdStepResult.ReturnedToGame(adErrorClose.second, "廣告載入失敗彈窗")
+            }
+        }
+
+        // 1A. 防迷路檢查：若誤觸跳轉到 Google Play 商店或外部瀏覽器/Chrome Custom Tabs，立即按 BACK 並標記跳轉恢復
         val isExternal = fgPkg != null && AppConfig.isRedirectPackage(fgPkg) && !isAd
         val hasBrowserTitle = !isAd && !isGame && ocrItems.any { item ->
             val cy = item.bounds.centerY()
@@ -464,10 +467,18 @@ class AdCloserHandler(
             val cy = item.bounds.centerY().toFloat() / sh
             cy > 0.65f && (item.text.contains("留言") || item.text.contains("發送訊息"))
         }
+        val hasSocialStoryOrFeedOcr = ocrItems.any { item ->
+            val t = item.text.replace(" ", "")
+            t.contains("限時動態") || t.contains("分享這則限時動態") ||
+                t.contains("顯示這類限時動態") || t.contains("粉絲專頁") ||
+                (t.contains("有興趣") && ocrItems.any { o -> o.text.contains("沒興趣") })
+        }
 
-        val isSocialLandingPage = !hasGameOrSubDialogMarkers &&
-            socialLandingPageTotalRecoveries < 2 &&
-            (isSocialAppPkg || (hasTopSocialHeader && hasBottomSocialBar))
+        val isSocialLandingPage = !hasGameOrSubDialogMarkers && (
+            isSocialAppPkg ||
+                (hasTopSocialHeader && hasBottomSocialBar) ||
+                hasSocialStoryOrFeedOcr
+        )
 
         if (isExternal || hasBrowserTitle) {
             hasAdActuallyShown = true
@@ -491,12 +502,12 @@ class AdCloserHandler(
                 addBlacklistPoint(badPt)
                 lastClickedPoint = null
             }
-            // 社群落地頁極速返回：第 1 次按 Back 鍵，若仍停留在社群則直接 bringAppToFront 拉回散步趣
+            // 社群落地頁／限時動態極速返回：第 1 次派發外部社群返回鍵 (繞過 AD_CONTAINER_PROTECT)，第 2 次仍未離開直接拉回散步趣
             if (socialLandingPageTicks >= 2) {
                 service.bringAppToFront("com.linecorp.LGWKTW")
                 socialLandingPageTicks = 0
             } else {
-                if (!service.navigateBack()) {
+                if (!service.navigateBackFromExternalSocialApp(minIntervalMs = 600L)) {
                     logThrottledBackReject(service, "社群落地頁返回鍵")
                 }
             }
@@ -680,8 +691,20 @@ class AdCloserHandler(
                 return AdStepResult.ReturnedToGame(null, "偵測到LINE散步趣已登出")
             }
             if (hasActivePinkClaim || hasActiveBadgeClaim) {
-                if (elapsedSec >= 3) {
+                if (!hasAdActuallyShown && elapsedSec >= 3 && closeClickCount == 0 && redirectCount == 0 && lastCountdownSecForDiag == null &&
+                    (hasGameOrSubDialogMarkers || ocrItems.any {
+                        val t = it.text.replace(" ", "")
+                        t.contains("紅利") || t.contains("取消") || t.contains("跳過廣告")
+                    })
+                ) {
                     return AdStepResult.ReturnedToGame(null, "廣告未成功啟動")
+                } else if ((hasAdActuallyShown || closeClickCount > 0 || redirectCount > 0) && elapsedSec >= 3 && !isGameVisible &&
+                    ocrItems.any {
+                        val t = it.text.replace(" ", "")
+                        t.contains("紅利") || t.contains("取消") || t.contains("獲得票券") || t.contains("獲得金幣")
+                    }
+                ) {
+                    return AdStepResult.ReturnedToGame(null, "已回到散步趣介面")
                 }
             } else {
                 val cancelBtn = ocrRecognizer.findPopupCancelButton(screenBitmap, ocrItems, templateMatcher)
@@ -693,16 +716,17 @@ class AdCloserHandler(
 
         // 2C. 若處於《LINE 散步趣》介面：
         // 嚴格安全防護：
-        // 1) 廣告確實已經播放過 (hasAdActuallyShown == true) 且已過至少 3 秒 -> 正常完成廣告並回到散步趣介面
-        // 2) 若廣告點擊後完全未啟動 (hasAdActuallyShown == false)，在未滿 4 秒前保持靜候，嚴禁在第 1 秒誤判回到遊戲！
+        // 1) 廣告確實已經播放過 (hasAdActuallyShown == true 或已點擊關閉鈕/曾外部重定向) 且已過至少 3 秒 -> 正常完成廣告並回到散步趣介面
+        // 2) 若廣告點擊後完全未啟動 (hasAdActuallyShown == false 且無關閉點擊/重定向)，在未滿 4 秒前保持靜候，嚴禁在第 1 秒誤判回到遊戲！
         // 3) 若超過 4 秒畫面仍完全是遊戲畫面且從未出現過廣告特徵 -> 判定為廣告未啟動/無庫存，安全退出且不累計完成次數
         if (ocrRecognizer.isLoggedOutOrLoginScreen(ocrItems, fgPkg, sh)) {
             return AdStepResult.ReturnedToGame(null, "偵測到LINE散步趣已登出")
         }
         if (isGameVisible) {
-            if (hasAdActuallyShown && elapsedSec >= 3) {
+            val hasAdShownEvidence = hasAdActuallyShown || closeClickCount > 0 || redirectCount > 0
+            if (hasAdShownEvidence && elapsedSec >= 3) {
                 return AdStepResult.ReturnedToGame(null, "已回到散步趣介面")
-            } else if (!hasAdActuallyShown && elapsedSec >= 4) {
+            } else if (!hasAdShownEvidence && elapsedSec >= 4) {
                 return AdStepResult.ReturnedToGame(null, "廣告未成功啟動")
             } else {
                 return AdStepResult.WaitingGracePeriod(elapsedSec)
@@ -1080,7 +1104,9 @@ class AdCloserHandler(
         ) {
             val skipMatch = templateMatcher.detectCornerFastForwardSkip(
                 screenBitmap = screenBitmap,
-                blacklistedCoord = ::isInvalidOrBlacklisted
+                blacklistedCoord = { x, y ->
+                    isInvalidOrBlacklisted(x, y) || isBlockedByCornerPillOrSurveyOcr(x, y, ocrItems, sw, sh)
+                }
             )
             val hasAdjacentCapsuleOcr = if (skipMatch != null) {
                 val isLeftPillIcon = skipMatch.bounds.centerX() < sw * 0.18f
@@ -1428,8 +1454,16 @@ class AdCloserHandler(
                 t.contains("換好禮") ||
                 t.contains("换好禮")
             }
-        // Compatibility contract: isEndCard && elapsedSec >= 15 (upgraded to 42s in v1.15.67 to prevent early cut-off of 30s-40s unskippable video ads)
-        if (isEndCard && elapsedSec >= 42 && (elapsedSec >= 15 || rewardGrantedOcr != null) && now - lastBackActionTimeMs >= 2500L) {
+        val isPreRegisterShowcaseAd = ocrItems.any { item ->
+            val t = item.text.lowercase()
+            t.contains("pre-register") || t.contains("preregister") ||
+                t.contains("預先註冊") || t.contains("預先登錄") || t.contains("事前登錄")
+        }
+        val endCardOrRedirectBackMinSec = if (isPreRegisterShowcaseAd) 56 else 42
+        val lateFallbackOrBackMinSec = if (isPreRegisterShowcaseAd) 56 else 45
+
+        // Compatibility contract: isEndCard && elapsedSec >= 15 (upgraded to 42s in v1.15.67, 56s for 60s Pre-register ads in v1.15.91)
+        if (isEndCard && elapsedSec >= endCardOrRedirectBackMinSec && (elapsedSec >= 15 || rewardGrantedOcr != null) && now - lastBackActionTimeMs >= 2500L) {
             hasAdActuallyShown = true
             lastBackActionTimeMs = now
             lastFallbackCornerTimeMs = now + 4000L
@@ -1447,8 +1481,8 @@ class AdCloserHandler(
         }
 
         if (remainingSec == null && elapsedSec >= 5) {
-            // 重定向拉回後安全返回：必須在廣告播滿至少 42 秒且畫面無關閉鈕時才允許返回鍵關閉，給予充分時間掃描畫面 X 與略過標籤！
-            if (redirectCount > 0 && !isGame && !isMetaWebPreview && elapsedSec >= 42 && now - lastBackActionTimeMs >= 2500L) {
+            // 重定向拉回後安全返回：必須在廣告播滿至少 42 秒（Pre-register 展示型廣告滿 56 秒）且畫面無關閉鈕時才允許返回鍵關閉！
+            if (redirectCount > 0 && !isGame && !isMetaWebPreview && elapsedSec >= endCardOrRedirectBackMinSec && now - lastBackActionTimeMs >= 2500L) {
                 lastBackActionTimeMs = now
                 trySafeEndCardOrRedirectBack(service, elapsedSec, "重定向安全返回鍵", "POST_REDIRECT_BACK_SWALLOWED")?.let { return it }
             }
@@ -1489,8 +1523,8 @@ class AdCloserHandler(
                 }
             }
 
-            // 備援盲點與安全返回：僅在廣告播放超過 45 秒且無關閉鈕時觸發，防止不可略過廣告提早退出
-            if (elapsedSec >= 45) {
+            // 備援盲點與安全返回：僅在廣告播放超過 45 秒（Pre-register 展示型廣告滿 56 秒）且無關閉鈕時觸發
+            if (elapsedSec >= lateFallbackOrBackMinSec) {
                 // 若已經發生過外部重定向，嚴禁盲點角落熱區以免再度跳轉 Google Play（含遊戲內嵌廣告）！
                 // 直接使用安全系統返回鍵關閉廣告最為可靠！
                 if (redirectCount > 0) {
@@ -1499,13 +1533,13 @@ class AdCloserHandler(
                         trySafeEndCardOrRedirectBack(service, elapsedSec, "末期安全返回鍵", "LATE_REDIRECT_BACK_SWALLOWED")?.let { return it }
                     }
                 } else {
-                    // 若未發生重定向，輪流嘗試已過濾狀態列與黑名單的右上角備援熱區與安全返回鍵
+                    // 若未發生重定向，輪流嘗試已過濾狀態列與黑名單的右上角備援熱區與安全返回鍵（盲點試探不自我納入黑名單）
                     if (!isOutsideGame && now - lastFallbackCornerTimeMs >= 3000L) {
                         val (label, targetRect) = getNextFallbackTarget(sw, sh, ocrItems)
                         lastFallbackCornerTimeMs = now
                         if (!isInvalidOrBlacklisted(targetRect.centerX(), targetRect.centerY())) {
                             val fallbackLabel = "備援盲點[$label]"
-                            recordAndClick(service, targetRect, allowBlacklist = true, label = fallbackLabel)
+                            recordAndClick(service, targetRect, allowBlacklist = false, label = fallbackLabel)
                             return AdStepResult.WatchdogBackTriggered(elapsedSec, fallbackLabel)
                         }
                     }
@@ -1815,6 +1849,18 @@ class AdCloserHandler(
             }
 
             if (containsCornerStoreOrActionOcr(trimmed)) {
+                val lowerTrimmed = trimmed.lowercase()
+                val isPreRegisterBannerRow = b.centerY() in (sh * 0.09f).toInt()..(sh * 0.24f).toInt() && (
+                    lowerTrimmed.contains("pre-register") ||
+                        lowerTrimmed.contains("preregister") ||
+                        lowerTrimmed.contains("預先註冊") ||
+                        lowerTrimmed.contains("預先登錄") ||
+                        lowerTrimmed.contains("事前登錄") ||
+                        lowerTrimmed.contains("預約註冊")
+                )
+                if (isPreRegisterBannerRow && y in (b.top - rowTolY)..(b.bottom + rowTolY)) {
+                    return true
+                }
                 val endsWithCloseChar = trimmed.length >= 4 &&
                     trimmed.last() in charArrayOf('×', '✕', '✖', 'x', 'X') &&
                     trimmed[trimmed.length - 2].let { it == ' ' || it == '|' || it == '·' || it == '•' || it == ':' }
@@ -1949,6 +1995,27 @@ class AdCloserHandler(
         if (hasBottomModalTitle && hasBottomModalCancel) {
             return true
         }
+        // 0D. 明確全螢幕廣告特徵一票否決，防止廣告文案或商店按鈕誤中 subDialog 特徵
+        val hasExplicitAdMarkerInSubCheck = ocrItems.any { item ->
+            val compact = item.text.replace(" ", "")
+            compact.contains("GooglePlay", ignoreCase = true) ||
+                item.text.contains("Play 商店") ||
+                compact.contains("PlayStore", ignoreCase = true) ||
+                compact.contains("Pre-register", ignoreCase = true) ||
+                compact.contains("Preregister", ignoreCase = true) ||
+                compact.contains("預先註冊") ||
+                compact.contains("預先登錄") ||
+                compact.contains("事前登錄") ||
+                compact.contains("Notinterested", ignoreCase = true) ||
+                compact.contains("CLAIM!", ignoreCase = true) ||
+                compact.contains("立即下載") ||
+                compact.contains("免費下載") ||
+                compact.contains("開啟商店")
+        }
+        if (hasExplicitAdMarkerInSubCheck) {
+            return false
+        }
+
         // 檢查是否回到每日賓果、好友排行榜、任務、抽抽樂或禮物盒彈窗 (排除全家禮物卡等廣告字眼)
         val matchesSubDialog = ocrItems.any { item ->
             val cy = item.bounds.centerY()
@@ -1961,7 +2028,7 @@ class AdCloserHandler(
                 t.contains("排行榜") ||
                 ((t == "禮物" || t == "禮物盒") && !t.contains("卡") && !t.contains("券") && !t.contains("超商")) ||
                 t.contains("抽抽樂") ||
-                t.contains("任務")
+                (t.length <= 6 && t.contains("任務"))
             )) || (cy in (sh * 0.35f).toInt()..(sh * 0.88f).toInt() && (
                 t.contains("BINGO") || t.contains("今日上限") || t.contains("COMPLETE") ||
                 t.contains("50張") || t.contains("抽1次") || t.contains("免費抽") ||
@@ -1979,6 +2046,7 @@ class AdCloserHandler(
         private const val TAG = "AdCloserHandler"
         private val STORE_PILL_OR_SURVEY_OCR_KEYWORDS = listOf(
             "google play", "play store", "play 商店", "play商店",
+            "pre-register", "preregister", "預先註冊", "預先登錄", "事前登錄", "預約註冊",
             "開啟商店", "前往商店", "下載", "安裝", "安装", "download", "install",
             "not interested", "interested", "hide ad", "report ad"
         )

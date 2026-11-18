@@ -256,7 +256,8 @@ class NodeInspector {
             "同意並繼續", "隱私權", "條款", "不看廣告",
             "遊玩", "輕鬆", "adjoe", "Sponsored", "line points game",
             "開啟商店", "前往商店", "安裝", "下載", "立即下載", "免費下載",
-            "去逛逛", "立即購買", "立即預訂", "BOOK", "SHOP", "INSTALL", "DOWNLOAD"
+            "去逛逛", "立即購買", "立即預訂", "BOOK", "SHOP", "INSTALL", "DOWNLOAD",
+            "限時動態", "關閉限時動態匣", "動態消息", "粉絲專頁", "分享這則"
         ) + OcrRecognizer.AD_BAIT_PROMO_KEYWORDS).distinct()
     }
 }
