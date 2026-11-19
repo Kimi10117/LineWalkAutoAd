@@ -264,7 +264,8 @@ class FloatingOverlayService : Service() {
                         safeDetail.contains("載入") || detail.contains("載入") -> "載入中"
                         safeDetail.contains("倒數") || detail.contains("倒數") -> "倒數中"
                         safeDetail.contains("搜尋") || detail.contains("搜尋") -> "搜尋鈕"
-                        safeDetail.contains("監控") || detail.contains("強退") || detail.contains("嘗試") -> "強退中"
+                        detail.contains("強退") || detail.contains("嘗試") -> "強退中"
+                        safeDetail.contains("監控") -> "監控中"
                         else -> "播放中"
                     }
                     if (secMatch != null) {

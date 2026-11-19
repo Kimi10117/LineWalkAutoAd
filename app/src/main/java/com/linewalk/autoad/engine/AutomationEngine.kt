@@ -3539,8 +3539,9 @@ class AutomationEngine private constructor(private val context: Context) {
     }
 
     /**
-     * 當系統返回失效或達到逾時上限仍卡在外部商店／內嵌廣告頁時，統一執行三段式主畫面恢復：
-     * 非遊戲前景直接喚醒；若前景已是散步趣套件但畫面仍被內嵌廣告 Activity 攔截，依序執行 Home -> CLEAR_TOP -> CLEAR_TASK。
+     * 當系統返回失效或達到逾時上限仍卡在外部商店／內嵌廣告頁時，統一執行四段式主畫面恢復：
+     * 非遊戲前景直接喚醒；若前景已是散步趣套件但畫面仍被內嵌廣告 Activity 攔截，
+     * 依序執行 Level 1 (Home -> CLEAR_TOP) -> Level 2 (Home -> CLEAR_TASK) -> Level 3 (多工畫面精準滑除《LINE 散步趣》卡片重建任務)。
      */
     private suspend fun recoverStuckAdToMainScreen(
         service: AutoAdAccessibilityService,
@@ -3584,7 +3585,17 @@ class AutomationEngine private constructor(private val context: Context) {
                 delay(700)
                 service.forceResetAppTaskToFront(targetGamePkg, clearTask = true)
                 delay(2200)
-                adWatchdogCooldownTicks = 3
+                val (hasVerify3, recoveredByClearTask) = verifyRecoveredGameScreen(service, sourceBitmap)
+                if (recoveredByClearTask) {
+                    appendLog("[計時強退] Level 2 CLEAR_TASK 已成功重建散步趣主畫面")
+                    consecutiveWatchdogTimeouts = 0
+                    adWatchdogCooldownTicks = 4
+                } else if (hasVerify3) {
+                    val killed = forceKillStuckGameTaskViaRecents(service, targetGamePkg, sourceBitmap.width, sourceBitmap.height)
+                    adWatchdogCooldownTicks = if (killed) 5 else 3
+                } else {
+                    adWatchdogCooldownTicks = 3
+                }
             } else {
                 adWatchdogCooldownTicks = 3
             }
@@ -3594,8 +3605,93 @@ class AutomationEngine private constructor(private val context: Context) {
             delay(700)
             service.forceResetAppTaskToFront(targetGamePkg, clearTask = true)
             delay(2200)
-            adWatchdogCooldownTicks = 3
+            val (hasVerify3, recoveredByClearTask) = verifyRecoveredGameScreen(service, sourceBitmap)
+            if (recoveredByClearTask) {
+                consecutiveWatchdogTimeouts = 0
+                adWatchdogCooldownTicks = 4
+            } else if (hasVerify3) {
+                val killed = forceKillStuckGameTaskViaRecents(service, targetGamePkg, sourceBitmap.width, sourceBitmap.height)
+                adWatchdogCooldownTicks = if (killed) 5 else 3
+            } else {
+                adWatchdogCooldownTicks = 3
+            }
         }
+    }
+
+    /**
+     * Level 3 終極脫困：當 Android 15–17／Samsung One UI 上之 `CLEAR_TASK` 仍無法消滅頑固內嵌廣告 Activity 時，
+     * 開啟系統多工畫面 (Recents)，嚴格透過無障礙節點或 OCR 正向鎖定「散步趣 / LINE Walk」卡片後僅上滑關閉該卡片，
+     * 再重新冷啟動《LINE 散步趣》；若未能正向鎖定散步趣卡片則絕不盲滑其他應用。
+     */
+    internal suspend fun forceKillStuckGameTaskViaRecents(
+        service: AutoAdAccessibilityService,
+        targetGamePkg: String,
+        screenWidth: Int,
+        screenHeight: Int
+    ): Boolean {
+        val sw = if (screenWidth > 0) screenWidth else 1080
+        val sh = if (screenHeight > 0) screenHeight else 2340
+        appendLog("[計時強退] Level 2 CLEAR_TASK 後仍卡在頑固廣告 Activity，升級 Level 3 多工卡片精準滑除 ($targetGamePkg)！")
+        if (!service.openRecents()) {
+            return false
+        }
+        delay(950)
+
+        val fgInRecents = service.getForegroundPackageName()
+        val inRecentsUi = fgInRecents != null && (
+            fgInRecents.contains("launcher", ignoreCase = true) ||
+                fgInRecents.contains("systemui", ignoreCase = true) ||
+                fgInRecents.contains("recents", ignoreCase = true)
+            )
+        if (!inRecentsUi) {
+            return false
+        }
+
+        var cardCx: Int? = service.findRecentsAppCardCenterX(sw, sh)
+        if (cardCx == null) {
+            val recentsBmp = service.captureScreenBitmap()
+            if (recentsBmp != null) {
+                try {
+                    val recentsOcr = ocrRecognizer.recognize(recentsBmp)
+                    val matchedTitle = recentsOcr.firstOrNull { item ->
+                        val cy = item.bounds.centerY()
+                        val t = item.text
+                        cy in (recentsBmp.height * 0.05f).toInt()..(recentsBmp.height * 0.85f).toInt() &&
+                            (t.contains("散步趣") || t.contains("LINE Walk", ignoreCase = true))
+                    }
+                    if (matchedTitle != null) {
+                        cardCx = matchedTitle.bounds.centerX()
+                            .coerceIn((recentsBmp.width * 0.18f).toInt(), (recentsBmp.width * 0.82f).toInt())
+                    }
+                } finally {
+                    if (!recentsBmp.isRecycled) recentsBmp.recycle()
+                }
+            }
+        }
+
+        if (cardCx == null) {
+            appendLog("[計時強退] 多工畫面未正向識別《LINE 散步趣》卡片，基於安全原則放棄滑除並返回喚醒遊戲")
+            service.pressHome()
+            delay(450)
+            service.bringAppToFront(targetGamePkg)
+            return false
+        }
+
+        appendLog("[計時強退] 已於多工畫面鎖定《LINE 散步趣》任務卡片 (x=$cardCx)，向上滑除強制結束頑固廣告並冷啟動！")
+        service.performSwipe(
+            startX = cardCx.toFloat(),
+            startY = sh * 0.64f,
+            endX = cardCx.toFloat(),
+            endY = sh * 0.10f,
+            durationMs = 260L
+        )
+        delay(750)
+        service.pressHome()
+        delay(450)
+        service.bringAppToFront(targetGamePkg)
+        delay(2500)
+        consecutiveWatchdogTimeouts = 0
+        return true
     }
 
     private suspend fun verifyRecoveredGameScreen(
@@ -3606,6 +3702,7 @@ class AutomationEngine private constructor(private val context: Context) {
         return try {
             val verifyOcr = ocrRecognizer.recognize(verifyBmp)
             val isBack = ocrRecognizer.isLineWalkMainScreenVisible(verifyBmp, verifyOcr, templateMatcher) ||
+                ocrRecognizer.isLineWalkSplashOrLoadingScreen(verifyOcr, verifyBmp.height) ||
                 adCloserHandler.isGameScreenVisible(service, verifyBmp, verifyOcr)
             Pair(true, isBack)
         } finally {

@@ -1,6 +1,36 @@
 # LINE 散步趣自動看廣告助手 (LineWalkAutoAd) 發布說明
 
 ## 版本資訊
+- 版本名稱：v1.15.95
+- 版本代碼：versionCode 128, versionName "1.15.95"
+- 發布類型：正式版本 (Release)
+
+---
+
+## 概述
+LineWalkAutoAd v1.15.95 針對 `v1.15.94` 實機回報（`samsung SM-S7210`，`1080x2340`，韓系 MoneyWalk 跨界黑邊快閃略過廣告與雙實機截圖）中顯露的兩大痛點進行像素級與任務層級根治：修正 `TemplateMatcher.hasCapsuleExtension` 將黑邊／淺灰廣告交界線誤判為橫向文字膠囊而拒點左上角快閃 `[▶|]` 略過鈕的缺陷，並將 `Step 4C` 搶點門檻提前至第 4 秒；新增 **Level 3 多工卡片精準滑除脫困 (`forceKillStuckGameTaskViaRecents`)** 徹底解決 Android 17／Samsung One UI 上 `CLEAR_TASK` 無法關閉頑固廣告 Activity 的問題（嚴格正向鎖定「散步趣／LINE Walk」卡片後才上滑，絕不盲滑其他應用）；同步修正懸浮窗於一般廣告監控期間誤顯示「強退中」的標籤。
+
+---
+
+## 本次重點更新 (v1.15.95)
+
+### 1. 修正跨界黑邊 `[▶|]` 略過鈕遭 `hasCapsuleExtension` 誤拒並提前 4 秒搶點 (`TemplateMatcher` / `AdCloserHandler`)
+- **同水平掃描線明暗跳變判定**：修正 `TemplateMatcher.scanCornerSkipZone` 內 `hasCapsuleExtension` 原先跨列混算明暗像素數量的缺陷——當 `[▶|]` 圓鈕恰好跨騎在頂部純黑黑邊與下方淺灰廣告卡片交界線（如 `y = effTop = 248`）時，上方純黑列與下方純灰列會誤觸 `extBright >= 4 && extDark >= 6` 導致按鈕完全遭拒；改為要求「同一水平掃描線」具備明暗文字筆畫跳變（`rowBright >= 2 && rowDark >= 3 && rowTransitions >= 2`，至少 2 條掃描線且累計 4 次以上跳變）才認定右側有倒數文字膠囊，既完整保留「`X 56 秒後可獲獎勵`」膠囊防護，又讓韓系跨界黑邊 `[▶|]` 鈕穩定命中、按鈕消失後零誤報。
+- **提前 `Step 4C` 搶點時機**：將 `AdCloserHandler` Step 4C 啟用秒數由 `elapsedSec >= 5` 提前至 `elapsedSec >= 4`、單支上限由 2 次調整為 3 次，提升對倒數結束後僅短暫出現數秒即隱藏之 `[▶|]` 鈕的搶點成功率。
+
+### 2. 新增 Level 3 多工卡片精準滑除脫困，徹底突破 `CLEAR_TASK` 失效之頑固廣告 (`AutoAdAccessibilityService` / `AutomationEngine`)
+- **多工卡片正向識別與安全滑除**：於 `AutoAdAccessibilityService` 新增 `openRecents()` 與 `findRecentsAppCardCenterX(sw, sh)`，並於 `AutomationEngine.recoverStuckAdToMainScreen` 的 Level 2 `CLEAR_TASK` 後補上畫面覆核（同步將 `isLineWalkSplashOrLoadingScreen` 納入已恢復判定，避免誤殺剛重啟載入中的散步趣）；若確認 `CLEAR_TASK` 仍無法關閉卡死廣告，立即升級 **Level 3 (`forceKillStuckGameTaskViaRecents`)**，透過無障礙節點或 OCR 正向鎖定「散步趣／LINE Walk」卡片中心座標後僅上滑該卡片並冷啟動遊戲；若未能正向識別卡片則絕不盲滑，保障其他應用安全。
+
+### 3. 修正懸浮窗廣告監控階段文案 (`FloatingOverlayService`)
+- 調整 `FloatingOverlayService.formatActiveStatusText` 標籤優先順序，將一般 `AD_WATCHING` 監控期間（含 `safeDetail` 帶「監控」字樣）明確顯示為「監控中」，僅在實際執行退回或強退嘗試時顯示「強退中」。
+
+### 4. 驗證結果
+- 新增 `V1_15_95SimulationTest`（3 項專項測試：重現 `y = 248` 跨界黑邊 `[▶|]` 穩定命中與 4 秒搶點／無按鈕畫面零誤報／真實橫向倒數文字膠囊持續排除、Level 3 多工卡片正向鎖定「散步趣」上滑冷啟動與無散步趣卡片絕不盲滑、懸浮窗「監控中」與「強退中」正確分流）。
+- 通過 `--tests "com.linewalk.autoad.test.v1159*" --tests "com.linewalk.autoad.test.v1158*" --tests "com.linewalk.autoad.util.UpdateCheckerTest"` 目標測試集（共 17 測試類別、72 項測試全數通過，`failures = 0`、`errors = 0`、`skipped = 0`，非未過濾全量測試集）、M1 / M2 / M3 Python 壓力測試以及 `:app:assembleRelease` 正式版 APK 建置（尚未於實機環境完成更新後長時驗證）。
+
+---
+
+## 歷史版本資訊 (v1.15.94)
 - 版本名稱：v1.15.94
 - 版本代碼：versionCode 127, versionName "1.15.94"
 - 發布類型：正式版本 (Release)
@@ -12,7 +42,7 @@ LineWalkAutoAd v1.15.94 針對實機雙日誌回報（`samsung SM-F731N` `v1.15.
 
 ---
 
-## 本次重點更新 (v1.15.94)
+## 更新細節 (v1.15.94)
 
 ### 1. 收斂黑名單半徑與歸因時間窗，根除 End Card `"X"`／`"(X)"` 誤封與永久續命 (`AdCloserHandler` / `AutomationEngine`)
 - **5.5 秒點擊歸因時間窗與緊縮同列膠囊頻寬**：將 `AdCloserHandler.markRecentRedirect` 隱式 `lastClickedPoint` 歸因窗由 12 秒收斂至 5.5 秒，防止 11–12 秒後的 SDK 自動跳轉誤將先前點擊點拉黑；並將 `hitsTopRightRedirectPillStrip` 垂直半頻寬 `rowHalfBandY` 由 `sh * 0.025`（約 66px）收斂至 `max(22px, sh * 0.014)`（約 37px），避免 `12.3%` 處舊點跨列波及上方 55px 的真實 End Card `"X"`。

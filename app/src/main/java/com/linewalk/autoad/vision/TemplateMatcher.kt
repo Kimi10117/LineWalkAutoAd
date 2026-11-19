@@ -1061,26 +1061,44 @@ class TemplateMatcher {
             return max(r, max(g, b)) - kotlin.math.min(r, kotlin.math.min(g, b)) <= 45
         }
 
-        // 預先準備水平右延展膠囊過濾條（跨越 zone 右界時可直接讀取 screenBitmap）
+        // 預先準備水平右延展膠囊過濾條（跨越 zone 右界時可直接讀取 screenBitmap）：
+        // 必須在「同一水平掃描線」出現明暗文字筆畫交替（rowBright >= 2 且 rowDark >= 3 且水平跳變 >= 2，至少 2 條掃描線），
+        // 才能判定右側存在如「X 56 秒後可獲獎勵」之文字膠囊；徹底避免將跨騎黑邊與灰白廣告交界線之獨立 [▶|] 圓鈕誤判為文字膠囊！
         fun hasCapsuleExtension(absX: Int, absY: Int): Boolean {
             val dx0 = max(rRing + 2, (cw * 0.036f).toInt())
             val dx1 = kotlin.math.min(sw - 1 - absX, (cw * 0.160f).toInt())
             val extStep = max(1, cw / 180)
-            var extDark = 0
-            var extBright = 0
-            if (dx1 > dx0) {
-                var dy = -rCore / 2
-                while (dy <= rCore / 2) {
-                    val py = (absY + dy).coerceIn(0, sh - 1)
-                    var dx = dx0
-                    while (dx <= dx1) {
-                        val l = lumColor(screenBitmap.getPixel((absX + dx).coerceIn(0, sw - 1), py))
-                        if (l > 170f) extBright++ else if (l < 125f) extDark++
-                        if (extBright >= 4 && extDark >= 6) return true
-                        dx += extStep
+            if (dx1 <= dx0) return false
+            var mixedRows = 0
+            var totalTransitions = 0
+            var dy = -rCore / 2
+            while (dy <= rCore / 2) {
+                val py = (absY + dy).coerceIn(0, sh - 1)
+                var rowBright = 0
+                var rowDark = 0
+                var rowTransitions = 0
+                var prevState = 0
+                var dx = dx0
+                while (dx <= dx1) {
+                    val l = lumColor(screenBitmap.getPixel((absX + dx).coerceIn(0, sw - 1), py))
+                    val state = when {
+                        l > 170f -> 1
+                        l < 125f -> -1
+                        else -> 0
                     }
-                    dy += extStep
+                    if (state == 1) rowBright++ else if (state == -1) rowDark++
+                    if (state != 0 && prevState != 0 && state != prevState) {
+                        rowTransitions++
+                    }
+                    if (state != 0) prevState = state
+                    dx += extStep
                 }
+                if (rowBright >= 2 && rowDark >= 3 && rowTransitions >= 2) {
+                    mixedRows++
+                    totalTransitions += rowTransitions
+                    if (mixedRows >= 2 && totalTransitions >= 4) return true
+                }
+                dy += extStep
             }
             return false
         }

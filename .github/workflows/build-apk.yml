@@ -91,38 +91,38 @@ jobs:
       - name: Update Tag and Publish APK to GitHub Releases
         run: |
           git tag -f latest-apk
-          git tag -f v1.15.94
+          git tag -f v1.15.95
           git push -f origin latest-apk || true
-          git push -f origin v1.15.94 || true
+          git push -f origin v1.15.95 || true
 
       - name: Publish APK to GitHub Releases (latest-apk)
         uses: softprops/action-gh-release@v2
         with:
             tag_name: latest-apk
-            name: "散步趣助手 v1.15.94 (獨立OCR角落X緊縮解封、抽抽樂防誤判與避開底部橫幅、避CTA喚醒滑動與End Card安全關閉強化 - Run #${{ github.run_number }})"
+            name: "散步趣助手 v1.15.95 (修復跨界黑邊左上角[▶|]略過鈕誤拒與4秒搶點、新增Level 3多工卡片精準滑除強制脫困 - Run #${{ github.run_number }})"
             body: |
-              **散步趣助手 v1.15.94 (Run #${{ github.run_number }}) - 獨立OCR角落X緊縮解封、抽抽樂防誤判與避開底部橫幅、避CTA喚醒滑動與End Card安全關閉強化 (相容歷代版本 v1.15.93, v1.15.92, v1.15.91, v1.15.90, v1.15.89, v1.15.88, v1.15.87, v1.15.86, v1.15.85, v1.15.84, v1.15.83, v1.15.82, v1.15.81, v1.15.80, v1.15.79, v1.15.78, v1.15.77, v1.15.76, v1.15.75, v1.15.74, v1.15.73, v1.15.72, v1.15.71, v1.15.70, v1.15.69, v1.15.68, v1.15.67, v1.15.66, v1.15.65, v1.15.64, v1.15.63, v1.15.62, v1.15.61, v1.15.60, v1.15.58, v1.15.57, v1.15.56, v1.15.55, v1.15.54, v1.15.53, v1.15.52, v1.15.51, v1.15.50, v1.15.49, v1.15.48, v1.15.47, v1.15.46, v1.15.45)**
-              1. **【獨立 OCR 角落 X 緊縮解封與 5.5 秒歸因窗】**：
-                 - `AdCloserHandler.markRecentRedirect` 隱式點擊歸因窗收斂至 5.5s 並收窄 `hitsTopRightRedirectPillStrip` 垂直帶；新增 `isInvalidOrBlacklistedForExplicitOcrClose`（約 28px 半徑），徹底解除 `Cash Giraffe`／`Bigo Live` End Card `"X"@91%,10%` 與 `MITSUBISHI` `"(X)"@8%,5%` 遭舊點誤封；移除 `hasRecentRedirectWithin` 之 `adStartTimeMs` 自我續命並加上 `consecutiveWatchdogTimeouts < 2` 上限。
-              2. **【抽抽樂強標題保護與杜絕結果視窗誤點底部商店橫幅】**：
-                 - `AdCloserHandler.isGameScreenVisible` 優先放行「抽抽樂／賓果／好友／任務」頂部強標題，防止內嵌橫幅觸發 51–66s 假廣告監控；`LotteryTask.findLotteryResultCloseButton` 避開底部 Play 商店橫幅並對齊 `78.25%` 高度，`AutomationEngine` 於第 2 次即改走右上角 `(X)` 關閉。
-              3. **【避開中央 CTA 喚醒滑動、End Card 單次安全角點與防退回桌面】**：
-                 - `Step 8B Reveal Swipe` 改採側邊無文字安全帶滑動避免誤點 `"JOIN LIVE"@49%,70%`；Google Play 標頭 End Card 首次返回遭吞噬且右上角乾淨無「普遍級」等文字時先試探 1 次安全關閉熱區；`handleInGameScan` 攔截 `launcher` 前景不誤轉 `AD_WATCHING`，對齊 `右上角略過鈕(▶|)` 非預期跳轉，高可信關閉節點返回寬限延長至 4.5s，並容錯 `"首真"`／`"步敷"` 分頁 OCR。新增 `V1_15_94SimulationTest`，versionCode 127 / versionName 1.15.94（完整保留歷代版本 APK 與發布紀錄）。
+              **散步趣助手 v1.15.95 (Run #${{ github.run_number }}) - 修復跨界黑邊左上角[▶|]略過鈕誤拒與4秒搶點、新增Level 3多工卡片精準滑除強制脫困 (相容歷代版本 v1.15.94, v1.15.93, v1.15.92, v1.15.91, v1.15.90, v1.15.89, v1.15.88, v1.15.87, v1.15.86, v1.15.85, v1.15.84, v1.15.83, v1.15.82, v1.15.81, v1.15.80, v1.15.79, v1.15.78, v1.15.77, v1.15.76, v1.15.75, v1.15.74, v1.15.73, v1.15.72, v1.15.71, v1.15.70, v1.15.69, v1.15.68, v1.15.67, v1.15.66, v1.15.65, v1.15.64, v1.15.63, v1.15.62, v1.15.61, v1.15.60, v1.15.58, v1.15.57, v1.15.56, v1.15.55, v1.15.54, v1.15.53, v1.15.52, v1.15.51, v1.15.50, v1.15.49, v1.15.48, v1.15.47, v1.15.46, v1.15.45)**
+              1. **【修復跨界黑邊 `[▶|]` 略過鈕遭 `hasCapsuleExtension` 誤拒並提前 4 秒搶點】**：
+                 - `TemplateMatcher.scanCornerSkipZone` 內 `hasCapsuleExtension` 改採「同水平掃描線文字明暗跳變」判定，解決韓系跨界黑邊廣告（`effTop = 248`）之左上角獨立 `[▶|]` 圓鈕被黑邊／灰底跨列混合誤判為倒數膠囊而拒點的問題；並將 `AdCloserHandler` Step 4C 搶點門檻提前至第 4 秒（單支上限 3 次）。
+              2. **【新增 Level 3 多工卡片精準滑除脫困 (`forceKillStuckGameTaskViaRecents`)】**：
+                 - 針對 Android 17／Samsung One UI 上 `CLEAR_TASK` 仍無法關閉頑固內嵌廣告 Activity 的情境，於 `CLEAR_TASK` 驗證未恢復時（且排除剛進入 Splash 載入畫面），自動開啟多工並僅在透過節點／OCR 正向鎖定「散步趣／LINE Walk」卡片後向上滑除該卡片並冷啟動遊戲，絕不盲滑其他應用。
+              3. **【修正懸浮窗監控文案】**：
+                 - `FloatingOverlayService.formatActiveStatusText` 區分一般廣告「監控中」與實際退回「強退中」。新增 `V1_15_95SimulationTest`，versionCode 128 / versionName 1.15.95（完整保留歷代版本 APK 與發布紀錄）。
             files: LineWalkAutoAd.apk
             prerelease: false
 
-      - name: Publish Versioned APK to GitHub Releases (v1.15.94)
+      - name: Publish Versioned APK to GitHub Releases (v1.15.95)
         uses: softprops/action-gh-release@v2
         with:
-            tag_name: v1.15.94
-            name: "散步趣助手 v1.15.94 (獨立OCR角落X緊縮解封、抽抽樂防誤判與避開底部橫幅、避CTA喚醒滑動與End Card安全關閉強化)"
+            tag_name: v1.15.95
+            name: "散步趣助手 v1.15.95 (修復跨界黑邊左上角[▶|]略過鈕誤拒與4秒搶點、新增Level 3多工卡片精準滑除強制脫困)"
             body: |
-              **散步趣助手 v1.15.94 (Run #${{ github.run_number }}) - 獨立OCR角落X緊縮解封、抽抽樂防誤判與避開底部橫幅、避CTA喚醒滑動與End Card安全關閉強化**
-              1. **【獨立 OCR 角落 X 緊縮解封與 5.5 秒歸因窗】**：
-                 - `AdCloserHandler.markRecentRedirect` 隱式點擊歸因窗收斂至 5.5s 並收窄 `hitsTopRightRedirectPillStrip` 垂直帶；新增 `isInvalidOrBlacklistedForExplicitOcrClose`（約 28px 半徑），徹底解除 `Cash Giraffe`／`Bigo Live` End Card `"X"@91%,10%` 與 `MITSUBISHI` `"(X)"@8%,5%` 遭舊點誤封；移除 `hasRecentRedirectWithin` 之 `adStartTimeMs` 自我續命並加上 `consecutiveWatchdogTimeouts < 2` 上限。
-              2. **【抽抽樂強標題保護與杜絕結果視窗誤點底部商店橫幅】**：
-                 - `AdCloserHandler.isGameScreenVisible` 優先放行「抽抽樂／賓果／好友／任務」頂部強標題，防止內嵌橫幅觸發 51–66s 假廣告監控；`LotteryTask.findLotteryResultCloseButton` 避開底部 Play 商店橫幅並對齊 `78.25%` 高度，`AutomationEngine` 於第 2 次即改走右上角 `(X)` 關閉。
-              3. **【避開中央 CTA 喚醒滑動、End Card 單次安全角點與防退回桌面】**：
-                 - `Step 8B Reveal Swipe` 改採側邊無文字安全帶滑動避免誤點 `"JOIN LIVE"@49%,70%`；Google Play 標頭 End Card 首次返回遭吞噬且右上角乾淨無「普遍級」等文字時先試探 1 次安全關閉熱區；`handleInGameScan` 攔截 `launcher` 前景不誤轉 `AD_WATCHING`，對齊 `右上角略過鈕(▶|)` 非預期跳轉，高可信關閉節點返回寬限延長至 4.5s，並容錯 `"首真"`／`"步敷"` 分頁 OCR。新增 `V1_15_94SimulationTest`，versionCode 127 / versionName 1.15.94（完整保留歷代版本 APK 與發布紀錄）。
+              **散步趣助手 v1.15.95 (Run #${{ github.run_number }}) - 修復跨界黑邊左上角[▶|]略過鈕誤拒與4秒搶點、新增Level 3多工卡片精準滑除強制脫困**
+              1. **【修復跨界黑邊 `[▶|]` 略過鈕遭 `hasCapsuleExtension` 誤拒並提前 4 秒搶點】**：
+                 - `TemplateMatcher.scanCornerSkipZone` 內 `hasCapsuleExtension` 改採「同水平掃描線文字明暗跳變」判定，解決韓系跨界黑邊廣告（`effTop = 248`）之左上角獨立 `[▶|]` 圓鈕被黑邊／灰底跨列混合誤判為倒數膠囊而拒點的問題；並將 `AdCloserHandler` Step 4C 搶點門檻提前至第 4 秒（單支上限 3 次）。
+              2. **【新增 Level 3 多工卡片精準滑除脫困 (`forceKillStuckGameTaskViaRecents`)】**：
+                 - 針對 Android 17／Samsung One UI 上 `CLEAR_TASK` 仍無法關閉頑固內嵌廣告 Activity 的情境，於 `CLEAR_TASK` 驗證未恢復時（且排除剛進入 Splash 載入畫面），自動開啟多工並僅在透過節點／OCR 正向鎖定「散步趣／LINE Walk」卡片後向上滑除該卡片並冷啟動遊戲，絕不盲滑其他應用。
+              3. **【修正懸浮窗監控文案】**：
+                 - `FloatingOverlayService.formatActiveStatusText` 區分一般廣告「監控中」與實際退回「強退中」。新增 `V1_15_95SimulationTest`，versionCode 128 / versionName 1.15.95（完整保留歷代版本 APK 與發布紀錄）。
             files: LineWalkAutoAd.apk
             prerelease: false

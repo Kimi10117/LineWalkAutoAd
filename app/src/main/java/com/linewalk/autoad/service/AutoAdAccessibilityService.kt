@@ -502,6 +502,53 @@ class AutoAdAccessibilityService : AccessibilityService() {
     }
 
     /**
+     * 開啟系統多工切換畫面 (Recents)，供 Level 3 強制結束無法由 CLEAR_TASK 清除的頑固廣告任務。
+     */
+    fun openRecents(): Boolean {
+        return try {
+            performGlobalAction(GLOBAL_ACTION_RECENTS)
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /**
+     * 於多工切換畫面無障礙節點樹中尋找《LINE 散步趣》任務卡片之水平中心座標：
+     * 嚴格比對節點文字或描述含「散步趣」或「LINE Walk」，避免誤滑除其他使用者應用程式。
+     */
+    fun findRecentsAppCardCenterX(sw: Int, sh: Int): Int? {
+        if (sw <= 0 || sh <= 0) return null
+        val root = getSafeRootNode() ?: return null
+        val queue = java.util.ArrayDeque<android.view.accessibility.AccessibilityNodeInfo>()
+        queue.add(root)
+        var visited = 0
+        while (queue.isNotEmpty() && visited < 220) {
+            val node = queue.removeFirst()
+            visited++
+            try {
+                if (node.isVisibleToUser) {
+                    val txt = node.text?.toString().orEmpty()
+                    val desc = node.contentDescription?.toString().orEmpty()
+                    val combined = "$txt $desc"
+                    if (combined.contains("散步趣") || combined.contains("LINE Walk", ignoreCase = true)) {
+                        val rect = Rect()
+                        node.getBoundsInScreen(rect)
+                        val cy = rect.centerY()
+                        if (cy in (sh * 0.05f).toInt()..(sh * 0.85f).toInt() && rect.width() >= 20) {
+                            return rect.centerX().coerceIn((sw * 0.18f).toInt(), (sw * 0.82f).toInt())
+                        }
+                    }
+                }
+                for (i in 0 until node.childCount) {
+                    node.getChild(i)?.let { queue.add(it) }
+                }
+            } catch (_: Exception) {
+            }
+        }
+        return null
+    }
+
+    /**
      * 強制清棧拉回指定遊戲套件至前景，突破卡死在遊戲 Task 頂端的內嵌廣告 Activity：
      * - `clearTask = false`：使用 `FLAG_ACTIVITY_CLEAR_TOP or FLAG_ACTIVITY_SINGLE_TOP or FLAG_ACTIVITY_RESET_TASK_IF_NEEDED` 嘗試清除上層廣告頁。
      * - `clearTask = true`：升級使用 `FLAG_ACTIVITY_NEW_TASK or FLAG_ACTIVITY_CLEAR_TASK` 徹底重建遊戲主頁面 Task。

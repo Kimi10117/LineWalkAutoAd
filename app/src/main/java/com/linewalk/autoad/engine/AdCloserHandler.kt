@@ -1162,13 +1162,13 @@ class AdCloserHandler(
         val isMetaWebPreview = previewTitleItem != null
 
         // 4C. 【全螢幕快轉/略過按鈕 (▶| 或 >>) 圖示偵測器】
-        // 專門應對 Meta Audience Network 等影音廣告右上角的深色圓底高亮快轉略過鈕 (▶|)。
-        // 限制：非頂部白底 Sponsored 橫幅廣告、非 Meta 網頁預覽（交由 4D 嚴格限制頂部標題列），且單支廣告最多嘗試 2 次！
+        // 專門應對 Meta Audience Network / 韓系跨界黑邊影音廣告左上或右上角的深色圓底高亮快轉略過鈕 (▶|)。
+        // 限制：非頂部白底 Sponsored 橫幅廣告、非 Meta 網頁預覽（交由 4D 嚴格限制頂部標題列），滿 4 秒即啟動搶點（單支最多 3 次）！
         if (!isCurrentAdTopSponsored &&
             !isMetaWebPreview &&
-            fastForwardSkipClicks < 2 &&
+            fastForwardSkipClicks < 3 &&
             (isMetaAd || isAd || isGame || fgPkg == null) &&
-            (elapsedSec >= 5 || rewardGrantedOcr != null) &&
+            (elapsedSec >= 4 || rewardGrantedOcr != null) &&
             (remainingSec == null || remainingSec <= 1 || rewardGrantedOcr != null)
         ) {
             val skipMatch = templateMatcher.detectCornerFastForwardSkip(
