@@ -45,9 +45,20 @@ jobs:
 
       - name: Build Release APK
         run: |
-          gradle assembleRelease --no-daemon --stacktrace 2>&1 | tee build_log.txt
-          EXIT_CODE=${PIPESTATUS[0]}
-          echo "Gradle exit code: $EXIT_CODE"
+          EXIT_CODE=1
+          for attempt in 1 2 3; do
+            echo "=== Gradle assembleRelease attempt ${attempt}/3 ==="
+            gradle assembleRelease --no-daemon --stacktrace 2>&1 | tee build_log.txt
+            EXIT_CODE=${PIPESTATUS[0]}
+            echo "Gradle exit code (attempt ${attempt}): $EXIT_CODE"
+            if [ $EXIT_CODE -eq 0 ]; then
+              break
+            fi
+            if [ $attempt -lt 3 ]; then
+              echo "Transient build/repository error suspected; retrying in 15s..."
+              sleep 15
+            fi
+          done
           if [ $EXIT_CODE -ne 0 ]; then
             echo "=== GRADLE FAILED: LAST 200 LINES OF LOG ==="
             tail -n 200 build_log.txt
