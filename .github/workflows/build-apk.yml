@@ -91,38 +91,38 @@ jobs:
       - name: Update Tag and Publish APK to GitHub Releases
         run: |
           git tag -f latest-apk
-          git tag -f v1.15.92
+          git tag -f v1.15.93
           git push -f origin latest-apk || true
-          git push -f origin v1.15.92 || true
+          git push -f origin v1.15.93 || true
 
       - name: Publish APK to GitHub Releases (latest-apk)
         uses: softprops/action-gh-release@v2
         with:
             tag_name: latest-apk
-            name: "散步趣助手 v1.15.92 (InMobi惰性節點與半括號(X)防護、跨逾時redirectCount重置喚醒、延後返回與請勿打擾鎖屏待機修復 - Run #${{ github.run_number }})"
+            name: "散步趣助手 v1.15.93 (跨階段點擊歸因隔離、12秒重定向窗與備援盲點吞鍵不歸零修復 - Run #${{ github.run_number }})"
             body: |
-              **散步趣助手 v1.15.92 (Run #${{ github.run_number }}) - InMobi惰性節點與半括號(X)防護、跨逾時redirectCount重置喚醒、延後返回與請勿打擾鎖屏待機修復 (相容歷代版本 v1.15.91, v1.15.90, v1.15.89, v1.15.88, v1.15.87, v1.15.86, v1.15.85, v1.15.84, v1.15.83, v1.15.82, v1.15.81, v1.15.80, v1.15.79, v1.15.78, v1.15.77, v1.15.76, v1.15.75, v1.15.74, v1.15.73, v1.15.72, v1.15.71, v1.15.70, v1.15.69, v1.15.68, v1.15.67, v1.15.66, v1.15.65, v1.15.64, v1.15.63, v1.15.62, v1.15.61, v1.15.60, v1.15.58, v1.15.57, v1.15.56, v1.15.55, v1.15.54, v1.15.53, v1.15.52, v1.15.51, v1.15.50, v1.15.49, v1.15.48, v1.15.47, v1.15.46, v1.15.45)**
-              1. **【InMobi 早期惰性節點防護、半括號 `"(X"` 與宿主容器保護】**：
-                 - `AdCloserHandler` 提取 `isEarlyInertInmobiNode`（Step 4A/6 同步套用）在 14s 前略過空白 `inmobi_enhanced_skip_close_btn`，將 `Node[` 關閉/略過目標納入 `isHighConfidenceAdTarget` 防止自封；`OcrRecognizer.findCornerAsciiCloseButton` 支援 `"(X"` 等半括號字元，`NodeInspector` 於 `IN_GAME_SCAN` 排除空宿主 `close_button_container`。
-              2. **【跨 Watchdog `redirectCount` 解鎖與喚醒隱藏 `[▶| Google Play]` 膠囊】**：
-                 - `onEnterAdMode(preserveRedirectState = true)` 重置當輪 `redirectCount`／`closeClickCount` 並改以 `redirectPointCounts` 延續同列商店膠囊封鎖；`Step 8B Reveal Swipe` 擴充可玩關鍵字與 12–40s 喚醒機制解決 `JOIN LIVE` 四連強退迴圈；移除 Step 2B `!isGameVisible` 誤退出分支。
-              3. **【延後返回防退出桌面、請勿打擾鎖屏 AOD 與 Splash 畫面辨識】**：
-                 - `recordAndClick` 點擊關閉／略過鈕後延後 `lastBackActionTimeMs`；`AutoAdAccessibilityService.isDeviceLockedOrNonInteractive` 新增 `Display.state != STATE_ON` 與 `isDeviceLocked` 檢查；`OcrRecognizer.isLockscreenOrAodOcr` 辨識「請勿打擾／開啟」與時鐘狀態並新增 `isLineWalkSplashOrLoadingScreen`；`AutomationEngine` 抑制鎖屏後短暫系統桌面與正確重置待機計時。新增 `V1_15_92SimulationTest`，versionCode 125 / versionName 1.15.92（完整保留歷代版本 APK 與發布紀錄）。
+              **散步趣助手 v1.15.93 (Run #${{ github.run_number }}) - 跨階段點擊歸因隔離、12秒重定向窗與備援盲點吞鍵不歸零修復 (相容歷代版本 v1.15.92, v1.15.91, v1.15.90, v1.15.89, v1.15.88, v1.15.87, v1.15.86, v1.15.85, v1.15.84, v1.15.83, v1.15.82, v1.15.81, v1.15.80, v1.15.79, v1.15.78, v1.15.77, v1.15.76, v1.15.75, v1.15.74, v1.15.73, v1.15.72, v1.15.71, v1.15.70, v1.15.69, v1.15.68, v1.15.67, v1.15.66, v1.15.65, v1.15.64, v1.15.63, v1.15.62, v1.15.61, v1.15.60, v1.15.58, v1.15.57, v1.15.56, v1.15.55, v1.15.54, v1.15.53, v1.15.52, v1.15.51, v1.15.50, v1.15.49, v1.15.48, v1.15.47, v1.15.46, v1.15.45)**
+              1. **【隔離跨階段點擊歸因，消除 `inmobi_close_img` 誤拉黑】**：
+                 - `AutomationEngine.handleExternalAppGuard` 限定僅於 `EngineState.AD_WATCHING` 才呼叫 `adCloserHandler.markRecentRedirect(fromExternalApp = true)`，避免 `IN_GAME_SCAN` 期間誤跳日曆等背景 App 汙染黑名單；`AdCloserHandler.markRecentRedirect` 為隱式 `lastClickedPoint` 增設 12 秒歸因時間窗。
+                 - `AdCloserHandler` 新增 `clearCurrentClickContext()`，並於 `clearRedirectMemory()`（含 `hasRecentRedirect = false`）、`onEnterAdMode` 與 `ReturnedToGame` 轉場同步清除殘留點擊座標與標籤。
+              2. **【修正備援盲點重置吞鍵計數與空白畫面診斷提示】**：
+                 - `AdCloserHandler.recordAndClick` 僅於非「備援盲點」點擊時才將 `swallowedEndCardBackAttempts` 歸零，使 `45s+` 無字圖片／靜音影片廣告在兩次吞鍵後可於 `~53s` 提前升級 `ForceBringGameToFront` 逃脫，不再拖延至 66s Watchdog。
+                 - `AutomationEngine` 於 `AD_WATCHDOG_TIMEOUT` 記錄 `[畫面線索]` 時明確標註 `(無可辨識文字，可能為純圖片或靜音影片廣告)`。新增 `V1_15_93SimulationTest`，versionCode 126 / versionName 1.15.93（完整保留歷代版本 APK 與發布紀錄）。
             files: LineWalkAutoAd.apk
             prerelease: false
 
-      - name: Publish Versioned APK to GitHub Releases (v1.15.92)
+      - name: Publish Versioned APK to GitHub Releases (v1.15.93)
         uses: softprops/action-gh-release@v2
         with:
-            tag_name: v1.15.92
-            name: "散步趣助手 v1.15.92 (InMobi惰性節點與半括號(X)防護、跨逾時redirectCount重置喚醒、延後返回與請勿打擾鎖屏待機修復)"
+            tag_name: v1.15.93
+            name: "散步趣助手 v1.15.93 (跨階段點擊歸因隔離、12秒重定向窗與備援盲點吞鍵不歸零修復)"
             body: |
-              **散步趣助手 v1.15.92 (Run #${{ github.run_number }}) - InMobi惰性節點與半括號(X)防護、跨逾時redirectCount重置喚醒、延後返回與請勿打擾鎖屏待機修復**
-              1. **【InMobi 早期惰性節點防護、半括號 `"(X"` 與宿主容器保護】**：
-                 - `AdCloserHandler` 提取 `isEarlyInertInmobiNode`（Step 4A/6 同步套用）在 14s 前略過空白 `inmobi_enhanced_skip_close_btn`，將 `Node[` 關閉/略過目標納入 `isHighConfidenceAdTarget` 防止自封；`OcrRecognizer.findCornerAsciiCloseButton` 支援 `"(X"` 等半括號字元，`NodeInspector` 於 `IN_GAME_SCAN` 排除空宿主 `close_button_container`。
-              2. **【跨 Watchdog `redirectCount` 解鎖與喚醒隱藏 `[▶| Google Play]` 膠囊】**：
-                 - `onEnterAdMode(preserveRedirectState = true)` 重置當輪 `redirectCount`／`closeClickCount` 並改以 `redirectPointCounts` 延續同列商店膠囊封鎖；`Step 8B Reveal Swipe` 擴充可玩關鍵字與 12–40s 喚醒機制解決 `JOIN LIVE` 四連強退迴圈；移除 Step 2B `!isGameVisible` 誤退出分支。
-              3. **【延後返回防退出桌面、請勿打擾鎖屏 AOD 與 Splash 畫面辨識】**：
-                 - `recordAndClick` 點擊關閉／略過鈕後延後 `lastBackActionTimeMs`；`AutoAdAccessibilityService.isDeviceLockedOrNonInteractive` 新增 `Display.state != STATE_ON` 與 `isDeviceLocked` 檢查；`OcrRecognizer.isLockscreenOrAodOcr` 辨識「請勿打擾／開啟」與時鐘狀態並新增 `isLineWalkSplashOrLoadingScreen`；`AutomationEngine` 抑制鎖屏後短暫系統桌面與正確重置待機計時。新增 `V1_15_92SimulationTest`，versionCode 125 / versionName 1.15.92（完整保留歷代版本 APK 與發布紀錄）。
+              **散步趣助手 v1.15.93 (Run #${{ github.run_number }}) - 跨階段點擊歸因隔離、12秒重定向窗與備援盲點吞鍵不歸零修復**
+              1. **【隔離跨階段點擊歸因，消除 `inmobi_close_img` 誤拉黑】**：
+                 - `AutomationEngine.handleExternalAppGuard` 限定僅於 `EngineState.AD_WATCHING` 才呼叫 `adCloserHandler.markRecentRedirect(fromExternalApp = true)`，避免 `IN_GAME_SCAN` 期間誤跳日曆等背景 App 汙染黑名單；`AdCloserHandler.markRecentRedirect` 為隱式 `lastClickedPoint` 增設 12 秒歸因時間窗。
+                 - `AdCloserHandler` 新增 `clearCurrentClickContext()`，並於 `clearRedirectMemory()`（含 `hasRecentRedirect = false`）、`onEnterAdMode` 與 `ReturnedToGame` 轉場同步清除殘留點擊座標與標籤。
+              2. **【修正備援盲點重置吞鍵計數與空白畫面診斷提示】**：
+                 - `AdCloserHandler.recordAndClick` 僅於非「備援盲點」點擊時才將 `swallowedEndCardBackAttempts` 歸零，使 `45s+` 無字圖片／靜音影片廣告在兩次吞鍵後可於 `~53s` 提前升級 `ForceBringGameToFront` 逃脫，不再拖延至 66s Watchdog。
+                 - `AutomationEngine` 於 `AD_WATCHDOG_TIMEOUT` 記錄 `[畫面線索]` 時明確標註 `(無可辨識文字，可能為純圖片或靜音影片廣告)`。新增 `V1_15_93SimulationTest`，versionCode 126 / versionName 1.15.93（完整保留歷代版本 APK 與發布紀錄）。
             files: LineWalkAutoAd.apk
             prerelease: false

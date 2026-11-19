@@ -64,6 +64,7 @@ class AdCloserHandler(
     private var lastCountdownSecForDiag: Int? = null
     private var lastClickedPoint: Point? = null
     private var lastClickedAdLabel: String? = null
+    private var lastAdClickTimeMs: Long = 0L
     private var lastBackActionTimeMs: Long = 0L
     private var lastFallbackCornerTimeMs: Long = 0L
     private var lastRevealSwipeTimeMs: Long = 0L
@@ -95,6 +96,14 @@ class AdCloserHandler(
         swallowedEndCardBackAttempts = 0
     }
 
+    /** 清除單支廣告結算後之點擊歸因上下文，避免數分鐘後的無關外部跳轉追溯封鎖真實關閉鈕 */
+    fun clearCurrentClickContext() {
+        lastClickedPoint = null
+        lastClickedAdLabel = null
+        lastAdClickTimeMs = 0L
+        lastLeftCornerClickTimeMs = 0L
+    }
+
     fun onEnterAdMode(preserveRedirectState: Boolean = false) {
         val now = System.currentTimeMillis()
         val needFreshAttemptTimer = !preserveRedirectState || adStartTimeMs == 0L || now - adStartTimeMs > 120_000L
@@ -114,6 +123,7 @@ class AdCloserHandler(
             lastCountdownSecForDiag = null
             lastClickedPoint = null
             lastClickedAdLabel = null
+            lastAdClickTimeMs = 0L
             lastBackActionTimeMs = 0L
             lastFallbackCornerTimeMs = 0L
             lastRevealSwipeTimeMs = 0L
@@ -143,6 +153,7 @@ class AdCloserHandler(
             leftCornerRedirectCount = 0
             lastRedirectReturnTimeMs = 0L
             lastBlacklistTimeMs = 0L
+            lastAdClickTimeMs = 0L
             redirectPointCounts.clear()
             clickedHistory.clear()
             blacklistedPoints.clear()
@@ -176,14 +187,19 @@ class AdCloserHandler(
      *   避免為觸發左側二次保護而重複跳轉瀏覽器；真正略過按鈕則仍保留累計 3 次保護，避免誤封必須二次互動之廣告。
      */
     fun markRecentRedirect(clickedPoint: Point? = null, fromExternalApp: Boolean = false) {
-        val pt = clickedPoint ?: lastClickedPoint
+        val now = System.currentTimeMillis()
+        val isRecentClickForAttribution = clickedPoint == null &&
+            lastClickedPoint != null &&
+            lastAdClickTimeMs > 0L &&
+            now - lastAdClickTimeMs <= 12_000L
+        val pt = clickedPoint ?: if (isRecentClickForAttribution) lastClickedPoint else null
         val sw = currentScreenWidth
         val sh = currentScreenHeight
         val clickedLeftCorner = pt != null && sw > 0 && sh > 0 &&
             pt.x < (sw * 0.25f).toInt() && pt.y < (sh * 0.20f).toInt()
         val leftCornerWindowMs = if (fromExternalApp) 10000L else 6000L
         val recentLeftCornerClick = lastLeftCornerClickTimeMs > 0L &&
-            System.currentTimeMillis() - lastLeftCornerClickTimeMs < leftCornerWindowMs
+            now - lastLeftCornerClickTimeMs < leftCornerWindowMs
         if (clickedLeftCorner || recentLeftCornerClick) {
             leftCornerRedirectCount++
             // 允許冷卻後重試 1 次精確幾何 X，若累積達 2 次跳轉則永久封鎖左上角
@@ -193,7 +209,7 @@ class AdCloserHandler(
         }
         hasRecentRedirect = true
         redirectCount++
-        lastRedirectReturnTimeMs = System.currentTimeMillis()
+        lastRedirectReturnTimeMs = now
 
         val expectedSkip = isExpectedSkipLabel(lastClickedAdLabel)
         if (pt != null) {
@@ -268,8 +284,10 @@ class AdCloserHandler(
     fun clearRedirectMemory() {
         redirectCount = 0
         topRightStoreGateClicks = 0
+        hasRecentRedirect = false
         lastRedirectReturnTimeMs = 0L
         lastBlacklistTimeMs = 0L
+        clearCurrentClickContext()
         redirectPointCounts.clear()
         blacklistedPoints.clear()
     }
@@ -1916,15 +1934,20 @@ class AdCloserHandler(
         allowBlacklist: Boolean = true,
         label: String? = null
     ) {
-        swallowedEndCardBackAttempts = 0
         val effectiveLabel = label ?: lastClickedAdLabel
         if (label != null) {
             lastClickedAdLabel = label
         }
+        // 僅在點擊真實關閉／略過目標時重置吞鍵重試計數；備援盲點試探與超時返回鍵交替期間不可歸零，否則會拖延至 Watchdog 逾時
+        if (effectiveLabel?.startsWith("備援盲點") != true) {
+            swallowedEndCardBackAttempts = 0
+        }
+        val now = System.currentTimeMillis()
         val pt = Point(rect.centerX(), rect.centerY())
         lastClickedPoint = pt
+        lastAdClickTimeMs = now
         // 記錄最近一次點擊是否位於左上角（若隨後觸發外部跳轉，用於封鎖本支廣告的左上角區域）
-        lastLeftCornerClickTimeMs = if (isInLeftCornerZone(pt.x, pt.y)) System.currentTimeMillis() else 0L
+        lastLeftCornerClickTimeMs = if (isInLeftCornerZone(pt.x, pt.y)) now else 0L
         clickedHistory.add(pt)
         val nearbyClicks = countNearbyPoints(clickedHistory, pt)
         val isGeoX = isGeoXTarget(effectiveLabel)

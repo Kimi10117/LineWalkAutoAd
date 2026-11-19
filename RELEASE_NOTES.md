@@ -1,6 +1,34 @@
 # LINE 散步趣自動看廣告助手 (LineWalkAutoAd) 發布說明
 
 ## 版本資訊
+- 版本名稱：v1.15.93
+- 版本代碼：versionCode 126, versionName "1.15.93"
+- 發布類型：正式版本 (Release)
+
+---
+
+## 概述
+LineWalkAutoAd v1.15.93 針對 `v1.15.92` 實機長時雙日誌回報（`samsung SM-F731N`，`1080x2640`：涵蓋夜間 6 小時鎖屏 `[待機]` 零超時穩定待機與日間 23 輪巡邏／18 則廣告完成）中捕捉到的最後兩項細微問題進行根治：消除跨階段無關系統切出（如 `IN_GAME_SCAN` 期間誤跳 `com.google.android.calendar`）追溯拉黑先前 `inmobi_close_img` `(85, 157)` 座標的「跨階段歸因汙染」，並修正 `45s+`「備援盲點」點擊與「超時安全返回鍵」每 2 秒互相重置 `swallowedEndCardBackAttempts` 導致無法提前升級逃脫而拖至 66 秒 Watchdog 強退的問題；同步補強超時純圖片／靜音影片廣告的 `[畫面線索]` 空白提示，便於日後日誌診斷。
+
+---
+
+## 本次重點更新 (v1.15.93)
+
+### 1. 隔離跨階段點擊歸因，消除 `inmobi_close_img` `(85, 157)` 跨階段誤拉黑 (`AdCloserHandler` / `AutomationEngine`)
+- **限定 `AD_WATCHING` 歸因並新增 12 秒點擊時間窗**：修正 `AutomationEngine.handleExternalAppGuard` 原先無論引擎是否處於 `AD_WATCHING` 皆無條件呼叫 `adCloserHandler.markRecentRedirect(fromExternalApp = true)` 的缺陷，改為僅在 `EngineState.AD_WATCHING` 才納入廣告外部重定向歸因；並於 `AdCloserHandler.markRecentRedirect` 為隱式 `lastClickedPoint` 補上 12 秒時間窗限制，避免數分鐘後才發生的無關背景 App 切出（如日曆通知）追溯懲罰早已結束的廣告關閉點。
+- **清理殘留點擊上下文 (`clearCurrentClickContext`)**：於 `AdCloserHandler` 新增 `clearCurrentClickContext()`，並於 `clearRedirectMemory()`（連同重設 `hasRecentRedirect = false`）、`onEnterAdMode` 以及 `AutomationEngine` 的 `ReturnedToGame` 轉場同步清除 `lastClickedPoint`、`lastClickedAdLabel` 與 `lastAdClickTimeMs`，確保每次回到散步趣或清除記憶時不留跨輪殘留座標。
+
+### 2. 修正備援盲點重置吞鍵計數與補強空白畫面診斷線索 (`AdCloserHandler` / `AutomationEngine`)
+- **`備援盲點` 保留 `swallowedEndCardBackAttempts`**：於 `AdCloserHandler.recordAndClick` 中限定僅在「非備援盲點」點擊時才將 `swallowedEndCardBackAttempts` 歸零 (`effectiveLabel?.startsWith("備援盲點") != true`)，消除 45s 後 `備援盲點` 與 `超時安全返回鍵` 反覆 `1 -> 0 -> 1` 互洗導致無法累計達 2 次升級 `ForceBringGameToFront`（`~53s` 提前撤離）而拖延至 66 秒 `AD_WATCHDOG_TIMEOUT` 的循環。
+- **空白 OCR 超時畫面標註**：`AutomationEngine` 於 `AD_WATCHDOG_TIMEOUT` 記錄 `[畫面線索]` 時，若 `ocrDigest` 為空白不再省略，改為明確輸出 `(無可辨識文字，可能為純圖片或靜音影片廣告)` 以便區分純圖影廣告與遺漏文字。
+
+### 3. 驗證結果
+- 新增 `V1_15_93SimulationTest`（3 項專項測試：12 秒點擊歸因時間窗與 `clearRedirectMemory()` 清空 `lastClickedPoint`/`lastClickedAdLabel` 不誤封 `(85, 157)`、`IN_GAME_SCAN` 期間跳出 `com.google.android.calendar` 不觸發廣告重定向計數與拉黑、`備援盲點` 保留 `swallowedEndCardBackAttempts` 並於 2 次吞鍵後在 `~53s` 升級 `ForceBringGameToFront`）。
+- 通過 `--tests "com.linewalk.autoad.test.v1159*" --tests "com.linewalk.autoad.test.v1158*" --tests "com.linewalk.autoad.util.UpdateCheckerTest"` 目標測試集（共 15 測試類別、65 項測試全數通過，`failures = 0`、`errors = 0`、`skipped = 0`，非未過濾全量測試集）、M1 / M2 / M3 Python 壓力測試以及 `:app:assembleRelease` 正式版 APK 建置（尚未於實機環境完成更新後長時驗證）。
+
+---
+
+## 歷史版本資訊 (v1.15.92)
 - 版本名稱：v1.15.92
 - 版本代碼：versionCode 125, versionName "1.15.92"
 - 發布類型：正式版本 (Release)
@@ -12,7 +40,7 @@ LineWalkAutoAd v1.15.92 針對 `v1.15.90` 實機長時日誌回報（`samsung SM
 
 ---
 
-## 本次重點更新 (v1.15.92)
+## 更新細節 (v1.15.92)
 
 ### 1. InMobi 早期惰性節點防護、半括號 `"(X"` 與宿主容器防誤閉 (`AdCloserHandler` / `OcrRecognizer` / `NodeInspector`)
 - **延後點擊早期惰性節點並保護 `Node[` 不自封**：於 `AdCloserHandler` 提取共用 `isEarlyInertInmobiNode` 判斷（同步套用於 Step 4A 與 Step 6），當無字且無描述之 `inmobi_enhanced_skip_close_btn` 在 14 秒前尚未就緒時先略過不點擊；並將 `Node[` 含 `inmobi_`／`close`／`skip` 加入 `isHighConfidenceAdTarget`，避免早期惰性節點自我封鎖真實關閉位置（若觸發外部跳轉仍由 `redirectPointCounts` 即時封鎖）。

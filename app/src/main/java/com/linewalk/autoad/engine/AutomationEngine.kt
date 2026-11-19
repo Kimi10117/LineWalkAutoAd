@@ -805,7 +805,9 @@ class AutomationEngine private constructor(private val context: Context) {
         }
 
         appendLog("[防護] 偵測到非散步趣應用 ($externalPkg)，啟動嚴格防誤點保護 (連續 ${externalAppTicks} 次)")
-        adCloserHandler.markRecentRedirect(fromExternalApp = true)
+        if (_uiStatus.value.state == EngineState.AD_WATCHING) {
+            adCloserHandler.markRecentRedirect(fromExternalApp = true)
+        }
         _uiStatus.value = _uiStatus.value.copy(
             statusDetail = "[防護] 前景非散步趣 ($externalPkg)",
             overlaySafeDetail = "[外部保護] 非散步趣App ($safePkgLabel)"
@@ -3622,9 +3624,8 @@ class AutomationEngine private constructor(private val context: Context) {
             appendLog("[警報] 廣告播放達 ${adElapsed}s 超過計時器上限 (${timerLimitSec}s)，準備強制關閉廣告拉回散步趣！")
             appendLog(buildPhoneStateSnapshot("AD_WATCHDOG_TIMEOUT(${adElapsed}s/${timerLimitSec}s)", service, screenBitmap, ocrItems))
             val ocrDigest = formatStagnationOcrDigest(ocrItems, sw, sh, maxItems = 6)
-            if (ocrDigest.isNotBlank()) {
-                appendLog("[畫面線索] 廣告停滯 OCR 摘要: $ocrDigest")
-            }
+                .ifBlank { "(無可辨識文字，可能為純圖片或靜音影片廣告)" }
+            appendLog("[畫面線索] 廣告停滯 OCR 摘要: $ocrDigest")
             if (!service.safeNavigateBack(minIntervalMs = 300L, allowInGame = true, forceEscapeAdPackage = true)) {
                 recordBackRejectIfAny(service, "WatchdogEscape#1", screenBitmap, ocrItems)
             }
@@ -3782,6 +3783,7 @@ class AutomationEngine private constructor(private val context: Context) {
                 } else {
                     appendLog("[成功] 成功關閉廣告回到散步趣主畫面！(累計完成 $newAdsCount 次)")
                 }
+                adCloserHandler.clearCurrentClickContext()
                 transitionTo(EngineState.IN_GAME_SCAN, "完成一輪！繼續檢查本頁與其他分頁獎勵...", "[巡邏] 繼續下一輪...")
             }
 
@@ -3800,9 +3802,8 @@ class AutomationEngine private constructor(private val context: Context) {
                     appendLog("[計時強退] 廣告等待達 ${res.elapsedSec}s 超過計時器上限 (${timerLimitSec}s) 仍未關閉，強制喚醒散步趣 ($targetGamePkg) 拉回前景！")
                     appendLog(buildPhoneStateSnapshot("WATCHDOG_BACK_TIMEOUT(${res.elapsedSec}s/${timerLimitSec}s)", service, screenBitmap, ocrItems))
                     val ocrDigest = formatStagnationOcrDigest(ocrItems, sw, sh, maxItems = 6)
-                    if (ocrDigest.isNotBlank()) {
-                        appendLog("[畫面線索] 廣告停滯 OCR 摘要: $ocrDigest")
-                    }
+                        .ifBlank { "(無可辨識文字，可能為純圖片或靜音影片廣告)" }
+                    appendLog("[畫面線索] 廣告停滯 OCR 摘要: $ocrDigest")
                     recoverStuckAdToMainScreen(
                         service = service,
                         sourceBitmap = screenBitmap,
@@ -3820,9 +3821,8 @@ class AutomationEngine private constructor(private val context: Context) {
                 appendLog("[計時強退] ${res.reason} (耗時=${res.elapsedSec}s, 前景=${res.foregroundPkg})，強制喚醒散步趣 ($targetGamePkg) 拉回前景！")
                 appendLog(buildPhoneStateSnapshot("FORCE_BRING_FRONT(${res.reason})", service, screenBitmap, ocrItems))
                 val ocrDigest = formatStagnationOcrDigest(ocrItems, sw, sh, maxItems = 6)
-                if (ocrDigest.isNotBlank()) {
-                    appendLog("[畫面線索] 停滯畫面 OCR 摘要: $ocrDigest")
-                }
+                    .ifBlank { "(無可辨識文字，可能為純圖片或靜音影片廣告)" }
+                appendLog("[畫面線索] 停滯畫面 OCR 摘要: $ocrDigest")
                 recoverStuckAdToMainScreen(
                     service = service,
                     sourceBitmap = screenBitmap,
