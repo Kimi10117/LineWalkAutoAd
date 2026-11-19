@@ -875,7 +875,9 @@ class LotteryTask {
     }
 
     /**
-     * 偵測抽抽樂抽獎結果彈窗底部的「關閉」按鈕 (y ≈ 0.75f ~ 0.88f)
+     * 偵測抽抽樂抽獎結果彈窗底部的「關閉」按鈕 (y ≈ 0.72f ~ 0.88f)；
+     * 若未找到 OCR「關閉」且底部區域有原生廣告橫幅 (Google Play / 下載 / 安裝 / Sponsored)，直接回傳 null 改由右上角 (X) 安全關閉，
+     * 避免幾何備援點到 y=81.5% 下方商店橫幅反覆跳轉 Google Play。
      */
     fun findLotteryResultCloseButton(screenBitmap: Bitmap, ocrItems: List<OcrItem>): Rect? {
         val sw = screenBitmap.width
@@ -883,20 +885,44 @@ class LotteryTask {
         val ocrMatch = ocrItems.firstOrNull { item ->
             val cy = item.bounds.centerY()
             val t = item.text.trim()
-            cy in (sh * 0.75f).toInt()..(sh * 0.88f).toInt() && (t == "關閉" || t.contains("關閉"))
+            val hasAdKeyword = t.contains("Google", ignoreCase = true) ||
+                t.contains("Play", ignoreCase = true) ||
+                t.contains("安裝") || t.contains("安装") ||
+                t.contains("下載") || t.contains("下载") ||
+                t.contains("Sponsored", ignoreCase = true)
+            cy in (sh * 0.72f).toInt()..(sh * 0.88f).toInt() &&
+                !hasAdKeyword &&
+                (t == "關閉" || (t.length <= 6 && t.contains("關閉")))
         }
         if (ocrMatch != null) {
             return ocrMatch.bounds
         }
-        // 若畫面確定有抽獎結果標題 (中獎囉！) 或複合結果彈窗特徵 (BIG 8獎 / [x1 獲得])，提供幾何預設關閉按鈕
+        val hasBottomAdBanner = ocrItems.any { item ->
+            val cy = item.bounds.centerY()
+            val t = item.text.replace(" ", "")
+            cy in (sh * 0.75f).toInt()..(sh * 0.92f).toInt() && (
+                t.contains("GooglePlay", ignoreCase = true) ||
+                t.contains("Play商店") ||
+                t.contains("立即下載") ||
+                t.contains("免費下載") ||
+                t.contains("安裝") ||
+                t.contains("安装") ||
+                t.contains("Sponsored", ignoreCase = true) ||
+                t.equals("AD", ignoreCase = false)
+            )
+        }
+        if (hasBottomAdBanner) {
+            return null
+        }
+        // 若畫面確定有抽獎結果標題 (中獎囉！) 或複合結果彈窗特徵 (BIG 8獎 / [x1 獲得])，提供精準對齊實機 [關閉] 高度 (y ≈ 78.2%) 之備援區
         val hasResultTitle = ocrItems.any { it.text.contains("中獎") || it.text.contains("中獎囉") } ||
             isLotteryWinResultScreen(ocrItems, sh, screenBitmap)
         if (hasResultTitle) {
             return Rect(
                 (sw * 0.15f).toInt(),
-                (sh * 0.78f).toInt(),
+                (sh * 0.765f).toInt(),
                 (sw * 0.85f).toInt(),
-                (sh * 0.85f).toInt()
+                (sh * 0.800f).toInt()
             )
         }
         return null

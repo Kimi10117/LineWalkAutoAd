@@ -68,7 +68,9 @@ class AdCloserHandler(
     private var lastBackActionTimeMs: Long = 0L
     private var lastFallbackCornerTimeMs: Long = 0L
     private var lastRevealSwipeTimeMs: Long = 0L
+    private var lastRevealSwipeRedirected: Boolean = false
     private var revealSwipeCount: Int = 0
+    private var endCardFallbackTapAttempted: Boolean = false
     private var fallbackCornerCycle: Int = 0
     private var fastForwardSkipClicks: Int = 0
     private var leftCornerGeoXClicks: Int = 0
@@ -127,7 +129,9 @@ class AdCloserHandler(
             lastBackActionTimeMs = 0L
             lastFallbackCornerTimeMs = 0L
             lastRevealSwipeTimeMs = 0L
+            lastRevealSwipeRedirected = false
             revealSwipeCount = 0
+            endCardFallbackTapAttempted = false
             fallbackCornerCycle = 0
             fastForwardSkipClicks = 0
             leftCornerGeoXClicks = 0
@@ -147,6 +151,8 @@ class AdCloserHandler(
         redirectCount = 0
         topRightStoreGateClicks = 0
         hasRecentRedirect = false
+        endCardFallbackTapAttempted = false
+        lastRevealSwipeRedirected = false
         lastClickedAdLabel = null
         if (!preserveRedirectState) {
             disableLeftCornerForCurrentAd = false
@@ -188,10 +194,14 @@ class AdCloserHandler(
      */
     fun markRecentRedirect(clickedPoint: Point? = null, fromExternalApp: Boolean = false) {
         val now = System.currentTimeMillis()
+        // 僅在點擊後 5.5 秒內發生的外部跳轉才歸因於前一次隱式點擊座標，防止 11–12 秒後的 SDK 自動跳轉誤將真實關閉區拉黑
         val isRecentClickForAttribution = clickedPoint == null &&
             lastClickedPoint != null &&
             lastAdClickTimeMs > 0L &&
-            now - lastAdClickTimeMs <= 12_000L
+            now - lastAdClickTimeMs <= 5_500L
+        if (lastRevealSwipeTimeMs > 0L && now - lastRevealSwipeTimeMs <= 3_500L) {
+            lastRevealSwipeRedirected = true
+        }
         val pt = clickedPoint ?: if (isRecentClickForAttribution) lastClickedPoint else null
         val sw = currentScreenWidth
         val sh = currentScreenHeight
@@ -276,9 +286,9 @@ class AdCloserHandler(
     fun hasRecentRedirectWithin(windowMs: Long): Boolean {
         if (redirectCount <= 0 && redirectPointCounts.isEmpty() && blacklistedPoints.isEmpty() && topRightStoreGateClicks <= 0) return false
         val now = System.currentTimeMillis()
+        // 嚴格以實際重定向返回或加黑時間戳判定新鮮度，避免重進 AD_WATCHING 時 adStartTimeMs 不斷自我刷新導致舊黑名單永不過期
         return (lastRedirectReturnTimeMs > 0L && now - lastRedirectReturnTimeMs in 0L..windowMs) ||
-            (lastBlacklistTimeMs > 0L && now - lastBlacklistTimeMs in 0L..windowMs) ||
-            (adStartTimeMs > 0L && now - adStartTimeMs in 0L..windowMs)
+            (lastBlacklistTimeMs > 0L && now - lastBlacklistTimeMs in 0L..windowMs)
     }
 
     fun clearRedirectMemory() {
@@ -373,8 +383,9 @@ class AdCloserHandler(
 
         // 若右上角膠囊（如 [Google Play ×]）曾觸發過外部重定向，整條同列左側膠囊區 (最高向左延伸 24% 螢幕寬) 一併封鎖，
         // 避免 GeoX 因圓形黑名單半徑未覆蓋到左方 "Google Play" 字樣裡的 'y'/'a' 而二次跳轉商店。
+        // 垂直半頻寬收斂至 sh * 0.014 (~37px)，確保同列膠囊受封但絕不跨列波及上方 55px 處真正的 End Card "X"！
         if (currentScreenWidth > 0 && currentScreenHeight > 0) {
-            val rowHalfBandY = kotlin.math.max(radiusPx * 0.65, currentScreenHeight * 0.025)
+            val rowHalfBandY = kotlin.math.max(22.0, currentScreenHeight * 0.014)
             val hitsTopRightRedirectPillStrip = redirectPointCounts.any { pt ->
                 pt.x >= currentScreenWidth * 0.72f &&
                     pt.y <= currentScreenHeight * 0.16f &&
@@ -393,6 +404,49 @@ class AdCloserHandler(
             }
             val effectiveRadius = if (isRedirectBlocked) radiusPx else tightNoRedirectRadius
             hypot((pt.x - x).toDouble(), (pt.y - y).toDouble()) < effectiveRadius
+        }
+    }
+
+    /**
+     * 專供 Step 7A2 明確獨立 OCR 角落 "X" / "(X)" 關閉字元使用之精準緊縮黑名單判定：
+     * - 完整保留懸浮窗、狀態列、動態島與 Top Sponsored 安全區防護；
+     * - 黑名單半徑收斂至 max(22px, sw * 0.026) (~28px)，避免 34px–55px 外的歷史幾何 X 誤觸或上階段 (X) 黑名單封死真實 End Card OCR "X" / "(X)"。
+     */
+    internal fun isInvalidOrBlacklistedForExplicitOcrClose(x: Int, y: Int): Boolean {
+        if (FloatingOverlayService.isInsideOverlay(x, y)) return true
+        if (currentScreenHeight > 0 && currentScreenWidth > 0) {
+            val sw = currentScreenWidth
+            val sh = currentScreenHeight
+            if (currentHasThreeButtonNavBar && y >= currentEffectiveBottomY - (sh * 0.005f).toInt()) {
+                return true
+            }
+            if (x in (sw * 0.18f).toInt()..(sw * 0.82f).toInt() && y < (sh * 0.08f).toInt()) {
+                return true
+            }
+            if (isCurrentAdTopSponsored) {
+                if (y < (sh * 0.015f).toInt()) return true
+                val isLeftCloseZone = x in (sw * 0.025f).toInt()..(sw * 0.120f).toInt() &&
+                    y in (sh * 0.035f).toInt()..(sh * 0.100f).toInt()
+                if (!isLeftCloseZone) {
+                    if (x in (sw * 0.120f).toInt()..(sw * 0.850f).toInt() && y < (sh * 0.150f).toInt()) return true
+                    if (x < (sw * 0.120f).toInt() && y in (sh * 0.105f).toInt()..(sh * 0.150f).toInt()) return true
+                    if (x > (sw * 0.78f).toInt() && y < (sh * 0.120f).toInt()) return true
+                }
+            } else {
+                if (y < (sh * 0.024f).toInt()) return true
+            }
+        }
+        val swBase = if (currentScreenWidth > 0) currentScreenWidth else 1080
+        val tightOcrRadius = kotlin.math.max(22.0, swBase * 0.026)
+        val now = System.currentTimeMillis()
+        if (now - lastRedirectReturnTimeMs < 3500L) {
+            val isRecentExactRedirectPt = redirectPointCounts.any { pt ->
+                hypot((pt.x - x).toDouble(), (pt.y - y).toDouble()) < tightOcrRadius
+            }
+            if (isRecentExactRedirectPt) return true
+        }
+        return blacklistedPoints.any { pt ->
+            hypot((pt.x - x).toDouble(), (pt.y - y).toDouble()) < tightOcrRadius
         }
     }
 
@@ -1082,7 +1136,7 @@ class AdCloserHandler(
             t.contains("Play 商店") ||
             (item.bounds.centerY() < sh * 0.16f && (t.contains("Google", ignoreCase = true) || t.contains("Play", ignoreCase = true)))
         }
-        val isMetaAd = (isCurrentAdTopSponsored ||
+        val isMetaAd = !hasGameOrSubDialogMarkers && (isCurrentAdTopSponsored ||
             fgPkg == "com.facebook.katana" || fgPkg == "com.facebook.orca" ||
             fgPkg == "com.facebook.lite" || fgPkg == "com.facebook.mlite" ||
             fgPkg == "com.instagram.android" || fgPkg?.lowercase()?.startsWith("com.facebook.ads") == true ||
@@ -1279,9 +1333,10 @@ class AdCloserHandler(
             return AdStepResult.ClickedCloseOrSkip(closeOcrLabel, fullScreenCloseOcr.bounds)
         }
 
-        // 7A2. 角落獨立單字 X 關閉按鈕識別（如起漲K線廣告之左上角 "X"@6%,6%），僅匹配螢幕角落安全座標
+        // 7A2. 角落獨立單字 X 關閉按鈕識別（如起漲K線廣告之左上角 "X"@6%,6%、End Card "X"@91%,10%、MITSUBISHI "(X)"@8%,5%），
+        // 採用緊縮半徑 isInvalidOrBlacklistedForExplicitOcrClose 防止 34px–55px 外的舊誤觸點封死真實獨立 OCR 關閉字元
         val cornerAsciiClose = ocrRecognizer.findCornerAsciiCloseButton(safeCloseOcrItems, sw, sh) { cx, cy ->
-            isInvalidOrBlacklisted(cx, cy) || isBlockedByCornerPillOrSurveyOcr(cx, cy, ocrItems, sw, sh)
+            isInvalidOrBlacklistedForExplicitOcrClose(cx, cy) || isBlockedByCornerPillOrSurveyOcr(cx, cy, ocrItems, sw, sh)
         }
         if (cornerAsciiClose != null) {
             // 若為 Coupang 酷澎廣告且上方小 × (y < 8.8% sh) 下方緊鄰真實圓形灰底 (X)，優先點擊下方圓形 (X)
@@ -1477,11 +1532,23 @@ class AdCloserHandler(
         val endCardOrRedirectBackMinSec = if (isPreRegisterShowcaseAd) 56 else 42
         val lateFallbackOrBackMinSec = if (isPreRegisterShowcaseAd) 56 else 45
 
+        val isOutsideGame = !isGame && !isAd
+
         // Compatibility contract: isEndCard && elapsedSec >= 15 (upgraded to 42s in v1.15.67, 56s for 60s Pre-register ads in v1.15.91)
         if (isEndCard && elapsedSec >= endCardOrRedirectBackMinSec && (elapsedSec >= 15 || rewardGrantedOcr != null) && now - lastBackActionTimeMs >= 2500L) {
             hasAdActuallyShown = true
+            // 若首次結束卡片返回鍵遭內嵌廣告吞噬，且本支廣告從未發生過角落誤觸拉黑，
+            // 在升級 CLEAR_TASK 失去獎勵前先嘗試 1 次乾淨無文字遮擋之右上角安全關閉熱區（高於 9%..23% 商店標頭）
+            if (swallowedEndCardBackAttempts == 1 && !endCardFallbackTapAttempted &&
+                !isOutsideGame && blacklistedPoints.isEmpty() && redirectPointCounts.isEmpty() &&
+                now - lastFallbackCornerTimeMs >= 3000L
+            ) {
+                trySingleSafeEndCardCornerFallback(service, elapsedSec, sw, sh, ocrItems, now)?.let { return it }
+            }
             lastBackActionTimeMs = now
-            lastFallbackCornerTimeMs = now + 4000L
+            if (endCardFallbackTapAttempted) {
+                lastFallbackCornerTimeMs = max(lastFallbackCornerTimeMs, now + 4000L)
+            }
             trySafeEndCardOrRedirectBack(service, elapsedSec, "廣告結束卡片安全返回鍵", "END_CARD_BACK_SWALLOWED")?.let { return it }
         }
 
@@ -1489,7 +1556,6 @@ class AdCloserHandler(
         // 當廣告已播放超過 30 秒 (或已獲取獎勵)，且畫面仍未看見散步趣主畫面 (因為 line 264 已排除 isGameVisible)，
         // 代表廣告播放已完成但未自動關閉。此時透過安全返回鍵關閉廣告 Activity 最為安全，
         // 絕不盲目點擊螢幕中央或廣告內容，杜絕誤跳轉至 Google Play 商店！
-        val isOutsideGame = !isGame && !isAd
         val isPlayableAd = false
         if (!isOutsideGame && isPlayableAd) {
             // 互動廣告推進點擊（外部應用嚴格禁止）
@@ -1540,9 +1606,16 @@ class AdCloserHandler(
 
             // 備援盲點與安全返回：僅在廣告播放超過 45 秒（Pre-register 展示型廣告滿 56 秒）且無關閉鈕時觸發
             if (elapsedSec >= lateFallbackOrBackMinSec) {
-                // 若已經發生過外部重定向，嚴禁盲點角落熱區以免再度跳轉 Google Play（含遊戲內嵌廣告）！
-                // 直接使用安全系統返回鍵關閉廣告最為可靠！
+                // 若已經發生過外部重定向，嚴禁一般盲點輪點角落熱區以免再度跳轉 Google Play；
+                // 但若重定向僅為 SDK 自動跳轉（redirectPointCounts 與 blacklistedPoints 皆為空）且首次返回鍵遭吞噬，
+                // 允許在升級 CLEAR_TASK 前試探 1 次無文字遮擋的頂部右上角安全關閉熱區。
                 if (redirectCount > 0) {
+                    if (swallowedEndCardBackAttempts == 1 && !endCardFallbackTapAttempted &&
+                        !isOutsideGame && blacklistedPoints.isEmpty() && redirectPointCounts.isEmpty() &&
+                        now - lastFallbackCornerTimeMs >= 3000L
+                    ) {
+                        trySingleSafeEndCardCornerFallback(service, elapsedSec, sw, sh, ocrItems, now)?.let { return it }
+                    }
                     if (now - lastBackActionTimeMs >= 2000L) {
                         lastBackActionTimeMs = now
                         trySafeEndCardOrRedirectBack(service, elapsedSec, "末期安全返回鍵", "LATE_REDIRECT_BACK_SWALLOWED")?.let { return it }
@@ -1572,11 +1645,18 @@ class AdCloserHandler(
         }
 
         // 8B. 【試玩廣告控制項隱藏之滑動螢幕重新喚醒機制 (Reveal Swipe)】
-        // 針對可玩式試玩廣告 (如「解開港口」)，若廣告已播放 3 秒以上，
+        // 針對可玩式試玩廣告 (如「解開港口」「JOIN LIVE」「SPINNER」)，若廣告已播放 3 秒以上，
         // 且左上角 [▶| Google Play] 膠囊已淡出隱藏、右上角亦未出現關閉/略過按鈕，
-        // 必須在螢幕中下方輕輕滑動一次以喚醒廣告頂部 UI，使略過按鈕或關閉叉叉重新浮現！
+        // 於避開中央 CTA 文字框之側邊安全帶輕輕滑動一次以喚醒廣告頂部 UI，杜絕滑過 "JOIN LIVE"@49%,70% 誤開商店！
+        val allowAutoRedirectOnlyReveal = redirectCount > 0 &&
+            redirectPointCounts.isEmpty() &&
+            !lastRevealSwipeRedirected &&
+            elapsedSec in 15..38 &&
+            revealSwipeCount == 0 &&
+            now - lastRedirectReturnTimeMs >= 4500L
         if (elapsedSec >= 3 && remainingSec == null && revealSwipeCount < 4 &&
-            redirectCount == 0 && googlePlayPillClickCount == 0 && topRightStoreGateClicks == 0 &&
+            (redirectCount == 0 || allowAutoRedirectOnlyReveal) &&
+            googlePlayPillClickCount == 0 && topRightStoreGateClicks == 0 &&
             now - lastRevealSwipeTimeMs >= 3500L && now - lastGooglePlayPillClickTimeMs >= 2500L &&
             !isOutsideGame
         ) {
@@ -1612,11 +1692,12 @@ class AdCloserHandler(
                 revealSwipeCount++
                 lastRevealSwipeTimeMs = now
                 hasAdActuallyShown = true
+                val swipePath = pickSafeRevealSwipePath(sw, sh, ocrItems)
                 service.performSwipe(
-                    startX = sw * 0.50f,
-                    startY = sh * 0.65f,
-                    endX = sw * 0.50f,
-                    endY = sh * 0.45f,
+                    startX = swipePath[0],
+                    startY = swipePath[1],
+                    endX = swipePath[2],
+                    endY = swipePath[3],
                     durationMs = 180L
                 )
                 return AdStepResult.SwipedToReveal(revealSwipeCount, elapsedSec)
@@ -1726,6 +1807,81 @@ class AdCloserHandler(
             )
         }
         return null
+    }
+
+    /**
+     * 選擇避開中央 CTA（如 "JOIN LIVE"@49%,70% 或 "SPINNER"/"ShopBack" 卡片）的安全喚醒滑動路徑：
+     * 優先於左側／右側無 OCR 文字遮擋的安全直帶輕微滑動，僅在兩側皆被遮擋時才回退中下方區域。
+     */
+    internal fun pickSafeRevealSwipePath(
+        sw: Int,
+        sh: Int,
+        ocrItems: List<OcrItem>
+    ): FloatArray {
+        val candidates = listOf(
+            floatArrayOf(sw * 0.16f, sh * 0.38f, sw * 0.16f, sh * 0.26f),
+            floatArrayOf(sw * 0.84f, sh * 0.38f, sw * 0.84f, sh * 0.26f),
+            floatArrayOf(sw * 0.16f, sh * 0.62f, sw * 0.16f, sh * 0.50f),
+            floatArrayOf(sw * 0.50f, sh * 0.65f, sw * 0.50f, sh * 0.45f)
+        )
+        val padX = (sw * 0.045f).toInt().coerceAtLeast(16)
+        val padY = (sh * 0.030f).toInt().coerceAtLeast(24)
+        for (path in candidates) {
+            val minX = min(path[0], path[2]).toInt() - padX
+            val maxX = max(path[0], path[2]).toInt() + padX
+            val minY = min(path[1], path[3]).toInt() - padY
+            val maxY = max(path[1], path[3]).toInt() + padY
+            val hitsOcr = ocrItems.any { item ->
+                item.bounds.right >= minX && item.bounds.left <= maxX &&
+                    item.bounds.bottom >= minY && item.bounds.top <= maxY
+            }
+            if (!hitsOcr) return path
+        }
+        return candidates.first()
+    }
+
+    /**
+     * End Card 首次返回遭吞噬且尚無任何角落誤點紀錄時，於升級 CLEAR_TASK 失去獎勵前試探 1 次安全右上角熱區：
+     * 嚴格確認該熱區（y: 4.5%..8.8%，高於 9%..23% 商店標頭）未被任何非 X OCR 文字（如「普遍級」或「Google Play」）佔據。
+     */
+    private suspend fun trySingleSafeEndCardCornerFallback(
+        service: AutoAdAccessibilityService,
+        elapsedSec: Int,
+        sw: Int,
+        sh: Int,
+        ocrItems: List<OcrItem>,
+        now: Long
+    ): AdStepResult? {
+        val targetRect = Rect(
+            (sw * 0.87f).toInt(),
+            (sh * 0.045f).toInt(),
+            (sw * 0.96f).toInt(),
+            (sh * 0.088f).toInt()
+        )
+        val cx = targetRect.centerX()
+        val cy = targetRect.centerY()
+        if (isInvalidOrBlacklisted(cx, cy) || isBlockedByCornerPillOrSurveyOcr(cx, cy, ocrItems, sw, sh)) {
+            return null
+        }
+        val pad = 12
+        val hasBlockingOcrInHotzone = ocrItems.any { item ->
+            val trimmed = item.text.trim()
+            val isCloseChar = trimmed.length <= 3 && trimmed.trim('(', ')', '[', ']', ' ')
+                .let { it.equals("X", ignoreCase = true) || it == "×" || it == "✕" || it == "✖" }
+            !isCloseChar &&
+                item.bounds.right >= targetRect.left - pad &&
+                item.bounds.left <= targetRect.right + pad &&
+                item.bounds.bottom >= targetRect.top - pad &&
+                item.bounds.top <= targetRect.bottom + pad
+        }
+        if (hasBlockingOcrInHotzone) {
+            return null
+        }
+        endCardFallbackTapAttempted = true
+        lastFallbackCornerTimeMs = now
+        val fallbackLabel = "備援盲點[結束卡右上角熱區]"
+        recordAndClick(service, targetRect, allowBlacklist = false, label = fallbackLabel)
+        return AdStepResult.WatchdogBackTriggered(elapsedSec, fallbackLabel)
     }
 
     private fun getNextFallbackTarget(
@@ -1965,7 +2121,8 @@ class AdCloserHandler(
             }
         }
         if (effectiveLabel?.startsWith("備援盲點") != true && effectiveLabel != "Meta備援左上角熱區") {
-            lastBackActionTimeMs = max(lastBackActionTimeMs, System.currentTimeMillis() + 2000L)
+            val backDelayMs = if (isHighConfidence || isCornerOcrX) 4500L else 2000L
+            lastBackActionTimeMs = max(lastBackActionTimeMs, System.currentTimeMillis() + backDelayMs)
         }
         closeClickCount++
         FloatingOverlayService.clickWithOverlayPassthrough(rect) {
@@ -2011,7 +2168,8 @@ class AdCloserHandler(
         val topTabCount = ocrItems.count { item ->
             val cy = item.bounds.centerY().toFloat() / sh
             val t = item.text.replace(" ", "")
-            cy in 0.08f..0.18f && t.length <= 3 && (t == "首頁" || t == "步數" || t == "時間" || t == "遊戲" || t == "移動")
+            cy in 0.08f..0.18f && t.length <= 3 &&
+                (t == "首頁" || t == "首真" || t == "步數" || t == "步敷" || t == "時間" || t == "時問" || t == "遊戲" || t == "移動")
         }
         val hasBottomNav = ocrItems.any { item ->
             val cy = item.bounds.centerY().toFloat() / sh
@@ -2042,6 +2200,35 @@ class AdCloserHandler(
             cy in 0.85f..0.97f && t == "取消"
         }
         if (hasBottomModalTitle && hasBottomModalCancel) {
+            return true
+        }
+
+        // 0C2. 原生《LINE 散步趣》日常子視窗強標題判定（抽抽樂／每日賓果／好友排行榜／接收禮物／任務）：
+        // 由於抽抽樂與賓果視窗內嵌原生廣告橫幅常帶「立即下載 / Google Play / AD」，必須在 0D 一票否決前即先行放行，
+        // 徹底防止已回到抽抽樂畫面仍誤判為廣告播放長達 51–66 秒！
+        val hasTopLotteryTitle = ocrItems.any { item ->
+            item.bounds.centerY() < sh * 0.25f && item.text.replace(" ", "").contains("抽抽樂")
+        }
+        val hasLotteryBodyMarker = ocrItems.any { item ->
+            val t = item.text.replace(" ", "")
+            t.contains("查看獎項") || t.contains("獎項一覽") || t.contains("中獎囉") || t.contains("中奬囉") ||
+                t.contains("50張") || t.contains("5張") || t.contains("免費抽") || t.contains("回復還需") ||
+                t.contains("分享給好友")
+        }
+        val hasStrongGameSubDialogHeader = (hasTopLotteryTitle && hasLotteryBodyMarker) ||
+            ocrItems.any { item ->
+                val cy = item.bounds.centerY().toFloat() / sh
+                val t = item.text.replace(" ", "")
+                cy < 0.28f && (
+                    t.contains("每日賓果") ||
+                    t.contains("今日賓果") ||
+                    t.contains("好友排行榜") ||
+                    t.contains("接收禮物") ||
+                    t.contains("特別任務") ||
+                    t.contains("每日任務")
+                )
+            }
+        if (hasStrongGameSubDialogHeader) {
             return true
         }
         // 0D. 明確全螢幕廣告特徵一票否決，防止廣告文案或商店按鈕誤中 subDialog 特徵

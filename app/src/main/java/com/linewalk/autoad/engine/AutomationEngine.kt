@@ -738,8 +738,10 @@ class AutomationEngine private constructor(private val context: Context) {
             AppConfig.isPlayStoreOrBrowserPackage(externalPkg)
         val isExpectedSkipLabel = lastClickedLabel != null && (
             lastClickedLabel.contains("Google Play", ignoreCase = true) ||
-            lastClickedLabel.contains("略過") ||
-            lastClickedLabel.contains("快轉")
+            (!lastClickedLabel.startsWith("右上角") && (
+                lastClickedLabel.contains("略過") ||
+                lastClickedLabel.contains("快轉")
+            ))
         )
         val isLegitSkipRedirect = AppConfig.isPlayStoreOrBrowserPackage(externalPkg) && isExpectedSkipLabel
 
@@ -796,6 +798,12 @@ class AutomationEngine private constructor(private val context: Context) {
                 bringGameToFrontAndRestore(service, preserveWatchingState = true, restoreReason = "安全返回後桌面喚醒")
             } else if (AppConfig.isGamePackage(postBackFg)) {
                 externalAppTicks = 0
+            }
+            if (lastClickedLabel?.startsWith("左上角") == true &&
+                lastClickedLabel.contains("Google Play", ignoreCase = true)
+            ) {
+                // 左上角 [▶| Google Play] 略過膠囊完成緩衝並切入 End Card 階段時，清空前階段舊黑名單以免誤封 End Card 右上角真實 X
+                adCloserHandler.resetClickBlacklist()
             }
             adCloserHandler.clearLastClickedAdLabel()
             adCloserHandler.markStoreGateReturnCooldown()
@@ -1553,7 +1561,7 @@ class AutomationEngine private constructor(private val context: Context) {
         val hasMainScreenMarkers = ocrItems.any { item ->
             val cy = item.bounds.centerY().toFloat() / sh
             val t = item.text.replace(" ", "")
-            (cy in 0.05f..0.30f && (t.contains("首頁") || t.contains("步數") || t.contains("時間") || t.contains("遊戲"))) ||
+            (cy in 0.05f..0.30f && (t.contains("首頁") || t.contains("首真") || t.contains("步數") || t.contains("步敷") || t.contains("時間") || t.contains("時問") || t.contains("遊戲"))) ||
             (cy > 0.85f && (
                 t == "集點" ||
                 (t.contains("好友") && !t.contains("邀請") && !t.contains("被") && !t.contains("名單") && t.length <= 4) ||
@@ -1696,6 +1704,16 @@ class AutomationEngine private constructor(private val context: Context) {
         )
 
         val fgPkgNow = service.getForegroundPackageName()
+        if (fgPkgNow != null && (
+                fgPkgNow == "com.sec.android.app.launcher" ||
+                fgPkgNow.contains("launcher", ignoreCase = true) ||
+                AppConfig.isRedirectPackage(fgPkgNow) ||
+                AppConfig.isExternalSocialAppPackage(fgPkgNow)
+            )
+        ) {
+            handleExternalAppGuard(service, fgPkgNow)
+            return
+        }
         if (ocrRecognizer.isLoggedOutOrLoginScreen(ocrItems, fgPkgNow, screenBitmap.height)) {
             appendLog("[登入防護] 偵測到《LINE 散步趣》已登出／LINE 帳號登入畫面，自動停止巡邏以避免無效點擊！")
             stop("偵測到《LINE 散步趣》已登出／需重新登入，自動停止巡邏")
@@ -1714,7 +1732,9 @@ class AutomationEngine private constructor(private val context: Context) {
             geoXConsecutiveClicks = 0
             val adTriggerReason = if (hasPlayableOrStoreAdOcr) "OCR廣告/商店特徵" else "連續非遊戲畫面"
             appendLog("[廣告] 偵測到全螢幕廣告/可玩式廣告/商店宣傳頁 ($adTriggerReason, pkg=${fgPkgNow ?: "unknown"})，切換至廣告監控流程安全關閉！")
-            adCloserHandler.onEnterAdMode(preserveRedirectState = adCloserHandler.hasRecentRedirectWithin(180_000L))
+            adCloserHandler.onEnterAdMode(
+                preserveRedirectState = consecutiveWatchdogTimeouts < 2 && adCloserHandler.hasRecentRedirectWithin(180_000L)
+            )
             transitionTo(
                 EngineState.AD_WATCHING,
                 "偵測到廣告/宣傳視窗，安全等待與關閉中...",
@@ -2043,8 +2063,8 @@ class AutomationEngine private constructor(private val context: Context) {
                 delay(500)
                 return
             }
-            val resultCloseBtn = if (lotteryResultCloseAttempts >= 4) {
-                lotteryTask.getCloseButtonBounds(sw, sh, ocrItems, screenBitmap, attempt = lotteryResultCloseAttempts - 3)
+            val resultCloseBtn = if (lotteryResultCloseAttempts >= 2) {
+                lotteryTask.getCloseButtonBounds(sw, sh, ocrItems, screenBitmap, attempt = lotteryResultCloseAttempts - 1)
             } else {
                 lotteryTask.findLotteryResultCloseButton(screenBitmap, ocrItems)
                     ?: lotteryTask.getCloseButtonBounds(sw, sh, ocrItems, screenBitmap, attempt = 1)

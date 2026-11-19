@@ -492,7 +492,7 @@ class OcrRecognizer {
             t.contains("今天的步數") || t.contains("距離下次累積還有") || t.contains("步數瓶")
         } || items.count { item ->
             val t = item.text.replace(" ", "")
-            (t.length <= 3 && (t == "首頁" || t == "步數" || t == "時間" || t == "遊戲" || t == "移動")) ||
+            (t.length <= 3 && (t == "首頁" || t == "首真" || t == "步數" || t == "步敷" || t == "時間" || t == "時問" || t == "遊戲" || t == "移動")) ||
             (t == "集點" || t == "精選" || t == "好友" || t == "使用")
         } >= 2
         if (hasMainScreenMarkers) return false
@@ -979,7 +979,8 @@ class OcrRecognizer {
         val topTabCountPre = items.count { item ->
             val t = item.text.replace(" ", "")
             val cy = item.bounds.centerY().toFloat() / sh
-            cy in 0.08f..0.18f && t.length <= 3 && (t == "首頁" || t == "步數" || t == "時間" || t == "遊戲" || t == "移動")
+            cy in 0.08f..0.18f && t.length <= 3 &&
+                (t == "首頁" || t == "首真" || t == "步數" || t == "步敷" || t == "時間" || t == "時問" || t == "遊戲" || t == "移動")
         }
         val hasBottomNavPre = items.any { item ->
             val t = item.text.replace(" ", "")
@@ -1094,8 +1095,10 @@ class OcrRecognizer {
             val t = item.text.replace(" ", "")
             val cy = item.bounds.centerY().toFloat() / sh
 
-            // 頂部四大分頁 (cy in 0.08f..0.18f, 長度<=3 全詞比對，避免廣告文案誤判)
-            if (cy in 0.08f..0.18f && t.length <= 3 && (t == "首頁" || t == "步數" || t == "時間" || t == "遊戲" || t == "移動")) {
+            // 頂部四大分頁 (cy in 0.08f..0.18f, 長度<=3 全詞比對，含 ML Kit 常見辨識近似字 首真/步敷/時問，避免廣告文案誤判)
+            if (cy in 0.08f..0.18f && t.length <= 3 &&
+                (t == "首頁" || t == "首真" || t == "步數" || t == "步敷" || t == "時間" || t == "時問" || t == "遊戲" || t == "移動")
+            ) {
                 topTabCount++
             }
 

@@ -1,6 +1,44 @@
 # LINE 散步趣自動看廣告助手 (LineWalkAutoAd) 發布說明
 
 ## 版本資訊
+- 版本名稱：v1.15.94
+- 版本代碼：versionCode 127, versionName "1.15.94"
+- 發布類型：正式版本 (Release)
+
+---
+
+## 概述
+LineWalkAutoAd v1.15.94 針對實機雙日誌回報（`samsung SM-F731N` `v1.15.93` 兩小時 107 則廣告日誌，以及 `samsung SM-S7210` `v1.15.92` 日誌）中共同顯露的五大核心問題進行根因修復：收斂黑名單歸因窗至 5.5 秒並建立獨立 OCR 角落 `"X"`／`"(X)"` 緊縮半徑，徹底終結 `Cash Giraffe`／`Bigo Live` 連續 4 次 `CLEAR_TASK` 死鎖與 `MITSUBISHI` `"(X)"` 誤封；修正抽抽樂內嵌廣告橫幅導致 `isGameScreenVisible` 誤判為 51–66 秒假廣告與 `【抽抽樂結果】` 底部備援連點 `y = 81.5%` Google Play 橫幅；優化 `Step 8B Reveal Swipe` 避開 `"JOIN LIVE"@49%,70%` 中央按鈕；在 Google Play 商店標頭 End Card 首度返回遭吞噬後先試探 1 次乾淨右上角安全關閉熱區以保全廣告獎勵（並避開「普遍級」等分級標章）；並根除 `LAUNCHER_RECOVERY` 誤轉 `AD_WATCHING`、`右上角略過鈕(▶|)` 誤列預期略過與頂部分頁 `"首真"`／`"步敷"` OCR 近似字漏辨。
+
+---
+
+## 本次重點更新 (v1.15.94)
+
+### 1. 收斂黑名單半徑與歸因時間窗，根除 End Card `"X"`／`"(X)"` 誤封與永久續命 (`AdCloserHandler` / `AutomationEngine`)
+- **5.5 秒點擊歸因時間窗與緊縮同列膠囊頻寬**：將 `AdCloserHandler.markRecentRedirect` 隱式 `lastClickedPoint` 歸因窗由 12 秒收斂至 5.5 秒，防止 11–12 秒後的 SDK 自動跳轉誤將先前點擊點拉黑；並將 `hitsTopRightRedirectPillStrip` 垂直半頻寬 `rowHalfBandY` 由 `sh * 0.025`（約 66px）收斂至 `max(22px, sh * 0.014)`（約 37px），避免 `12.3%` 處舊點跨列波及上方 55px 的真實 End Card `"X"`。
+- **獨立 OCR 角落 X 緊縮黑名單 (`isInvalidOrBlacklistedForExplicitOcrClose`)**：為 Step 7A2 獨立 OCR 角落 `"X"`／`"(X)"` 建立約 28px (`max(22px, sw * 0.026)`) 之精準緊縮判定，使 `Cash Giraffe`／`Bigo Live` 的 `(987, 271)` 與 `MITSUBISHI` 的 `"(X)" @ (86, 132)` 不再受 34px–55px 外舊幾何或前階段誤點封鎖。
+- **移除 `adStartTimeMs` 自我續命與階段轉移清黑**：自 `AdCloserHandler.hasRecentRedirectWithin` 移除會隨重入自我刷新的 `adStartTimeMs` 分支，並於 `AutomationEngine.handleInGameScan` 加上 `consecutiveWatchdogTimeouts < 2` 上限；且於「左上角 `[▶| Google Play]` 略過鈕」完成緩衝轉入 End Card 時清空前階段舊黑名單。
+
+### 2. 修正抽抽樂強標題辨識與結果視窗底部 Play 橫幅誤點 (`AdCloserHandler` / `LotteryTask` / `AutomationEngine`)
+- **原生子視窗強標題優先放行**：於 `AdCloserHandler.isGameScreenVisible` 的廣告關鍵字一票否決前先行檢查頂部「抽抽樂（搭配查看獎項／中獎囉／50張／5張）」、「每日賓果」、「好友排行榜」、「接收禮物」、「特別／每日任務」等強標題，並於 `isMetaAd` 排除遊戲子視窗，避免內嵌原生橫幅觸發 51–66 秒假廣告監控與 `Meta備援左上角熱區` 誤開瀏覽器。
+- **杜絕抽抽樂結果視窗連點 `y = 81.5%` 商店橫幅**：`LotteryTask.findLotteryResultCloseButton` 偵測底部 `75%..92%` 存在 Google Play／下載／安裝／Sponsored 橫幅時回傳 `null` 改走右上角 `(X)`，無橫幅時將備援區對齊實機 `78.25%` 高度；並於 `AutomationEngine` 將結果視窗切換右上角 `(X)` 的門檻由第 4 次提前至第 2 次。
+
+### 3. 避開中央 CTA 的安全喚醒滑動與 End Card 首度吞鍵後單次安全右上角試探 (`AdCloserHandler`)
+- **避開 `"JOIN LIVE"@49%,70%` 之安全喚醒路徑 (`pickSafeRevealSwipePath`)**：Step 8B 喚醒滑動改優先選取左側／右側無 OCR 文字遮擋的安全垂直帶輕滑，不再直接滑過中央 `"JOIN LIVE"`／`"SPINNER"` 按鈕誤開 Google Play；並在純 SDK 自動跳轉（`redirectPointCounts` 為空且前次滑動未引發跳轉）時容許 1 次延遲喚醒滑動。
+- **End Card 首度吞鍵後試探 1 次乾淨右上角熱區 (`trySingleSafeEndCardCornerFallback`)**：針對 `Blade War`、`Origami`、`1111`、`Coupang`、`Petit Planet`、`POP紀元`、`Silver Palace` 等 Google Play 商店標頭 End Card，當首次返回鍵遭吞噬且尚無任何角落誤點時，先確認頂部 `4.5%..8.8%` 右上角熱區無「普遍級」或任何非 X 文字遮擋後試探點擊 1 次以保全獎勵，未關閉才升級 `CLEAR_TASK`。
+
+### 4. 根除 `LAUNCHER_RECOVERY`、對齊 `右上角略過鈕(▶|)` 判斷與補強主畫面 OCR 近似字 (`AutomationEngine` / `AdCloserHandler` / `OcrRecognizer`)
+- **即時攔截系統桌面前景**：`AutomationEngine.handleInGameScan` 於切換廣告監控前先覆核最新 `fgPkgNow`，若已切至系統桌面（`com.sec.android.app.launcher`）或外部 App 立即導向 `handleExternalAppGuard`，絕不於桌面誤轉 `AD_WATCHING`。
+- **對齊右上角視覺略過跳轉判定與延長高可信關閉緩衝**：`AutomationEngine.handleExternalAppGuard` 僅對 `Google Play` 或非右上角之預期略過啟用 2 秒獎勵緩衝，修正 `Winler est` 觸發 `右上角略過鈕(▶|)` 跳開三星瀏覽器遭誤判為預期跳轉的問題；並將 `AdCloserHandler.recordAndClick` 點擊高可信 `Node[`／`OCR-角落` 關閉鈕後的返回鍵寬限由 2 秒延長至 4.5 秒，防止動畫未完遭返回鍵退出至桌面。
+- **主畫面頂部分頁 OCR 近似字容錯**：`OcrRecognizer`、`AdCloserHandler` 與 `AutomationEngine` 納入 `"首真"`、`"步敷"`、`"時問"` 等常見 ML Kit 單字辨識近似字，減少返回主畫面後的誤轉 `AD_WATCHING`。
+
+### 5. 驗證結果
+- 新增 `V1_15_94SimulationTest`（4 項專項測試：5.5 秒歸因窗／End Card `"X"` 與 MITSUBISHI `"(X)"` 不受舊黑名單波及與過期不續命、抽抽樂含橫幅識別為遊戲畫面與結果視窗避開底部商店橫幅、JOIN LIVE 避開 CTA 喚醒滑動與 End Card 單次右上角安全試探及避開「普遍級」、系統桌面防誤轉廣告／`右上角略過鈕(▶|)` 非預期跳轉／`"首真"`+`"步敷"` 分頁容錯與高可信節點 4.5s 返回寬限）。
+- 通過 `--tests "com.linewalk.autoad.test.v1159*" --tests "com.linewalk.autoad.test.v1158*" --tests "com.linewalk.autoad.util.UpdateCheckerTest"` 目標測試集（共 16 測試類別、69 項測試全數通過，`failures = 0`、`errors = 0`、`skipped = 0`，非未過濾全量測試集）、M1 / M2 / M3 Python 壓力測試以及 `:app:assembleRelease` 正式版 APK 建置（尚未於實機環境完成更新後長時驗證）。
+
+---
+
+## 歷史版本資訊 (v1.15.93)
 - 版本名稱：v1.15.93
 - 版本代碼：versionCode 126, versionName "1.15.93"
 - 發布類型：正式版本 (Release)
@@ -12,7 +50,7 @@ LineWalkAutoAd v1.15.93 針對 `v1.15.92` 實機長時雙日誌回報（`samsung
 
 ---
 
-## 本次重點更新 (v1.15.93)
+## 更新細節 (v1.15.93)
 
 ### 1. 隔離跨階段點擊歸因，消除 `inmobi_close_img` `(85, 157)` 跨階段誤拉黑 (`AdCloserHandler` / `AutomationEngine`)
 - **限定 `AD_WATCHING` 歸因並新增 12 秒點擊時間窗**：修正 `AutomationEngine.handleExternalAppGuard` 原先無論引擎是否處於 `AD_WATCHING` 皆無條件呼叫 `adCloserHandler.markRecentRedirect(fromExternalApp = true)` 的缺陷，改為僅在 `EngineState.AD_WATCHING` 才納入廣告外部重定向歸因；並於 `AdCloserHandler.markRecentRedirect` 為隱式 `lastClickedPoint` 補上 12 秒時間窗限制，避免數分鐘後才發生的無關背景 App 切出（如日曆通知）追溯懲罰早已結束的廣告關閉點。
