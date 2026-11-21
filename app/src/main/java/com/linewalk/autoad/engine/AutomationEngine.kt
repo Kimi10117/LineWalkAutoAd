@@ -184,6 +184,13 @@ class AutomationEngine private constructor(private val context: Context) {
     var isMissionCompleted = false
         internal set
     internal var missionOpenCycleCount = 0
+    internal var receiveGiftDialogCloseAttempts = 0
+    private val missionClaimPointCounts = mutableMapOf<android.graphics.Point, Int>()
+    private var lastUserOpenedSettingsMs: Long = 0L
+    private var selfFgAutoRecoverCount: Int = 0
+    private var selfFgAutoRecoverWindowStartMs: Long = 0L
+    internal var selfFgAutoRecoverTotalCount: Int = 0
+    internal var level3RecentsKillCount = 0
     var isReceiveGiftCompleted = false
         internal set
     var isFriendGiftCompleted = false
@@ -349,6 +356,8 @@ class AutomationEngine private constructor(private val context: Context) {
             externalRedirectBrowserCount = 0
             externalRedirectOtherCount = 0
             backRejectCount = 0
+            level3RecentsKillCount = 0
+            selfFgAutoRecoverTotalCount = 0
         }
         legitSkipRedirectPkg = null
         legitSkipRedirectStartMs = 0L
@@ -356,6 +365,12 @@ class AutomationEngine private constructor(private val context: Context) {
         lastSelfForegroundLogMs = 0L
         lastLockscreenStandbyLogMs = 0L
         lastLockscreenStandbyTimeMs = 0L
+        selfFgAutoRecoverCount = 0
+        selfFgAutoRecoverWindowStartMs = 0L
+        receiveGiftDialogCloseAttempts = 0
+        missionClaimPointCounts.clear()
+        lastRawLogMessage = null
+        consecutiveSameLogCount = 0
         resetClickCircuitBreaker()
         inGameLinePromoRetryCount = 0
         popupRetryTicks = 0
@@ -483,6 +498,13 @@ class AutomationEngine private constructor(private val context: Context) {
     }
 
     /**
+     * 標記使用者主動點擊懸浮窗設定鈕進入《散步趣助手》主畫面，避免被誤判為廣告返回意外落入而強制切回遊戲。
+     */
+    fun markUserOpenedSettings() {
+        lastUserOpenedSettingsMs = System.currentTimeMillis()
+    }
+
+    /**
      * 當巡邏運行期間《散步趣助手》主設定畫面回到前景時，記錄防護通知供日誌追溯。
      */
     fun onMainActivityResumedWhileRunning() {
@@ -537,7 +559,7 @@ class AutomationEngine private constructor(private val context: Context) {
         }
     }
 
-    private fun pauseForLockscreenStandby(sourceLabel: String) {
+    private fun pauseForLockscreenStandby(sourceLabel: String, reasonDetail: String = "") {
         externalAppTicks = 0
         nonGameScreenTicks = 0
         nonMainScreenIdleTicks = 0
@@ -547,7 +569,8 @@ class AutomationEngine private constructor(private val context: Context) {
         lastLockscreenStandbyTimeMs = now
         if (now - lastLockscreenStandbyLogMs >= 30_000L) {
             lastLockscreenStandbyLogMs = now
-            appendLog("[待機] 偵測到螢幕鎖定或 Always-On Display 待機畫面 ($sourceLabel)，暫停巡邏與點擊，待解鎖後自動恢復...")
+            val reasonPart = if (reasonDetail.isNotBlank()) ", 原因=$reasonDetail" else ""
+            appendLog("[待機] 偵測到螢幕鎖定或 Always-On Display 待機畫面 ($sourceLabel$reasonPart)，暫停巡邏與點擊，待解鎖後自動恢復...")
         }
         updateDetail("[待機] 螢幕鎖定/AOD 待機中，暫停操作...", "[待機] 螢幕鎖定暫停中")
     }
@@ -561,8 +584,15 @@ class AutomationEngine private constructor(private val context: Context) {
 
         var currentState = _uiStatus.value.state
         val fgPkg = service.getForegroundPackageName()
-        if (AppConfig.isLockscreenOrAodPackage(fgPkg) || service.isDeviceLockedOrNonInteractive()) {
-            pauseForLockscreenStandby(fgPkg ?: "keyguard")
+        val isAodPkg = AppConfig.isLockscreenOrAodPackage(fgPkg)
+        val isDeviceLocked = service.isDeviceLockedOrNonInteractive()
+        if (isAodPkg || isDeviceLocked) {
+            val lockReason = when {
+                isAodPkg && isDeviceLocked -> "AOD_PKG+DEVICE_LOCKED"
+                isAodPkg -> "AOD_PKG"
+                else -> "DEVICE_LOCKED_OR_NON_INTERACTIVE"
+            }
+            pauseForLockscreenStandby(fgPkg ?: "keyguard", lockReason)
             return
         }
         if (AppConfig.isGamePackage(fgPkg)) {
@@ -632,6 +662,21 @@ class AutomationEngine private constructor(private val context: Context) {
         } else if (!guardDecision.regularClicksAllowed) {
             if (fgPkg == context.packageName) {
                 val now = System.currentTimeMillis()
+                val msSinceAutoBack = now - service.getLastBackActionTimeMs()
+                val userRecentlyOpenedSettings = lastUserOpenedSettingsMs > 0L && now - lastUserOpenedSettingsMs <= 10_000L
+                if (currentState == EngineState.AD_WATCHING && !userRecentlyOpenedSettings && msSinceAutoBack in 0L..3500L) {
+                    if (selfFgAutoRecoverWindowStartMs == 0L || now - selfFgAutoRecoverWindowStartMs > 30_000L) {
+                        selfFgAutoRecoverWindowStartMs = now
+                        selfFgAutoRecoverCount = 0
+                    }
+                    if (selfFgAutoRecoverCount < 2) {
+                        selfFgAutoRecoverCount++
+                        selfFgAutoRecoverTotalCount++
+                        appendLog("[防護] 廣告返回鍵意外退回《散步趣助手》主畫面 (距上次自動返回 ${msSinceAutoBack}ms，第 $selfFgAutoRecoverCount 次)，自動喚醒《LINE 散步趣》繼續巡邏！")
+                        bringGameToFrontAndRestore(service, preserveWatchingState = false, restoreReason = "廣告返回意外落入助手主畫面恢復")
+                        return
+                    }
+                }
                 if (now - lastSelfForegroundLogMs >= 8000L) {
                     lastSelfForegroundLogMs = now
                     appendLog("[防護] 前景為《散步趣助手》主畫面 ($fgPkg)，自動暫停掃描與點擊以防誤觸設定")
@@ -659,8 +704,9 @@ class AutomationEngine private constructor(private val context: Context) {
             val ocrItems = rawOcrItems.filterNot { item ->
                 FloatingOverlayService.isInsideOverlay(item.bounds.centerX(), item.bounds.centerY())
             }
-            if (ocrRecognizer.isLockscreenOrAodOcr(ocrItems)) {
-                pauseForLockscreenStandby(fgPkg ?: "lockscreen-ocr")
+            if (ocrRecognizer.isLockscreenOrAodOcr(ocrItems, screenBitmap.height)) {
+                val lockDigest = formatStagnationOcrDigest(ocrItems, screenBitmap.width, screenBitmap.height, maxItems = 3)
+                pauseForLockscreenStandby(fgPkg ?: "lockscreen-ocr", "OCR_LOCK($lockDigest)")
                 return
             }
             lastCapturedScreenWidth = screenBitmap.width
@@ -815,6 +861,9 @@ class AutomationEngine private constructor(private val context: Context) {
         appendLog("[防護] 偵測到非散步趣應用 ($externalPkg)，啟動嚴格防誤點保護 (連續 ${externalAppTicks} 次)")
         if (_uiStatus.value.state == EngineState.AD_WATCHING) {
             adCloserHandler.markRecentRedirect(fromExternalApp = true)
+            adCloserHandler.consumeLastBlacklistEventDiag()?.let { diag ->
+                appendLog("[黑名單] 座標已納入封鎖: $diag")
+            }
         }
         _uiStatus.value = _uiStatus.value.copy(
             statusDetail = "[防護] 前景非散步趣 ($externalPkg)",
@@ -903,7 +952,7 @@ class AutomationEngine private constructor(private val context: Context) {
 
         // 行為 3: 若無廣告關閉鈕，發送安全返回鍵退出外部應用
         appendLog("[防護] 前景非散步趣 ($externalPkg) 且無廣告關閉鈕，發送安全返回鍵退出外部 App")
-        if (!service.safeNavigateBack()) {
+        if (!service.safeNavigateBack(minIntervalMs = 800L)) {
             recordBackRejectIfAny(service, "ExternalAppFallback($externalPkg)")
         }
         if (AppConfig.isRedirectPackage(fgPkg)) {
@@ -1443,16 +1492,58 @@ class AutomationEngine private constructor(private val context: Context) {
             val hasGifts = receiveGiftTask.findNextClaimGiftButton(screenBitmap, ocrItems) != null
             if (isReceiveGiftCompleted && !hasGifts) {
                 currentPhase = getNextPhase(PatrolPhase.RECEIVE_GIFT)
-                val closeBtn = receiveGiftTask.getCloseButtonBounds(sw, sh, ocrItems, screenBitmap)
-                appendLog("[禮物] 禮物已領取完畢，點擊右上角 (X) 關閉視窗")
-                FloatingOverlayService.clickWithOverlayPassthrough(closeBtn) {
-                    service.clickRect(closeBtn)
+                receiveGiftDialogCloseAttempts++
+                when {
+                    receiveGiftDialogCloseAttempts >= 7 -> {
+                        appendLog("[禮物] 禮物視窗連續關閉達 $receiveGiftDialogCloseAttempts 次仍停留，點擊底部【集點】強制結束本輪並返回主畫面！")
+                        receiveGiftDialogCloseAttempts = 0
+                        val mainTabBtn = friendGiftTask.getBottomMainTabRect(sw, sh, ocrItems, screenBitmap)
+                        FloatingOverlayService.clickWithOverlayPassthrough(mainTabBtn) {
+                            service.clickRect(mainTabBtn)
+                        }
+                        if (isFriendGiftCompleted && isReceiveGiftCompleted) {
+                            handleRoundCompletion(service)
+                        }
+                        return
+                    }
+                    receiveGiftDialogCloseAttempts == 6 -> {
+                        val digest = formatStagnationOcrDigest(ocrItems, sw, sh, maxItems = 5)
+                        appendLog("[禮物] 禮物視窗仍未關閉 (嘗試: 6)，發送安全返回鍵脫困 | OCR: $digest")
+                        if (!service.safeNavigateBack(minIntervalMs = 600L, allowInGame = true)) {
+                            recordBackRejectIfAny(service, "ReceiveGiftCloseBack", screenBitmap, ocrItems)
+                        }
+                        delay(450)
+                        return
+                    }
+                    receiveGiftDialogCloseAttempts == 5 -> {
+                        val backdropRect = Rect((sw * 0.40f).toInt(), (sh * 0.08f).toInt(), (sw * 0.60f).toInt(), (sh * 0.13f).toInt())
+                        appendLog("[禮物] 禮物視窗關閉無效 (嘗試: 5)，改點上方半透明遮罩關閉 ${formatPointCoord(backdropRect, sw, sh)}")
+                        FloatingOverlayService.clickWithOverlayPassthrough(backdropRect) {
+                            service.clickRect(backdropRect, allowTopSafeZone = true)
+                        }
+                        delay(400)
+                        return
+                    }
+                    else -> {
+                        val closeBtn = receiveGiftTask.getCloseButtonBounds(
+                            sw = sw,
+                            sh = sh,
+                            ocrItems = ocrItems,
+                            screenBitmap = screenBitmap,
+                            attempt = receiveGiftDialogCloseAttempts
+                        )
+                        appendLog("[禮物] 禮物已領取完畢，點擊右上角 (X) 關閉視窗 (嘗試: $receiveGiftDialogCloseAttempts/4) ${formatPointCoord(closeBtn, sw, sh)}")
+                        FloatingOverlayService.clickWithOverlayPassthrough(closeBtn) {
+                            service.clickRect(closeBtn, allowTopSafeZone = true)
+                        }
+                        delay(350)
+                        return
+                    }
                 }
-                delay(350)
-                return
             }
             if (hasGifts) {
                 isReceiveGiftCompleted = false
+                receiveGiftDialogCloseAttempts = 0
             }
             handleReceiveGiftDialog(service, screenBitmap, ocrItems, sw, sh)
             return
@@ -2181,24 +2272,34 @@ class AutomationEngine private constructor(private val context: Context) {
         // 1. 尋找清單中綠色「領取」按鈕 (嚴格排除「挑戰」與「已領取」)
         val claimBtn = missionTask.findClaimableMissionButton(screenBitmap, ocrItems)
         if (claimBtn != null) {
-            currentPhaseEmptyTicks = 0
-            appendLog("[目標]【任務-$activeTab】點擊綠色「領取」按鈕 ${formatPointCoord(claimBtn, sw, sh)}")
-            FloatingOverlayService.clickWithOverlayPassthrough(claimBtn) {
-                service.clickRect(claimBtn)
+            val matchedPt = missionClaimPointCounts.keys.firstOrNull { pt ->
+                kotlin.math.abs(pt.x - claimBtn.centerX()) <= 40 &&
+                    kotlin.math.abs(pt.y - claimBtn.centerY()) <= 40
             }
-            delay(500)
-            popupRetryTicks = 0
-            pendingMissionDirectClaim = true
-            // 領取後可能觸發看廣告或獎勵彈窗，切入 TRIGGER_AD_POPUP 流程安全等候
-            transitionTo(
-                EngineState.TRIGGER_AD_POPUP,
-                "【任務-$activeTab】已點擊領取，等待獎勵或廣告載入中...",
-                "[目標] 領取獎勵中..."
-            )
-            return
+            val keyPt = matchedPt ?: android.graphics.Point(claimBtn.centerX(), claimBtn.centerY())
+            val clickCount = (missionClaimPointCounts[keyPt] ?: 0) + 1
+            missionClaimPointCounts[keyPt] = clickCount
+            if (clickCount <= 3) {
+                currentPhaseEmptyTicks = 0
+                appendLog("[目標]【任務-$activeTab】點擊綠色「領取」按鈕 ${formatPointCoord(claimBtn, sw, sh)}")
+                FloatingOverlayService.clickWithOverlayPassthrough(claimBtn) {
+                    service.clickRect(claimBtn)
+                }
+                delay(500)
+                popupRetryTicks = 0
+                pendingMissionDirectClaim = true
+                // 領取後可能觸發看廣告或獎勵彈窗，切入 TRIGGER_AD_POPUP 流程安全等候
+                transitionTo(
+                    EngineState.TRIGGER_AD_POPUP,
+                    "【任務-$activeTab】已點擊領取，等待獎勵或廣告載入中...",
+                    "[目標] 領取獎勵中..."
+                )
+                return
+            }
+            appendLog("[任務] 【任務-$activeTab】按鈕 ${formatPointCoord(claimBtn, sw, sh)} 連續點擊達 3 次未消失，跳過並切換下一分頁！")
         }
 
-        // 2. 當前分頁已無可領取項目，將當前分頁加入已檢查清單
+        // 2. 當前分頁已無可領取項目（或無效按鈕已略過），將當前分頁加入已檢查清單
         checkedMissionTabs.add(activeTab)
 
         // 3. 判斷是否還有未檢查的分頁：動態掃描現存分頁清單
@@ -2218,6 +2319,7 @@ class AutomationEngine private constructor(private val context: Context) {
         isMissionCompleted = true
         missionOpenCycleCount = 0
         checkedMissionTabs.clear()
+        missionClaimPointCounts.clear()
         appendLog("[完成]【任務】所有現存分頁（${availableTabs.joinToString()}）皆已檢查完畢，關閉視窗並推進至下一階段！")
         val closeBtn = missionTask.getCloseButtonBounds(sw, sh, ocrItems, screenBitmap)
         FloatingOverlayService.clickWithOverlayPassthrough(closeBtn) {
@@ -2239,10 +2341,11 @@ class AutomationEngine private constructor(private val context: Context) {
         if (receiveGiftTask.hasEmptyDrawer(ocrItems)) {
             currentPhaseEmptyTicks = 0
             isReceiveGiftCompleted = true
+            receiveGiftDialogCloseAttempts = 1
             appendLog("[禮物]【接收禮物】尚無收到任何好友禮物，點擊右上角 (X) 關閉視窗")
-            val closeBtn = receiveGiftTask.getCloseButtonBounds(sw, sh, ocrItems, screenBitmap)
+            val closeBtn = receiveGiftTask.getCloseButtonBounds(sw, sh, ocrItems, screenBitmap, attempt = 1)
             FloatingOverlayService.clickWithOverlayPassthrough(closeBtn) {
-                service.clickRect(closeBtn)
+                service.clickRect(closeBtn, allowTopSafeZone = true)
             }
             currentPhase = getNextPhase(PatrolPhase.RECEIVE_GIFT)
             updateDetail("[完成] 禮物視窗已關閉 (無待領禮物)，進入下一階段...", "[完成] 收禮完成")
@@ -2253,6 +2356,7 @@ class AutomationEngine private constructor(private val context: Context) {
         val claimTarget = receiveGiftTask.findNextClaimGiftButton(screenBitmap, ocrItems)
         if (claimTarget != null) {
             currentPhaseEmptyTicks = 0
+            receiveGiftDialogCloseAttempts = 0
             val isAd = claimTarget.isAd
             val label = claimTarget.label
             val rect = claimTarget.bounds
@@ -2293,10 +2397,11 @@ class AutomationEngine private constructor(private val context: Context) {
 
         currentPhaseEmptyTicks = 0
         isReceiveGiftCompleted = true
+        receiveGiftDialogCloseAttempts = 1
         appendLog("[完成]【接收禮物】全部禮物領取完畢，點擊右上角 (X) 關閉視窗")
-        val closeBtn = receiveGiftTask.getCloseButtonBounds(sw, sh, ocrItems, screenBitmap)
+        val closeBtn = receiveGiftTask.getCloseButtonBounds(sw, sh, ocrItems, screenBitmap, attempt = 1)
         FloatingOverlayService.clickWithOverlayPassthrough(closeBtn) {
-            service.clickRect(closeBtn)
+            service.clickRect(closeBtn, allowTopSafeZone = true)
         }
         currentPhase = getNextPhase(PatrolPhase.RECEIVE_GIFT)
         updateDetail("[完成] 好友禮物已全部接收完畢！", "[完成] 收禮完成")
@@ -3068,8 +3173,10 @@ class AutomationEngine private constructor(private val context: Context) {
         timeTask.hasTriedBonusBerryInCurrentStay = false
         isMissionCompleted = false
         checkedMissionTabs.clear()
+        missionClaimPointCounts.clear()
         isFriendGiftCompleted = false
         isReceiveGiftCompleted = false
+        receiveGiftDialogCloseAttempts = 0
         friendGiftEmptyTicks = 0
         friendGiftReturnHomeTicks = 0
         friendGiftOpenDrawerTicks = 0
@@ -3132,8 +3239,10 @@ class AutomationEngine private constructor(private val context: Context) {
             consecutiveNetworkErrorCount = 0
             isMissionCompleted = false
             checkedMissionTabs.clear()
+            missionClaimPointCounts.clear()
             isFriendGiftCompleted = false
             isReceiveGiftCompleted = false
+            receiveGiftDialogCloseAttempts = 0
             friendGiftEmptyTicks = 0
             friendGiftReturnHomeTicks = 0
             friendGiftOpenDrawerTicks = 0
@@ -3647,21 +3756,24 @@ class AutomationEngine private constructor(private val context: Context) {
             return false
         }
 
+        val cardsSummary = runCatching { service.describeRecentsCardsForLog(sw, sh) }
+            .getOrDefault("(none)")
         var cardCx: Int? = service.findRecentsAppCardCenterX(sw, sh)
+        var matchSource = if (cardCx != null) "node" else ""
         if (cardCx == null) {
             val recentsBmp = service.captureScreenBitmap()
             if (recentsBmp != null) {
                 try {
                     val recentsOcr = ocrRecognizer.recognize(recentsBmp)
-                    val matchedTitle = recentsOcr.firstOrNull { item ->
+                    val matchedTitle = recentsOcr.filter { item ->
                         val cy = item.bounds.centerY()
-                        val t = item.text
                         cy in (recentsBmp.height * 0.05f).toInt()..(recentsBmp.height * 0.85f).toInt() &&
-                            (t.contains("散步趣") || t.contains("LINE Walk", ignoreCase = true))
-                    }
+                            AutoAdAccessibilityService.isLineWalkRecentsLabel(item.text)
+                    }.maxByOrNull { it.bounds.centerX() }
                     if (matchedTitle != null) {
                         cardCx = matchedTitle.bounds.centerX()
-                            .coerceIn((recentsBmp.width * 0.18f).toInt(), (recentsBmp.width * 0.82f).toInt())
+                            .coerceIn((recentsBmp.width * 0.14f).toInt(), (recentsBmp.width * 0.86f).toInt())
+                        matchSource = "ocr"
                     }
                 } finally {
                     if (!recentsBmp.isRecycled) recentsBmp.recycle()
@@ -3670,20 +3782,21 @@ class AutomationEngine private constructor(private val context: Context) {
         }
 
         if (cardCx == null) {
-            appendLog("[計時強退] 多工畫面未正向識別《LINE 散步趣》卡片，基於安全原則放棄滑除並返回喚醒遊戲")
+            appendLog("[計時強退] 多工畫面未正向識別《LINE 散步趣》卡片，基於安全原則放棄滑除並返回喚醒遊戲 (卡片=$cardsSummary)")
             service.pressHome()
             delay(450)
             service.bringAppToFront(targetGamePkg)
             return false
         }
 
-        appendLog("[計時強退] 已於多工畫面鎖定《LINE 散步趣》任務卡片 (x=$cardCx)，向上滑除強制結束頑固廣告並冷啟動！")
+        level3RecentsKillCount++
+        appendLog("[計時強退] 已於多工畫面鎖定《LINE 散步趣》任務卡片 (x=$cardCx, 來源=$matchSource, 卡片=$cardsSummary)，向上滑除強制結束頑固廣告並冷啟動！")
         service.performSwipe(
             startX = cardCx.toFloat(),
-            startY = sh * 0.64f,
+            startY = sh * 0.66f,
             endX = cardCx.toFloat(),
-            endY = sh * 0.10f,
-            durationMs = 260L
+            endY = sh * 0.08f,
+            durationMs = 220L
         )
         delay(750)
         service.pressHome()
@@ -3742,7 +3855,9 @@ class AutomationEngine private constructor(private val context: Context) {
             appendLog(buildPhoneStateSnapshot("AD_WATCHDOG_TIMEOUT(${adElapsed}s/${timerLimitSec}s)", service, screenBitmap, ocrItems))
             val ocrDigest = formatStagnationOcrDigest(ocrItems, sw, sh, maxItems = 6)
                 .ifBlank { "(無可辨識文字，可能為純圖片或靜音影片廣告)" }
-            appendLog("[畫面線索] 廣告停滯 OCR 摘要: $ocrDigest")
+            val topCornerDigest = formatTopCornerOcrDigest(ocrItems, sw, sh, maxItems = 5)
+            val cornerSuffix = if (topCornerDigest.isNotBlank()) " | 頂角按鈕文字: $topCornerDigest" else ""
+            appendLog("[畫面線索] 廣告停滯 OCR 摘要: $ocrDigest$cornerSuffix")
             if (!service.safeNavigateBack(minIntervalMs = 300L, allowInGame = true, forceEscapeAdPackage = true)) {
                 recordBackRejectIfAny(service, "WatchdogEscape#1", screenBitmap, ocrItems)
             }
@@ -3763,7 +3878,11 @@ class AutomationEngine private constructor(private val context: Context) {
             return
         }
 
-        when (val res = adCloserHandler.processAdTick(service, screenBitmap, ocrItems)) {
+        val res = adCloserHandler.processAdTick(service, screenBitmap, ocrItems)
+        adCloserHandler.consumeLastBlacklistEventDiag()?.let { diag ->
+            appendLog("[黑名單] 座標已納入封鎖: $diag")
+        }
+        when (res) {
             is AdStepResult.RedirectRecovered -> {
                 appendLog("[防護] 誤跳轉外部套件/網頁 (${res.externalPkg})，已自動按返回鍵關閉並繼續監控廣告")
                 updateDetail(
@@ -3920,7 +4039,9 @@ class AutomationEngine private constructor(private val context: Context) {
                     appendLog(buildPhoneStateSnapshot("WATCHDOG_BACK_TIMEOUT(${res.elapsedSec}s/${timerLimitSec}s)", service, screenBitmap, ocrItems))
                     val ocrDigest = formatStagnationOcrDigest(ocrItems, sw, sh, maxItems = 6)
                         .ifBlank { "(無可辨識文字，可能為純圖片或靜音影片廣告)" }
-                    appendLog("[畫面線索] 廣告停滯 OCR 摘要: $ocrDigest")
+                    val topCornerDigest = formatTopCornerOcrDigest(ocrItems, sw, sh, maxItems = 5)
+                    val cornerSuffix = if (topCornerDigest.isNotBlank()) " | 頂角按鈕文字: $topCornerDigest" else ""
+                    appendLog("[畫面線索] 廣告停滯 OCR 摘要: $ocrDigest$cornerSuffix")
                     recoverStuckAdToMainScreen(
                         service = service,
                         sourceBitmap = screenBitmap,
@@ -3939,7 +4060,9 @@ class AutomationEngine private constructor(private val context: Context) {
                 appendLog(buildPhoneStateSnapshot("FORCE_BRING_FRONT(${res.reason})", service, screenBitmap, ocrItems))
                 val ocrDigest = formatStagnationOcrDigest(ocrItems, sw, sh, maxItems = 6)
                     .ifBlank { "(無可辨識文字，可能為純圖片或靜音影片廣告)" }
-                appendLog("[畫面線索] 停滯畫面 OCR 摘要: $ocrDigest")
+                val topCornerDigest = formatTopCornerOcrDigest(ocrItems, sw, sh, maxItems = 5)
+                val cornerSuffix = if (topCornerDigest.isNotBlank()) " | 頂角按鈕文字: $topCornerDigest" else ""
+                appendLog("[畫面線索] 停滯畫面 OCR 摘要: $ocrDigest$cornerSuffix")
                 recoverStuckAdToMainScreen(
                     service = service,
                     sourceBitmap = screenBitmap,
@@ -4277,6 +4400,29 @@ class AutomationEngine private constructor(private val context: Context) {
         get() = synchronized(_fullSessionLogs) { _fullSessionLogs.toList() }
 
     private var sessionStartTime: Date = Date()
+    private var lastRawLogMessage: String? = null
+    private var consecutiveSameLogCount: Int = 0
+    private var lastReportedSuppressedCount: Int = 0
+
+    private fun addLogLineLocked(line: String, recentUpdates: MutableList<String>) {
+        if (_fullSessionLogs.size >= 20000) {
+            _fullSessionLogs.removeAt(0)
+        }
+        _fullSessionLogs.add(line)
+        recentUpdates.add(line)
+    }
+
+    private fun flushSuppressedLogSummaryLocked(timestamp: String, recentUpdates: MutableList<String>) {
+        val suppressed = consecutiveSameLogCount - 3
+        if (suppressed > 0 && suppressed > lastReportedSuppressedCount) {
+            val preview = lastRawLogMessage?.replace('\n', ' ')?.take(60) ?: ""
+            addLogLineLocked(
+                "[$timestamp] [重複抑制] 「$preview」已連續重複略過 $suppressed 次（累計連續 $consecutiveSameLogCount 次）",
+                recentUpdates
+            )
+            lastReportedSuppressedCount = suppressed
+        }
+    }
 
     fun appendLog(message: String) {
         val date = Date()
@@ -4284,15 +4430,32 @@ class AutomationEngine private constructor(private val context: Context) {
             sessionStartTime = date
         }
         val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(date)
-        val line = "[$timestamp] $message"
+        val emitted = mutableListOf<String>()
         synchronized(_fullSessionLogs) {
-            if (_fullSessionLogs.size >= 20000) {
-                _fullSessionLogs.removeAt(0)
+            if (message == lastRawLogMessage && consecutiveSameLogCount > 0) {
+                consecutiveSameLogCount++
+                if (consecutiveSameLogCount <= 3) {
+                    addLogLineLocked("[$timestamp] $message", emitted)
+                } else {
+                    val suppressed = consecutiveSameLogCount - 3
+                    if (suppressed == 10 || (suppressed > 10 && suppressed % 25 == 0)) {
+                        flushSuppressedLogSummaryLocked(timestamp, emitted)
+                    }
+                }
+            } else {
+                if (consecutiveSameLogCount > 3) {
+                    flushSuppressedLogSummaryLocked(timestamp, emitted)
+                }
+                lastRawLogMessage = message
+                consecutiveSameLogCount = 1
+                lastReportedSuppressedCount = 0
+                addLogLineLocked("[$timestamp] $message", emitted)
             }
-            _fullSessionLogs.add(line)
         }
-        val updated = (_uiStatus.value.recentLogs + line).takeLast(40)
-        _uiStatus.value = _uiStatus.value.copy(recentLogs = updated)
+        if (emitted.isNotEmpty()) {
+            val updated = (_uiStatus.value.recentLogs + emitted).takeLast(40)
+            _uiStatus.value = _uiStatus.value.copy(recentLogs = updated)
+        }
     }
 
     /**
@@ -4325,6 +4488,43 @@ class AutomationEngine private constructor(private val context: Context) {
      * 將目前畫面的 OCR 文字項目濃縮為精簡線索摘要（預設最多 6 筆、單筆文字上限 16 字）。
      * 自動排除頂部系統狀態列、開發人員選項指標位置除錯字樣，以及重複的詞素拆字項目。
      */
+    /**
+     * 擷取左上 / 右上頂角（避開系統狀態列）內的關鍵 OCR 文字與百分比座標，
+     * 用於 Meta / 網頁型頑固廣告逾時診斷。
+     */
+    internal fun formatTopCornerOcrDigest(
+        ocrItems: List<OcrItem>,
+        sw: Int,
+        sh: Int,
+        maxItems: Int = 5
+    ): String {
+        if (ocrItems.isEmpty() || maxItems <= 0 || sw <= 0 || sh <= 0) return ""
+        val statusBarTopCutY = maxOf(ScreenViewportCalibrator.getStatusBarSafeHeight(sw, sh), (sh * 0.045f).toInt())
+        val cornerBottomY = (sh * 0.25f).toInt()
+        val leftMaxX = (sw * 0.36f).toInt()
+        val rightMinX = (sw * 0.64f).toInt()
+
+        return ocrItems.asSequence()
+            .map { item -> item to item.text.replace("\n", " ").replace("\r", " ").trim() }
+            .filter { (item, clean) ->
+                val cx = item.bounds.centerX()
+                val cy = item.bounds.centerY()
+                clean.isNotBlank() &&
+                    !OcrRecognizer.isSystemTelemetryOcr(clean) &&
+                    cy in statusBarTopCutY..cornerBottomY &&
+                    (cx <= leftMaxX || cx >= rightMinX)
+            }
+            .sortedWith(compareBy<Pair<OcrItem, String>>({ it.first.bounds.top }, { it.first.bounds.left }))
+            .take(maxItems)
+            .joinToString(" | ") { (item, clean) ->
+                val cx = item.bounds.centerX()
+                val cy = item.bounds.centerY()
+                val pctX = (cx * 100) / sw
+                val pctY = (cy * 100) / sh
+                "\"${clean.take(24)}\"@(${cx},${cy}|${pctX}%,${pctY}%)"
+            }
+    }
+
     internal fun formatStagnationOcrDigest(
         ocrItems: List<OcrItem>,
         sw: Int,
@@ -4426,6 +4626,16 @@ class AutomationEngine private constructor(private val context: Context) {
         val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
         val startTimeStr = dateFormat.format(sessionStartTime)
         val exportTimeStr = dateFormat.format(Date())
+        val pendingFlushed = mutableListOf<String>()
+        synchronized(_fullSessionLogs) {
+            if (consecutiveSameLogCount > 3) {
+                flushSuppressedLogSummaryLocked(exportTimeStr, pendingFlushed)
+            }
+        }
+        if (pendingFlushed.isNotEmpty()) {
+            val updated = (_uiStatus.value.recentLogs + pendingFlushed).takeLast(40)
+            _uiStatus.value = _uiStatus.value.copy(recentLogs = updated)
+        }
         val logsSnapshot = fullSessionLogs
         val isTruncated = logsSnapshot.size > maxLines
         val targetLogs = if (isTruncated) logsSnapshot.takeLast(maxLines) else logsSnapshot
@@ -4458,7 +4668,7 @@ class AutomationEngine private constructor(private val context: Context) {
         sb.append("系統版本：$osVersion\n")
         sb.append("螢幕規格：${sw}x${sh} (比例 $aspectRatioStr, ${dpi}dpi), 導覽列=$navBarMode, 有效邊界=[${vp.effectiveLeftX}..${vp.effectiveRightX}, ${vp.effectiveTopY}..${vp.effectiveBottomY}]\n")
         sb.append("核心設定：計時器=${config.maxAdWaitSeconds}s, 掃描間隔=${config.loopIntervalMs}ms, 無廣告一般領取=$claimNormalText, 啟用任務=[$enabledTasksText]\n")
-        sb.append("工作階段摘要：輪次=${ui.currentRound}, 觸發=${ui.tasksTriggeredCount}, 廣告完成=${ui.adsCompletedCount}, 逾時強退=${timeoutForceEscapeCount}, 外部跳轉=(Play=${externalRedirectPlayCount}, 瀏覽器=${externalRedirectBrowserCount}, 其他=${externalRedirectOtherCount}), 返回遭拒=${backRejectCount}\n")
+        sb.append("工作階段摘要：輪次=${ui.currentRound}, 觸發=${ui.tasksTriggeredCount}, 廣告完成=${ui.adsCompletedCount}, 逾時強退=${timeoutForceEscapeCount}, 外部跳轉=(Play=${externalRedirectPlayCount}, 瀏覽器=${externalRedirectBrowserCount}, 其他=${externalRedirectOtherCount}), 返回遭拒=${backRejectCount}, Level3多工滑除=${level3RecentsKillCount}, 助手頁自動拉回=${selfFgAutoRecoverTotalCount}\n")
         sb.append("啟動時間：$startTimeStr\n")
         sb.append("匯出時間：$exportTimeStr\n")
         if (isTruncated) {
@@ -4501,6 +4711,9 @@ class AutomationEngine private constructor(private val context: Context) {
     fun clearFullLogs() {
         synchronized(_fullSessionLogs) {
             _fullSessionLogs.clear()
+            lastRawLogMessage = null
+            consecutiveSameLogCount = 0
+            lastReportedSuppressedCount = 0
         }
         _uiStatus.value = _uiStatus.value.copy(recentLogs = emptyList())
     }

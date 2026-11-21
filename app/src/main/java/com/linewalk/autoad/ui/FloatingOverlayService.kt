@@ -232,7 +232,14 @@ class FloatingOverlayService : Service() {
         val safeDetail = status.overlaySafeDetail
 
         return when {
-            detail.contains("外部保護") || safeDetail.contains("外部保護") || detail.contains("防護") -> {
+            detail.contains("保護設定") || safeDetail.contains("保護設定") || detail.contains("助手主畫面") -> {
+                "[設定保護] 暫停點擊中"
+            }
+            detail.contains("螢幕鎖定") || safeDetail.contains("螢幕鎖定") || detail.contains("AOD") -> {
+                "[待機] 鎖屏暫停中"
+            }
+            detail.contains("外部保護") || safeDetail.contains("外部保護") ||
+                (detail.contains("防護") && !detail.contains("廣告播放保護期") && !safeDetail.startsWith("[廣告]")) -> {
                 "[外部保護] 安全退出中"
             }
             detail.contains("每日賓果") || safeDetail.contains("每日賓果") || safeDetail.contains("賓果") -> {
@@ -437,6 +444,7 @@ class FloatingOverlayService : Service() {
         val homeBtn = Button(this).apply {
             styleIconBtn(this, R.drawable.ic_settings, "#334155", "")
             setOnClickListener {
+                engine.markUserOpenedSettings()
                 val intent = Intent(this@FloatingOverlayService, MainActivity::class.java).apply {
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
                 }

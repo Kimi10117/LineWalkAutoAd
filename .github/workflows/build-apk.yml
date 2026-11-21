@@ -102,38 +102,38 @@ jobs:
       - name: Update Tag and Publish APK to GitHub Releases
         run: |
           git tag -f latest-apk
-          git tag -f v1.15.95
+          git tag -f v1.15.96
           git push -f origin latest-apk || true
-          git push -f origin v1.15.95 || true
+          git push -f origin v1.15.96 || true
 
       - name: Publish APK to GitHub Releases (latest-apk)
         uses: softprops/action-gh-release@v2
         with:
             tag_name: latest-apk
-            name: "散步趣助手 v1.15.95 (修復跨界黑邊左上角[▶|]略過鈕誤拒與4秒搶點、新增Level 3多工卡片精準滑除強制脫困 - Run #${{ github.run_number }})"
+            name: "散步趣助手 v1.15.96 (修復全黑過渡誤判鎖屏與0秒死鎖、Meta Trip.com連環逾時與相位升級解鎖、收禮925次無限關窗與Level 3助手卡排除及日誌升級 - Run #${{ github.run_number }})"
             body: |
-              **散步趣助手 v1.15.95 (Run #${{ github.run_number }}) - 修復跨界黑邊左上角[▶|]略過鈕誤拒與4秒搶點、新增Level 3多工卡片精準滑除強制脫困 (相容歷代版本 v1.15.94, v1.15.93, v1.15.92, v1.15.91, v1.15.90, v1.15.89, v1.15.88, v1.15.87, v1.15.86, v1.15.85, v1.15.84, v1.15.83, v1.15.82, v1.15.81, v1.15.80, v1.15.79, v1.15.78, v1.15.77, v1.15.76, v1.15.75, v1.15.74, v1.15.73, v1.15.72, v1.15.71, v1.15.70, v1.15.69, v1.15.68, v1.15.67, v1.15.66, v1.15.65, v1.15.64, v1.15.63, v1.15.62, v1.15.61, v1.15.60, v1.15.58, v1.15.57, v1.15.56, v1.15.55, v1.15.54, v1.15.53, v1.15.52, v1.15.51, v1.15.50, v1.15.49, v1.15.48, v1.15.47, v1.15.46, v1.15.45)**
-              1. **【修復跨界黑邊 `[▶|]` 略過鈕遭 `hasCapsuleExtension` 誤拒並提前 4 秒搶點】**：
-                 - `TemplateMatcher.scanCornerSkipZone` 內 `hasCapsuleExtension` 改採「同水平掃描線文字明暗跳變」判定，解決韓系跨界黑邊廣告（`effTop = 248`）之左上角獨立 `[▶|]` 圓鈕被黑邊／灰底跨列混合誤判為倒數膠囊而拒點的問題；並將 `AdCloserHandler` Step 4C 搶點門檻提前至第 4 秒（單支上限 3 次）。
-              2. **【新增 Level 3 多工卡片精準滑除脫困 (`forceKillStuckGameTaskViaRecents`)】**：
-                 - 針對 Android 17／Samsung One UI 上 `CLEAR_TASK` 仍無法關閉頑固內嵌廣告 Activity 的情境，於 `CLEAR_TASK` 驗證未恢復時（且排除剛進入 Splash 載入畫面），自動開啟多工並僅在透過節點／OCR 正向鎖定「散步趣／LINE Walk」卡片後向上滑除該卡片並冷啟動遊戲，絕不盲滑其他應用。
-              3. **【修正懸浮窗監控文案】**：
-                 - `FloatingOverlayService.formatActiveStatusText` 區分一般廣告「監控中」與實際退回「強退中」。新增 `V1_15_95SimulationTest`，versionCode 128 / versionName 1.15.95（完整保留歷代版本 APK 與發布紀錄）。
+              **散步趣助手 v1.15.96 (Run #${{ github.run_number }}) - 修復全黑過渡誤判鎖屏與0秒死鎖、Meta Trip.com連環逾時與相位升級解鎖、收禮925次無限關窗與Level 3助手卡排除及日誌升級 (相容歷代版本 v1.15.95, v1.15.94, v1.15.93, v1.15.92, v1.15.91, v1.15.90, v1.15.89, v1.15.88, v1.15.87, v1.15.86, v1.15.85, v1.15.84, v1.15.83, v1.15.82, v1.15.81, v1.15.80, v1.15.79, v1.15.78, v1.15.77, v1.15.76, v1.15.75, v1.15.74, v1.15.73, v1.15.72, v1.15.71, v1.15.70, v1.15.69, v1.15.68, v1.15.67, v1.15.66, v1.15.65, v1.15.64, v1.15.63, v1.15.62, v1.15.61, v1.15.60, v1.15.58, v1.15.57, v1.15.56, v1.15.55, v1.15.54, v1.15.53, v1.15.52, v1.15.51, v1.15.50, v1.15.49, v1.15.48, v1.15.47, v1.15.46, v1.15.45)**
+              1. **【修復全黑廣告載入誤判鎖屏 AOD 與 0 秒保護期死鎖】**：
+                 - `OcrRecognizer.isLockscreenOrAodOcr` 忽略 `cy < 5.0% sh` 頂部系統狀態列時鐘與電量數字；`AdCloserHandler.processAdTick` 補上 `adStartTimeMs == 0L` 計時器自癒；`FloatingOverlayService` 修正保護期與設定/待機狀態標籤，不再誤顯 `[外部保護]`。
+              2. **【修復 Meta Trip.com 廣告逾時、蝦皮 `>>一起` 誤點與 S24FE 右端解鎖】**：
+                 - `detectAdCountdownWithSource` 排除 `Ad 1 of 2` Pod 標籤內獨立 `"1"`；Meta 容器停用左上角 Step 4C 並將 Trip/Multi-pod 門檻延至 12 秒；新增 `canBypassEarlyVisualSkipBlacklist` 相位升級解鎖後期 `Skip`/`X`；收斂 `hitsTopRightRedirectPillStrip` 僅右上角有 `Google Play` 時啟用；Step 4A-1 與 Step 4B 雙層排除蝦皮中段 `>>一起`；S24FE 無右上誤觸座標時不封死 `[Google Play ×]` 右端 `×`。
+              3. **【修復收禮空抽屜 925 次無限迴圈、Level 3 多工安全防護與日誌全面升級】**：
+                 - 收緊 `ReceiveGiftTask` 標題比對並為 B4 加上 1-7 階段升級關閉與強制回集點脫困；`handleMissionDialog` 加上同點 3 次領取上限；Level 3 多工嚴格排除「散步趣助手」且選取最右遊戲卡片；補齊首頁 `首夏`／`貼圖任務` 修正、誤退回助手頁自動拉回、`smartcapture` 略過、`[重複抑制]` 日誌折疊、`cdSrc`/`blkSkip`、黑名單寫入事件、`formatTopCornerOcrDigest` 頂角 OCR 摘要及 `Level3多工滑除`／`助手頁自動拉回` 匯出統計。新增 `V1_15_96SimulationTest`，versionCode 129 / versionName 1.15.96（完整保留歷代版本 APK 與發布紀錄）。
             files: LineWalkAutoAd.apk
             prerelease: false
 
-      - name: Publish Versioned APK to GitHub Releases (v1.15.95)
+      - name: Publish Versioned APK to GitHub Releases (v1.15.96)
         uses: softprops/action-gh-release@v2
         with:
-            tag_name: v1.15.95
-            name: "散步趣助手 v1.15.95 (修復跨界黑邊左上角[▶|]略過鈕誤拒與4秒搶點、新增Level 3多工卡片精準滑除強制脫困)"
+            tag_name: v1.15.96
+            name: "散步趣助手 v1.15.96 (修復全黑過渡誤判鎖屏與0秒死鎖、Meta Trip.com連環逾時與相位升級解鎖、收禮925次無限關窗與Level 3助手卡排除及日誌升級)"
             body: |
-              **散步趣助手 v1.15.95 (Run #${{ github.run_number }}) - 修復跨界黑邊左上角[▶|]略過鈕誤拒與4秒搶點、新增Level 3多工卡片精準滑除強制脫困**
-              1. **【修復跨界黑邊 `[▶|]` 略過鈕遭 `hasCapsuleExtension` 誤拒並提前 4 秒搶點】**：
-                 - `TemplateMatcher.scanCornerSkipZone` 內 `hasCapsuleExtension` 改採「同水平掃描線文字明暗跳變」判定，解決韓系跨界黑邊廣告（`effTop = 248`）之左上角獨立 `[▶|]` 圓鈕被黑邊／灰底跨列混合誤判為倒數膠囊而拒點的問題；並將 `AdCloserHandler` Step 4C 搶點門檻提前至第 4 秒（單支上限 3 次）。
-              2. **【新增 Level 3 多工卡片精準滑除脫困 (`forceKillStuckGameTaskViaRecents`)】**：
-                 - 針對 Android 17／Samsung One UI 上 `CLEAR_TASK` 仍無法關閉頑固內嵌廣告 Activity 的情境，於 `CLEAR_TASK` 驗證未恢復時（且排除剛進入 Splash 載入畫面），自動開啟多工並僅在透過節點／OCR 正向鎖定「散步趣／LINE Walk」卡片後向上滑除該卡片並冷啟動遊戲，絕不盲滑其他應用。
-              3. **【修正懸浮窗監控文案】**：
-                 - `FloatingOverlayService.formatActiveStatusText` 區分一般廣告「監控中」與實際退回「強退中」。新增 `V1_15_95SimulationTest`，versionCode 128 / versionName 1.15.95（完整保留歷代版本 APK 與發布紀錄）。
+              **散步趣助手 v1.15.96 (Run #${{ github.run_number }}) - 修復全黑過渡誤判鎖屏與0秒死鎖、Meta Trip.com連環逾時與相位升級解鎖、收禮925次無限關窗與Level 3助手卡排除及日誌升級**
+              1. **【修復全黑廣告載入誤判鎖屏 AOD 與 0 秒保護期死鎖】**：
+                 - `OcrRecognizer.isLockscreenOrAodOcr` 忽略 `cy < 5.0% sh` 頂部系統狀態列時鐘與電量數字；`AdCloserHandler.processAdTick` 補上 `adStartTimeMs == 0L` 計時器自癒；`FloatingOverlayService` 修正保護期與設定/待機狀態標籤，不再誤顯 `[外部保護]`。
+              2. **【修復 Meta Trip.com 廣告逾時、蝦皮 `>>一起` 誤點與 S24FE 右端解鎖】**：
+                 - `detectAdCountdownWithSource` 排除 `Ad 1 of 2` Pod 標籤內獨立 `"1"`；Meta 容器停用左上角 Step 4C 並將 Trip/Multi-pod 門檻延至 12 秒；新增 `canBypassEarlyVisualSkipBlacklist` 相位升級解鎖後期 `Skip`/`X`；收斂 `hitsTopRightRedirectPillStrip` 僅右上角有 `Google Play` 時啟用；Step 4A-1 與 Step 4B 雙層排除蝦皮中段 `>>一起`；S24FE 無右上誤觸座標時不封死 `[Google Play ×]` 右端 `×`。
+              3. **【修復收禮空抽屜 925 次無限迴圈、Level 3 多工安全防護與日誌全面升級】**：
+                 - 收緊 `ReceiveGiftTask` 標題比對並為 B4 加上 1-7 階段升級關閉與強制回集點脫困；`handleMissionDialog` 加上同點 3 次領取上限；Level 3 多工嚴格排除「散步趣助手」且選取最右遊戲卡片；補齊首頁 `首夏`／`貼圖任務` 修正、誤退回助手頁自動拉回、`smartcapture` 略過、`[重複抑制]` 日誌折疊、`cdSrc`/`blkSkip`、黑名單寫入事件、`formatTopCornerOcrDigest` 頂角 OCR 摘要及 `Level3多工滑除`／`助手頁自動拉回` 匯出統計。新增 `V1_15_96SimulationTest`，versionCode 129 / versionName 1.15.96（完整保留歷代版本 APK 與發布紀錄）。
             files: LineWalkAutoAd.apk
             prerelease: false

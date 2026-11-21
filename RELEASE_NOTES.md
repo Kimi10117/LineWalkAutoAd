@@ -1,6 +1,56 @@
 # LINE 散步趣自動看廣告助手 (LineWalkAutoAd) 發布說明
 
 ## 版本資訊
+- 版本名稱：v1.15.96
+- 版本代碼：versionCode 129, versionName "1.15.96"
+- 發布類型：正式版本 (Release)
+
+---
+
+## 概述
+LineWalkAutoAd v1.15.96 針對 SM-F731N 與 SM-S7210 實機回報之 `v1.15.95` 診斷日誌、實機截圖與螢幕錄影進行深度根因剖析，一次修復七項長時掛機關鍵障礙並全面升級診斷日誌收集能力：徹底消除全黑廣告載入過渡誤判鎖屏 AOD 及 `adStartTimeMs == 0L` 導致的 180 秒假保護期死鎖；解決 Meta `Trip.com` 多段廣告 (`Ad 1 of 2`) 因 Pod 倒數誤判、過早誤觸左下靜音鈕／右上角圖示遭永久封鎖而連續 21 次逾時的問題；終結空「禮物盒」抽屜無止盡重複關閉 925 次與 `[任務-特別]` 重複點擊迴圈；強化 Level 3 多工卡片識別嚴格排除「散步趣助手」自身視窗；同步修正首頁「貼圖任務」與「首夏」誤識、誤觸返回退回助手頁自動拉回、蝦皮中段 `>>一起` 誤點、S24FE `[Google Play ×]` 右端解鎖、三星截圖工具 `smartcapture` 被動工具略過與日誌重複抑制／頂角 OCR 摘要診斷。
+
+---
+
+## 本次重點更新 (v1.15.96)
+
+### 1. 修復全黑廣告載入誤判鎖屏 AOD 與 `adStartTimeMs == 0L` 死鎖 (`OcrRecognizer` / `AdCloserHandler` / `FloatingOverlayService`)
+- **排除頂部狀態列時鐘與電量 (`isLockscreenOrAodOcr`)**：新增 `screenHeight` 參數並濾除 `cy < 5.0% sh` 頂部系統狀態列區域，避免廣告全黑載入瞬間僅出現狀態列時鐘（如 `3:05`）與電量（如 `92`）時誤觸 `pauseForLockscreenStandby` 並清空 `adStartTimeMs`。
+- **廣告計時器自癒 (`AdCloserHandler.processAdTick`)**：若進入廣告監控幀時因前次待機清除導致 `adStartTimeMs == 0L`，立即自動補設起始時間並恢復計時，根除 `WaitingGracePeriod(0)` 卡死 0 秒長達 3 分鐘卻未達 `elapsedSec >= 4` 點擊左上 `X` 之問題。
+- **修正懸浮窗保護期誤顯 `[外部保護]`**：收斂 `FloatingOverlayService.formatActiveStatusText` 比對邏輯，區分 `[設定保護] 暫停點擊中`、`[待機] 鎖屏暫停中` 與正常 `[防護] 廣告播放保護期 (0s)`，不再因字串含「防護」而誤顯示「安全退出中」。
+
+### 2. 修復 Meta `Trip.com` 廣告連環逾時與誤觸黑名單永久封死 (`OcrRecognizer` / `AdCloserHandler`)
+- **排除 `Ad 1 of 2` Pod 標籤獨立數字誤判 (`detectAdCountdownWithSource`)**：過濾位於 `Ad 1 of 2`／`Ads served` 輪播標籤同行相鄰區間內的獨立數字 `"1"`，不再誤認剩餘 1 秒；同步回傳倒數來源標籤 (`cdSrc`) 供診斷追蹤。
+- **收斂 Meta 左側誤點與延後 Step 4C**：強化 `isMetaAd` 判定，針對 Meta / Facebook 廣告容器 (`isFacebookAdPkg`) 停用 Step 4C 左上角視覺掃描以免誤點靜音或資訊鈕，並將 Trip.com／Multi-pod Meta 之 Step 4C 視覺略過門檻延後至 12 秒。
+- **相位升級解鎖誤封之真實 `Skip` / `X` (`canBypassEarlyVisualSkipBlacklist`)**：若早期僅因視覺預判按鈕觸發 1 次誤跳轉而記錄黑名單，進入後期（>= 15 秒且距封鎖 >= 10 秒）當畫面出現明確 `"Skip"`（Step 4B）或 End Card `"X"`（Step 7A2）時允許相位升級解鎖點擊；並將 `hitsTopRightRedirectPillStrip` 嚴格限定僅在畫面右上角確實存在 `Google Play` 膠囊文字時才啟用橫條封鎖。
+
+### 3. 修復收禮空抽屜 925 次無限關閉迴圈與任務重複領取 (`ReceiveGiftTask` / `AutomationEngine`)
+- **收斂空禮物盒標題偵測 (`ReceiveGiftTask.isReceiveGiftDialogOpen`)**：收緊 `hasDrawerTitle` 對 `y = 0.18..0.32` 區間鬆散「禮物」子字串的比對，排除「贈送禮物次數」與超長活動字樣。
+- **B4 階段升級關閉上限與強制脫困**：`AutomationEngine.handleInGameScan` 面對無禮物且反覆開啟之禮物盒視窗新增累計嘗試計數 (`receiveGiftDialogCloseAttempts`)——1 至 4 次點擊 X 鈕、第 5 次點擊遮罩、第 6 次發送安全返回鍵、第 7 次直接點擊底部【集點】重置回主畫面結束本輪；`handleReceiveGiftDialog` 亦啟用 `allowTopSafeZone = true`。
+- **任務領取同座標重複保護 (`handleMissionDialog`)**：追蹤同座標（誤差 40px 內）綠色「領取」按鈕點擊次數 (`missionClaimPointCounts`)，同一位置連續點擊 3 次仍無狀態變化即強制切換下一分頁並於完成一輪時清除。
+
+### 4. 強化 Level 3 多工卡片精準滑除與安全防護 (`AutoAdAccessibilityService` / `AutomationEngine`)
+- **嚴格排除「散步趣助手」自身視窗 (`isLineWalkRecentsLabel`)**：跨視窗與 OCR 多工卡片識別皆明確排除「散步趣助手」與 `LineWalkAutoAd`，掃描非助手視窗時優先鎖定最右側之《LINE 散步趣》卡片（Clamped `14%..86%`），並於多工執行前以 `describeRecentsCardsForLog` 記錄候選卡片明細。
+- **單次精準向上滑除並統計次數**：OCR 備援同樣套用 `isLineWalkRecentsLabel` 與 `maxByOrNull { centerX() }`，累計 `level3RecentsKillCount` 供匯出追蹤。
+
+### 5. 修復主畫面誤識、誤退回助手頁自動拉回、蝦皮中段誤觸與被動工具保護
+- **首頁「首夏」與「貼圖任務」徽章修正 (`OcrRecognizer` / `AdCloserHandler`)**：主畫面分頁辨識納入 `"首夏"` OCR 近似字，`hasSubDialogOpen` 排除首頁 `y ≈ 32.5%` 之「貼圖任務」懸浮徽章，消除 6 至 15 次非主畫面空轉輪詢。
+- **廣告返回誤退回助手設定頁自動拉回 (`AutomationEngine` / `FloatingOverlayService`)**：於懸浮窗點擊設定按鈕時呼叫 `markUserOpenedSettings()` 標記使用者主動意圖；若於廣告監控執行自動返回後 3.5 秒內意外落回 `com.linewalk.autoad` 且非使用者開啟設定，自動重新喚醒《LINE 散步趣》（30 秒窗內上限 2 次）並累計 `selfFgAutoRecoverTotalCount`。
+- **蝦皮中段 `>>一起` 雙層防護與 S24FE `[Google Play ×]` 解鎖 (`AdCloserHandler`)**：Step 4A-1 限定嚴格角落位置且排除促銷誘餌詞（含 `"一起"`）；Step 4B 同步移除無限制全畫面 `">>"` 關鍵字並將 `"一起"`／`"搶購"`／`"雙11"` 納入排除名單，雙重防止點擊蝦皮中段 `(277, 902)` 商品文案；針對 S24FE 僅有 `redirectCount > 0` 而 `redirectPointCounts` 為空時透過 `!hasTopRightRedirectPoint()` 維持 `[Google Play ×]` 右端 `×` 可點擊，並擴大安全喚醒滑動幅度至 `22%` 高度 / `360ms`。
+- **三星截圖工具略過與外部返回冷卻 (`AppConfig` / `AutomationEngine`)**：將 `com.samsung.android.app.smartcapture` 納入被動覆蓋工具略過清單；`handleExternalAppGuard` 之 `safeNavigateBack` 冷卻縮短為 `800ms` 並記錄 `[黑名單]` 封鎖事件。
+
+### 6. 全面升級診斷日誌收集與可讀性 (`AutomationEngine` / `AdCloserHandler`)
+- **連續重複日誌抑制 (`[重複抑制]`)**：`appendLog` 保留前 3 筆完全相同訊息，第 4 筆起自動折疊並於定期節點、出現新訊息或匯出日誌時輸出 `[重複抑制]` 統計摘要，大幅精簡如無限關窗時的日誌膨脹。
+- **黑名單與倒數診斷追蹤**：`AdCloserHandler.getDiagnosticsSnapshotFields()` 新增 `cdSrc`（倒數偵測來源）與 `blkSkip`（遭封鎖略過候選），並透過 `consumeLastBlacklistEventDiag()` 記錄 `[黑名單] 座標已納入封鎖`；`AD_WATCHDOG_TIMEOUT`、`WATCHDOG_BACK_TIMEOUT` 與 `FORCE_BRING_FRONT` 的 `[畫面線索]` 一併附帶頂角 OCR 摘要 `formatTopCornerOcrDigest`。
+- **工作階段匯出標頭升級**：`getExportLogsFormatted()` 新增 `Level3多工滑除` 與 `助手頁自動拉回` 統計欄位，加速後續版本問題追蹤。
+
+### 7. 驗證結果
+- 新增 `V1_15_96SimulationTest`（5 項 Robolectric 模擬與單元測試：全黑狀態列時鐘不誤判鎖屏與 `adStartTimeMs == 0L` 自癒、Meta `Trip.com` `Ad 1 of 2` 排除與相位升級解鎖 + Shopee `>>一起` 與 S24FE `[Google Play ×]` 驗證、收禮空抽屜升級關閉 + 任務同座標保護 + `[重複抑制]` 收斂、Level 3 多工排除散步趣助手並選最右卡片、首頁 `首夏`/`貼圖任務` 修正 + 懸浮窗狀態標籤 + 助手頁自動拉回 + `smartcapture` 略過）。
+- 通過 `--tests "com.linewalk.autoad.test.v1159*" --tests "com.linewalk.autoad.test.v1158*" --tests "com.linewalk.autoad.util.UpdateCheckerTest"` 目標回歸測試集（共 18 個測試類別 `V1_15_80SimulationTest` 至 `V1_15_96SimulationTest` 與 `UpdateCheckerTest`，合計 77 項測試全數通過，`failures = 0`、`errors = 0`、`skipped = 0`；另有 3 個早期里程碑舊版測試類別 `m1.FloatingOverlayAndLoggingRealTest`、`tier1.Tier1_F6_FriendGiftAndReceiveDrawerTest`、`tier2.Tier2_BoundaryAndCornerTest` 含既定基準前之既有過時斷言且大量配置 Bitmap 導致單 JVM 併跑 OOM，未納入目標回歸集）、`stress_harness_m1.py` / `stress_harness_m2.py` / `stress_harness_m3.py` Python 壓力測試（全部 exit 0）以及 `:app:assembleRelease` 正式版 APK 建置（尚未於實機環境完成 `v1.15.96` 長時驗證）。
+
+---
+
+## 歷史版本資訊 (v1.15.95)
 - 版本名稱：v1.15.95
 - 版本代碼：versionCode 128, versionName "1.15.95"
 - 發布類型：正式版本 (Release)
@@ -12,7 +62,7 @@ LineWalkAutoAd v1.15.95 針對 `v1.15.94` 實機回報（`samsung SM-S7210`，`1
 
 ---
 
-## 本次重點更新 (v1.15.95)
+## 更新細節 (v1.15.95)
 
 ### 1. 修正跨界黑邊 `[▶|]` 略過鈕遭 `hasCapsuleExtension` 誤拒並提前 4 秒搶點 (`TemplateMatcher` / `AdCloserHandler`)
 - **同水平掃描線明暗跳變判定**：修正 `TemplateMatcher.scanCornerSkipZone` 內 `hasCapsuleExtension` 原先跨列混算明暗像素數量的缺陷——當 `[▶|]` 圓鈕恰好跨騎在頂部純黑黑邊與下方淺灰廣告卡片交界線（如 `y = effTop = 248`）時，上方純黑列與下方純灰列會誤觸 `extBright >= 4 && extDark >= 6` 導致按鈕完全遭拒；改為要求「同一水平掃描線」具備明暗文字筆畫跳變（`rowBright >= 2 && rowDark >= 3 && rowTransitions >= 2`，至少 2 條掃描線且累計 4 次以上跳變）才認定右側有倒數文字膠囊，既完整保留「`X 56 秒後可獲獎勵`」膠囊防護，又讓韓系跨界黑邊 `[▶|]` 鈕穩定命中、按鈕消失後零誤報。

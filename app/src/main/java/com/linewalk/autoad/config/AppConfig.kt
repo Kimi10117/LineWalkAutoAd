@@ -235,6 +235,7 @@ class AppConfig(context: Context) {
             "com.jamworks.dynamicspot",
             "com.linewalk.autoad",
             "com.samsung.android.honeyboard",
+            "com.samsung.android.app.smartcapture",
             "com.google.android.inputmethod.latin",
             "com.touchtype.swiftkey",
             "com.samsung.android.app.cocktailbarservice",
@@ -249,7 +250,9 @@ class AppConfig(context: Context) {
             val lower = pkg.lowercase()
             return lower.contains("dynamicspot") ||
                 lower.contains("dynamicisland") ||
-                lower.contains("inputmethod")
+                lower.contains("inputmethod") ||
+                lower.contains("smartcapture") ||
+                lower.contains("screenshot")
         }
 
         fun isAdPackage(pkg: String?): Boolean {

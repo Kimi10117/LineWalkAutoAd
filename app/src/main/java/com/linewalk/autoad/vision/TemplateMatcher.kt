@@ -970,7 +970,8 @@ class TemplateMatcher {
      */
     suspend fun detectCornerFastForwardSkip(
         screenBitmap: Bitmap,
-        blacklistedCoord: ((Int, Int) -> Boolean)? = null
+        blacklistedCoord: ((Int, Int) -> Boolean)? = null,
+        includeLeftZone: Boolean = true
     ): TemplateMatchResult? = withContext(Dispatchers.Default) {
         val sw = screenBitmap.width
         val sh = screenBitmap.height
@@ -996,6 +997,7 @@ class TemplateMatcher {
             blacklistedCoord = blacklistedCoord
         )
         if (rightMatch != null) return@withContext rightMatch
+        if (!includeLeftZone) return@withContext null
 
         val leftTopY = max(2, kotlin.math.min(vp.mapContentY(0.038f), (sh * 0.035f).toInt()))
         val leftBottomY = kotlin.math.min(

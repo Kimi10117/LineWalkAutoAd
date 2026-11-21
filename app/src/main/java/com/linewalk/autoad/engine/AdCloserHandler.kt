@@ -85,9 +85,22 @@ class AdCloserHandler(
     private var lastBlacklistTimeMs: Long = 0L
     private var lastBackRejectLogTimeMs: Long = 0L
     private var lastLoggedRejectReason: String = ""
+    private var lastBlockedSkipDiag: String? = null
+    private var lastBlacklistedEventDiag: String? = null
+    private var lastCountdownSourceForDiag: String? = null
+    private var currentHasTopRightGooglePlayPill: Boolean = false
+    private var earlyVisualSkipBlacklistPoint: Point? = null
+    private var earlyVisualSkipBlacklistedAtMs: Long = 0L
+    private var phaseUpgradeExplicitOcrClickCount: Int = 0
     private val redirectPointCounts = mutableListOf<Point>()
     private val clickedHistory = mutableListOf<Point>()
     private val blacklistedPoints = mutableListOf<Point>()
+
+    fun consumeLastBlacklistEventDiag(): String? {
+        val msg = lastBlacklistedEventDiag
+        lastBlacklistedEventDiag = null
+        return msg
+    }
 
     /**
      * Watchdog 強制逾時退出廣告時重置廣告計時與退避計數，避免下一次外部跳轉拉回誤繼承已過期之 adStartTimeMs。
@@ -123,6 +136,7 @@ class AdCloserHandler(
             lastObservedCountdownSec = null
             staleCountdownTicks = 0
             lastCountdownSecForDiag = null
+            lastCountdownSourceForDiag = null
             lastClickedPoint = null
             lastClickedAdLabel = null
             lastAdClickTimeMs = 0L
@@ -154,12 +168,18 @@ class AdCloserHandler(
         endCardFallbackTapAttempted = false
         lastRevealSwipeRedirected = false
         lastClickedAdLabel = null
+        phaseUpgradeExplicitOcrClickCount = 0
+        lastBlockedSkipDiag = null
         if (!preserveRedirectState) {
             disableLeftCornerForCurrentAd = false
             leftCornerRedirectCount = 0
             lastRedirectReturnTimeMs = 0L
             lastBlacklistTimeMs = 0L
             lastAdClickTimeMs = 0L
+            earlyVisualSkipBlacklistPoint = null
+            earlyVisualSkipBlacklistedAtMs = 0L
+            lastBlacklistedEventDiag = null
+            currentHasTopRightGooglePlayPill = false
             redirectPointCounts.clear()
             clickedHistory.clear()
             blacklistedPoints.clear()
@@ -228,6 +248,16 @@ class AdCloserHandler(
             // 非略過標籤（如幾何 X 或未知點）一旦直接引發外部跳轉，就地封鎖該座標不再二次誤點；略過標籤保留 2 次寬容
             if (!expectedSkip || nearbyRedirects >= 2) {
                 addBlacklistPoint(pt)
+                lastBlacklistedEventDiag = "pt=(${pt.x},${pt.y}) | src=${lastClickedAdLabel ?: "unknown"} | elapsed=${getElapsedSeconds()}s | redir=$redirectCount"
+                if (lastClickedAdLabel == "右上角略過鈕(▶|)" || lastClickedAdLabel == "左上角略過鈕(▶|)") {
+                    if (earlyVisualSkipBlacklistPoint == null) {
+                        earlyVisualSkipBlacklistPoint = pt
+                        earlyVisualSkipBlacklistedAtMs = now
+                    }
+                } else if (lastClickedAdLabel?.startsWith("OCR[") == true || lastClickedAdLabel?.startsWith("OCR-角落[") == true) {
+                    earlyVisualSkipBlacklistPoint = null
+                    earlyVisualSkipBlacklistedAtMs = 0L
+                }
             }
         }
         lastClickedPoint = null
@@ -267,7 +297,9 @@ class AdCloserHandler(
         }
         val lastClickStr = lastClickedPoint?.let { "(${it.x},${it.y})" } ?: "none"
         val cdStr = lastCountdownSecForDiag?.toString() ?: "none"
-        return "redir=$redirectCount | blk=${blacklistedPoints.size}[$blkPreview] | lastClick=$lastClickStr | load=${adLoadElapsedSec}s | cd=$cdStr"
+        val cdSrcPart = lastCountdownSourceForDiag?.let { " | cdSrc=$it" } ?: ""
+        val blkSkipPart = lastBlockedSkipDiag?.let { " | blkSkip=$it" } ?: ""
+        return "redir=$redirectCount | blk=${blacklistedPoints.size}[$blkPreview] | lastClick=$lastClickStr | load=${adLoadElapsedSec}s | cd=$cdStr$cdSrcPart$blkSkipPart"
     }
 
     /**
@@ -297,6 +329,12 @@ class AdCloserHandler(
         hasRecentRedirect = false
         lastRedirectReturnTimeMs = 0L
         lastBlacklistTimeMs = 0L
+        earlyVisualSkipBlacklistPoint = null
+        earlyVisualSkipBlacklistedAtMs = 0L
+        lastBlacklistedEventDiag = null
+        lastBlockedSkipDiag = null
+        phaseUpgradeExplicitOcrClickCount = 0
+        currentHasTopRightGooglePlayPill = false
         clearCurrentClickContext()
         redirectPointCounts.clear()
         blacklistedPoints.clear()
@@ -381,10 +419,10 @@ class AdCloserHandler(
             if (isRecentRedirectPt) return true
         }
 
-        // 若右上角膠囊（如 [Google Play ×]）曾觸發過外部重定向，整條同列左側膠囊區 (最高向左延伸 24% 螢幕寬) 一併封鎖，
+        // 若右上角「Google Play」商店膠囊曾觸發過外部重定向，整條同列左側膠囊區 (最高向左延伸 24% 螢幕寬) 一併封鎖，
         // 避免 GeoX 因圓形黑名單半徑未覆蓋到左方 "Google Play" 字樣裡的 'y'/'a' 而二次跳轉商店。
-        // 垂直半頻寬收斂至 sh * 0.014 (~37px)，確保同列膠囊受封但絕不跨列波及上方 55px 處真正的 End Card "X"！
-        if (currentScreenWidth > 0 && currentScreenHeight > 0) {
+        // 嚴格限定畫面右上角確實存在 Google / Play / 商店 文字才啟用橫條封鎖，且垂直半頻寬收斂至 sh * 0.014 (~37px)！
+        if (currentHasTopRightGooglePlayPill && currentScreenWidth > 0 && currentScreenHeight > 0) {
             val rowHalfBandY = kotlin.math.max(22.0, currentScreenHeight * 0.014)
             val hitsTopRightRedirectPillStrip = redirectPointCounts.any { pt ->
                 pt.x >= currentScreenWidth * 0.72f &&
@@ -450,18 +488,77 @@ class AdCloserHandler(
         }
     }
 
+    /**
+     * 階段升級解鎖判定：若早期的視覺偵測「略過鈕(▶|)」因誤點觸發重定向並於 10 秒前納入黑名單，
+     * 當廣告播放已滿 15 秒且畫面浮現明確文字「Skip」或「X」關閉鈕時，允許於同一區域解鎖最多 2 次明確 OCR 點擊，
+     * 避免早期的單一視覺誤差永久封死後續真正的「Skip」與「X」（仍受懸浮窗、狀態列、動態島與其他誤觸點保護）。
+     */
+    internal fun canBypassEarlyVisualSkipBlacklist(x: Int, y: Int, elapsedSec: Int): Boolean {
+        if (FloatingOverlayService.isInsideOverlay(x, y)) return false
+        if (currentScreenHeight > 0 && currentScreenWidth > 0) {
+            val sw = currentScreenWidth
+            val sh = currentScreenHeight
+            if (currentHasThreeButtonNavBar && y >= currentEffectiveBottomY - (sh * 0.005f).toInt()) {
+                return false
+            }
+            if (x in (sw * 0.18f).toInt()..(sw * 0.82f).toInt() && y < (sh * 0.08f).toInt()) {
+                return false
+            }
+            if (isCurrentAdTopSponsored) {
+                if (y < (sh * 0.015f).toInt()) return false
+                val isLeftCloseZone = x in (sw * 0.025f).toInt()..(sw * 0.120f).toInt() &&
+                    y in (sh * 0.035f).toInt()..(sh * 0.100f).toInt()
+                if (!isLeftCloseZone) {
+                    if (x in (sw * 0.120f).toInt()..(sw * 0.850f).toInt() && y < (sh * 0.150f).toInt()) return false
+                    if (x < (sw * 0.120f).toInt() && y in (sh * 0.105f).toInt()..(sh * 0.150f).toInt()) return false
+                    if (x > (sw * 0.78f).toInt() && y < (sh * 0.120f).toInt()) return false
+                }
+            } else {
+                if (y < (sh * 0.024f).toInt()) return false
+            }
+        }
+        if (phaseUpgradeExplicitOcrClickCount >= 2 || elapsedSec < 15) return false
+        val earlyPt = earlyVisualSkipBlacklistPoint ?: return false
+        if (System.currentTimeMillis() - earlyVisualSkipBlacklistedAtMs < 10_000L) return false
+        val swBase = if (currentScreenWidth > 0) currentScreenWidth else 1080
+        val blockRadius = max(getBlacklistRadiusPx(swBase), max(22.0, swBase * 0.026))
+        val blockedByOtherPoint = blacklistedPoints.any { pt ->
+            val isSameAsEarlyPt = hypot((pt.x - earlyPt.x).toDouble(), (pt.y - earlyPt.y).toDouble()) <= 24.0
+            !isSameAsEarlyPt && hypot((pt.x - x).toDouble(), (pt.y - y).toDouble()) < blockRadius
+        }
+        return !blockedByOtherPoint
+    }
+
+    private fun hasTopRightRedirectPoint(): Boolean {
+        if (currentScreenWidth <= 0 || currentScreenHeight <= 0) return false
+        return redirectPointCounts.any { pt ->
+            pt.x >= currentScreenWidth * 0.68f && pt.y <= currentScreenHeight * 0.22f
+        }
+    }
+
     suspend fun processAdTick(
         service: AutoAdAccessibilityService,
         screenBitmap: Bitmap,
         ocrItems: List<OcrItem>
     ): AdStepResult {
+        if (adStartTimeMs == 0L) {
+            adStartTimeMs = System.currentTimeMillis()
+        }
         val sw = screenBitmap.width
         val sh = screenBitmap.height
         currentScreenWidth = sw
         currentScreenHeight = sh
+        lastBlockedSkipDiag = null
         val vp = ScreenViewportCalibrator.detectViewport(sw, sh, screenBitmap, ocrItems)
         currentEffectiveBottomY = vp.effectiveBottomY
         currentHasThreeButtonNavBar = vp.hasThreeButtonNavBar
+        currentHasTopRightGooglePlayPill = ocrItems.any { item ->
+            val cy = item.bounds.centerY().toFloat() / sh
+            val cx = item.bounds.centerX().toFloat() / sw
+            val t = item.text
+            cy <= 0.20f && cx >= 0.55f &&
+                (t.contains("Google", ignoreCase = true) || t.contains("Play", ignoreCase = true) || t.contains("商店"))
+        }
         val topSponsoredItem = ocrItems.firstOrNull { item ->
             val cy = item.bounds.centerY().toFloat() / sh
             val t = item.text.trim()
@@ -891,9 +988,14 @@ class AdCloserHandler(
         // 優先偵測「\d+ 秒後可獲獎勵 / 發放獎勵」膠囊，防止誤觸廣告中斷確認彈窗；
         // 若倒數計時長期卡住未遞減 (>= 10 tick 且已播 >= 35s) 或已超過合理上限，主動解除封鎖放行後續幾何掃描與安全返回。
         val pendingRewardSec = ocrRecognizer.detectRewardPendingCountdownSeconds(ocrItems, sh)
-        val normalCountdownSec = ocrRecognizer.detectAdCountdownSeconds(ocrItems, sh, sw)
-        val rawRemainingSec = pendingRewardSec ?: normalCountdownSec
+        val countdownWithSource = if (pendingRewardSec != null) {
+            pendingRewardSec to "rewardPending"
+        } else {
+            ocrRecognizer.detectAdCountdownWithSource(ocrItems, sh, sw)
+        }
+        val rawRemainingSec = countdownWithSource?.first
         lastCountdownSecForDiag = rawRemainingSec
+        lastCountdownSourceForDiag = countdownWithSource?.second
         if (rawRemainingSec != null && rawRemainingSec > 1) {
             if (rawRemainingSec == lastObservedCountdownSec) {
                 staleCountdownTicks++
@@ -955,20 +1057,24 @@ class AdCloserHandler(
         }
 
         // 4A-1. 【全畫面 ▶| / >| / >> / >>| 略過符號全域放行秒點】
-        // 僅允許獨立短標籤 (長度 <= 6) 且位於畫面邊角區域，嚴格排除購物廣告內文之「雙11必買>>」等促銷按鈕！
-        val fastSkipSymbols = listOf("▶|", ">|", ">>|", ">>")
+        // 僅允許位於「四角落」(不可落在畫面中段 y=34.2% 之蝦皮商品列) 的純符號或帶略過關鍵字短標籤，嚴格排除「>>一起」等商品文句！
+        val strictFastSkipSymbols = listOf("▶|", ">|", ">>|")
+        val skipTextKeywords = listOf("skip", "略過", "跳過", "略过", "跳过", "next")
         val promoBaitWords = listOf(
             "必買", "雙11", "折", "搶", "逛", "買", "領", "優惠", "詳情",
-            "下載", "安裝", "http", "www", "momo", "購物", "商場", "商店", "NT$", "$"
+            "下載", "安裝", "http", "www", "momo", "購物", "商場", "商店", "NT$", "$", "一起"
         )
         val fastSkipMatch = ocrItems.firstOrNull { item ->
             val cx = item.bounds.centerX()
             val cy = item.bounds.centerY()
             val t = item.text.replace(" ", "")
-            val hasSymbol = fastSkipSymbols.any { sym -> t.contains(sym) }
+            val hasStrictSymbol = strictFastSkipSymbols.any { sym -> t.contains(sym) }
+            val hasDoubleArrow = t.contains(">>")
+            val hasExplicitSkipForDoubleArrow = t == ">>" || skipTextKeywords.any { kw -> t.contains(kw, ignoreCase = true) }
+            val isValidSymbol = hasStrictSymbol || (hasDoubleArrow && hasExplicitSkipForDoubleArrow)
             val isShortSkipLabel = t.length <= 6 && promoBaitWords.none { bait -> t.contains(bait, ignoreCase = true) }
-            val isInCornerOrEdge = cy < sh * 0.20f || cy > sh * 0.82f || cx > sw * 0.72f || cx < sw * 0.28f
-            hasSymbol && isShortSkipLabel && isInCornerOrEdge && !isInvalidOrBlacklisted(cx, cy)
+            val isInStrictCorner = (cy < sh * 0.18f || cy > sh * 0.84f) && (cx < sw * 0.30f || cx > sw * 0.70f)
+            isValidSymbol && isShortSkipLabel && isInStrictCorner && !isInvalidOrBlacklisted(cx, cy)
         }
         if (fastSkipMatch != null) {
             hasAdActuallyShown = true
@@ -1030,27 +1136,33 @@ class AdCloserHandler(
                 "スキップ",
                 ">>|",
                 "▶|",
-                ">|",
-                ">>"
+                ">|"
             ),
             screenWidth = sw,
             screenHeight = sh,
             roiNormalized = RectF(0.01f, 0.04f, 0.99f, 0.96f),
-            excludeKeywords = OcrRecognizer.AD_CLOSE_EXCLUDE_KEYWORDS,
+            excludeKeywords = OcrRecognizer.AD_CLOSE_EXCLUDE_KEYWORDS + listOf("一起", "搶購", "雙11"),
             maxTextLength = 16
         )
         // 全畫面放行：包含左上角/右上角 ▶|、>|、>> 及各類略過標籤，100% 派發點擊
         val isExplicitSkipGooglePlayPill = false // Compatibility contract: false so explicitSkipOcr is never nullified
         val validSkipOcr = if (isExplicitSkipGooglePlayPill) null else explicitSkipOcr
 
-        if (validSkipOcr != null &&
-            !isInvalidOrBlacklisted(validSkipOcr.bounds.centerX(), validSkipOcr.bounds.centerY())
-        ) {
-            hasAdActuallyShown = true
-            lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
-            val skipOcrLabel = "OCR[${validSkipOcr.text}]"
-            recordAndClick(service, validSkipOcr.bounds, allowBlacklist = true, label = skipOcrLabel)
-            return AdStepResult.ClickedCloseOrSkip(skipOcrLabel, validSkipOcr.bounds)
+        if (validSkipOcr != null) {
+            val skipCx = validSkipOcr.bounds.centerX()
+            val skipCy = validSkipOcr.bounds.centerY()
+            val normalAllowed = !isInvalidOrBlacklisted(skipCx, skipCy)
+            val upgradeAllowed = !normalAllowed && canBypassEarlyVisualSkipBlacklist(skipCx, skipCy, elapsedSec)
+            if (normalAllowed || upgradeAllowed) {
+                if (upgradeAllowed) phaseUpgradeExplicitOcrClickCount++
+                hasAdActuallyShown = true
+                lastFallbackCornerTimeMs = System.currentTimeMillis() + 4000L
+                val skipOcrLabel = "OCR[${validSkipOcr.text}]"
+                recordAndClick(service, validSkipOcr.bounds, allowBlacklist = true, label = skipOcrLabel)
+                return AdStepResult.ClickedCloseOrSkip(skipOcrLabel, validSkipOcr.bounds)
+            } else {
+                lastBlockedSkipDiag = "OCR[${validSkipOcr.text.trim()}]@${skipCx},${skipCy}(blk)"
+            }
         }
 
         // 4B. 檢查左上角/頂部 Google AdMob 等多段廣告之「Next Ad -> / 下一則」膠囊按鈕 (例如 Ad 1 of 2 略過按鈕)
@@ -1136,6 +1248,24 @@ class AdCloserHandler(
             t.contains("Play 商店") ||
             (item.bounds.centerY() < sh * 0.16f && (t.contains("Google", ignoreCase = true) || t.contains("Play", ignoreCase = true)))
         }
+        val isFacebookAdPkg = fgPkg == "com.facebook.katana" ||
+            fgPkg == "com.facebook.orca" ||
+            fgPkg == "com.instagram.android"
+        val hasStrongMetaBrandOcr = ocrItems.any { item ->
+            val t = item.text
+            t.contains("Meta", ignoreCase = true) ||
+                t.contains("Facebook", ignoreCase = true) ||
+                t.contains("Trip", ignoreCase = true) ||
+                t.contains("Sponsored", ignoreCase = true) ||
+                t.contains("Audience Network", ignoreCase = true)
+        }
+        val isTripOrMultiPodMetaAd = isFacebookAdPkg && ocrItems.any { item ->
+            val t = item.text
+            t.contains("Trip.", ignoreCase = true) ||
+                t.contains("Ad 1 of", ignoreCase = true) ||
+                t.contains("立即预订") ||
+                t.contains("立即預訂")
+        }
         val isMetaAd = !hasGameOrSubDialogMarkers && (isCurrentAdTopSponsored ||
             fgPkg == "com.facebook.katana" || fgPkg == "com.facebook.orca" ||
             fgPkg == "com.facebook.lite" || fgPkg == "com.facebook.mlite" ||
@@ -1148,9 +1278,11 @@ class AdCloserHandler(
                 t.contains("Ads served by Meta", ignoreCase = true) ||
                 t.contains("from Meta", ignoreCase = true) ||
                 t.contains("Audience Network", ignoreCase = true) ||
-                t.contains("•") || t.contains("●") || t.contains("○") ||
-                t.contains("···") || t.contains("•••") ||
-                t.contains("1/") || t.contains("/3") || t.contains("1 of")
+                ((!isGame || hasStrongMetaBrandOcr) && (
+                    t.contains("•") || t.contains("●") || t.contains("○") ||
+                    t.contains("···") || t.contains("•••") ||
+                    t.contains("1/") || t.contains("/3") || t.contains("1 of")
+                ))
             }) && !hasGooglePlayOnScreen
 
         val previewTitleItem = ocrItems.firstOrNull { item ->
@@ -1163,19 +1295,22 @@ class AdCloserHandler(
 
         // 4C. 【全螢幕快轉/略過按鈕 (▶| 或 >>) 圖示偵測器】
         // 專門應對 Meta Audience Network / 韓系跨界黑邊影音廣告左上或右上角的深色圓底高亮快轉略過鈕 (▶|)。
-        // 限制：非頂部白底 Sponsored 橫幅廣告、非 Meta 網頁預覽（交由 4D 嚴格限制頂部標題列），滿 4 秒即啟動搶點（單支最多 3 次）！
+        // 限制：非頂部白底 Sponsored 橫幅廣告、非 Meta 網頁預覽（交由 4D 嚴格限制頂部標題列）；
+        // Meta 廣告 (`isFacebookAdPkg`) 禁用左上角掃描以免誤點靜音/資訊鈕，Trip./Multi-pod Meta 延後至 12 秒再啟動視覺掃描！
+        val step4cMinElapsedSec = if (isTripOrMultiPodMetaAd) 12 else 4
         if (!isCurrentAdTopSponsored &&
             !isMetaWebPreview &&
             fastForwardSkipClicks < 3 &&
             (isMetaAd || isAd || isGame || fgPkg == null) &&
-            (elapsedSec >= 4 || rewardGrantedOcr != null) &&
+            (elapsedSec >= step4cMinElapsedSec || rewardGrantedOcr != null) &&
             (remainingSec == null || remainingSec <= 1 || rewardGrantedOcr != null)
         ) {
             val skipMatch = templateMatcher.detectCornerFastForwardSkip(
                 screenBitmap = screenBitmap,
                 blacklistedCoord = { x, y ->
                     isInvalidOrBlacklisted(x, y) || isBlockedByCornerPillOrSurveyOcr(x, y, ocrItems, sw, sh)
-                }
+                },
+                includeLeftZone = !isFacebookAdPkg
             )
             val hasAdjacentCapsuleOcr = if (skipMatch != null) {
                 val isLeftPillIcon = skipMatch.bounds.centerX() < sw * 0.18f
@@ -1334,11 +1469,24 @@ class AdCloserHandler(
         }
 
         // 7A2. 角落獨立單字 X 關閉按鈕識別（如起漲K線廣告之左上角 "X"@6%,6%、End Card "X"@91%,10%、MITSUBISHI "(X)"@8%,5%），
-        // 採用緊縮半徑 isInvalidOrBlacklistedForExplicitOcrClose 防止 34px–55px 外的舊誤觸點封死真實獨立 OCR 關閉字元
-        val cornerAsciiClose = ocrRecognizer.findCornerAsciiCloseButton(safeCloseOcrItems, sw, sh) { cx, cy ->
+        // 採用緊縮半徑 isInvalidOrBlacklistedForExplicitOcrClose 防止 34px–55px 外的舊誤觸點封死真實獨立 OCR 關閉字元；
+        // 若僅因早期視覺略過鈕誤觸被拉黑且已達階段升級條件（滿 15s 且隔 10s），允許有限度解鎖真實 OCR 角落 "X"！
+        var usedPhaseUpgradeCloseX = false
+        val cornerAsciiCloseNormal = ocrRecognizer.findCornerAsciiCloseButton(safeCloseOcrItems, sw, sh) { cx, cy ->
             isInvalidOrBlacklistedForExplicitOcrClose(cx, cy) || isBlockedByCornerPillOrSurveyOcr(cx, cy, ocrItems, sw, sh)
         }
+        val cornerAsciiClose = cornerAsciiCloseNormal ?: ocrRecognizer.findCornerAsciiCloseButton(safeCloseOcrItems, sw, sh) { cx, cy ->
+            val blockedByPillOrSurvey = isBlockedByCornerPillOrSurveyOcr(cx, cy, ocrItems, sw, sh)
+            val canUpgrade = !blockedByPillOrSurvey && canBypassEarlyVisualSkipBlacklist(cx, cy, elapsedSec)
+            if (!canUpgrade && !blockedByPillOrSurvey) {
+                lastBlockedSkipDiag = "OCR-角落@${cx},${cy}(blk)"
+            }
+            blockedByPillOrSurvey || !canUpgrade
+        }?.also { usedPhaseUpgradeCloseX = true }
         if (cornerAsciiClose != null) {
+            if (usedPhaseUpgradeCloseX) {
+                phaseUpgradeExplicitOcrClickCount++
+            }
             // 若為 Coupang 酷澎廣告且上方小 × (y < 8.8% sh) 下方緊鄰真實圓形灰底 (X)，優先點擊下方圓形 (X)
             if (isCoupangAd && cornerAsciiClose.bounds.centerY() < (sh * 0.088f).toInt() && cornerAsciiClose.bounds.centerX() > (sw * 0.78f).toInt()) {
                 val coupangCircle = templateMatcher.detectCornerGrayCircleCloseX(screenBitmap) { x, y ->
@@ -1424,7 +1572,7 @@ class AdCloserHandler(
                         kotlin.math.abs(item.bounds.centerY() - gcy) <= sh * 0.035f &&
                         item.bounds.right <= gcx + (sw * 0.02f).toInt()
                 }
-                val effectiveGeoLabel = if (isTopRightGooglePlayCloseX && topRightStoreGateClicks == 0 && redirectCount == 0) {
+                val effectiveGeoLabel = if (isTopRightGooglePlayCloseX && topRightStoreGateClicks == 0 && !hasTopRightRedirectPoint()) {
                     topRightStoreGateClicks++
                     "右上角[Google Play ×]關閉鈕"
                 } else {
@@ -1698,7 +1846,7 @@ class AdCloserHandler(
                     startY = swipePath[1],
                     endX = swipePath[2],
                     endY = swipePath[3],
-                    durationMs = 180L
+                    durationMs = 360L
                 )
                 return AdStepResult.SwipedToReveal(revealSwipeCount, elapsedSec)
             }
@@ -1819,10 +1967,10 @@ class AdCloserHandler(
         ocrItems: List<OcrItem>
     ): FloatArray {
         val candidates = listOf(
-            floatArrayOf(sw * 0.16f, sh * 0.38f, sw * 0.16f, sh * 0.26f),
-            floatArrayOf(sw * 0.84f, sh * 0.38f, sw * 0.84f, sh * 0.26f),
-            floatArrayOf(sw * 0.16f, sh * 0.62f, sw * 0.16f, sh * 0.50f),
-            floatArrayOf(sw * 0.50f, sh * 0.65f, sw * 0.50f, sh * 0.45f)
+            floatArrayOf(sw * 0.16f, sh * 0.42f, sw * 0.16f, sh * 0.20f),
+            floatArrayOf(sw * 0.84f, sh * 0.42f, sw * 0.84f, sh * 0.20f),
+            floatArrayOf(sw * 0.16f, sh * 0.66f, sw * 0.16f, sh * 0.44f),
+            floatArrayOf(sw * 0.50f, sh * 0.68f, sw * 0.50f, sh * 0.44f)
         )
         val padX = (sw * 0.045f).toInt().coerceAtLeast(16)
         val padY = (sh * 0.030f).toInt().coerceAtLeast(24)
@@ -2061,7 +2209,7 @@ class AdCloserHandler(
                 val endsWithCloseChar = trimmed.length >= 4 &&
                     trimmed.last() in charArrayOf('×', '✕', '✖', 'x', 'X') &&
                     trimmed[trimmed.length - 2].let { it == ' ' || it == '|' || it == '·' || it == '•' || it == ':' }
-                val effectiveRight = if (redirectCount == 0 && redirectPointCounts.isEmpty() && endsWithCloseChar) {
+                val effectiveRight = if (!hasTopRightRedirectPoint() && topRightStoreGateClicks == 0 && endsWithCloseChar) {
                     b.right - max(28, (b.width() * 0.22f).toInt())
                 } else {
                     b.right + padX
@@ -2118,6 +2266,7 @@ class AdCloserHandler(
                 (!isHighConfidence && nearbyClicks >= 4)
             ) {
                 addBlacklistPoint(pt)
+                lastBlacklistedEventDiag = "pt=(${pt.x},${pt.y}) | src=${effectiveLabel ?: "unknown"}(repeat=$nearbyClicks) | elapsed=${getElapsedSeconds()}s | redir=$redirectCount"
             }
         }
         if (effectiveLabel?.startsWith("備援盲點") != true && effectiveLabel != "Meta備援左上角熱區") {
@@ -2169,7 +2318,7 @@ class AdCloserHandler(
             val cy = item.bounds.centerY().toFloat() / sh
             val t = item.text.replace(" ", "")
             cy in 0.08f..0.18f && t.length <= 3 &&
-                (t == "首頁" || t == "首真" || t == "步數" || t == "步敷" || t == "時間" || t == "時問" || t == "遊戲" || t == "移動")
+                (t == "首頁" || t == "首真" || t == "首夏" || t == "步數" || t == "步敷" || t == "時間" || t == "時問" || t == "遊戲" || t == "移動")
         }
         val hasBottomNav = ocrItems.any { item ->
             val cy = item.bounds.centerY().toFloat() / sh

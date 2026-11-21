@@ -176,11 +176,15 @@ class ReceiveGiftTask {
             )
         }
 
-        // 檢查「禮物」抽屜標題 (y in 0.18f..0.32f)
+        // 檢查「禮物」抽屜標題 (y in 0.18f..0.32f)，嚴格排除「禮物次數 / 禮物卡 / 超商禮券 / 贈送禮物」等誤判
         val hasDrawerTitle = ocrItems.any { item ->
             val cy = item.bounds.centerY().toFloat() / effectiveSh
-            val t = item.text.trim()
-            cy in 0.18f..0.32f && (t == "禮物" || t == "禮物盒" || t.contains("禮物"))
+            val t = item.text.trim().replace(" ", "")
+            cy in 0.18f..0.32f && (
+                t == "禮物" || t == "禮物盒" ||
+                    (t.contains("禮物") && !t.contains("次數") && !t.contains("卡") &&
+                        !t.contains("券") && !t.contains("贈送") && !t.contains("超商") && t.length <= 6)
+            )
         }
         if (hasDrawerTitle) {
             val hasDrawerSubText = middleItems.any { item ->

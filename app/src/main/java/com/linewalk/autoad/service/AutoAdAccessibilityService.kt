@@ -374,6 +374,8 @@ class AutoAdAccessibilityService : AccessibilityService() {
     @Volatile
     private var lastBackActionTimeMs: Long = 0L
 
+    fun getLastBackActionTimeMs(): Long = lastBackActionTimeMs
+
     /**
      * 安全發送單次系統返回鍵：
      * 1. 合法第三方廣告容器常態防護：預設 forceEscapeAdPackage = false 時嚴禁發送系統返回鍵以免中斷廣告或遺失獎勵；
@@ -514,28 +516,32 @@ class AutoAdAccessibilityService : AccessibilityService() {
 
     /**
      * 於多工切換畫面無障礙節點樹中尋找《LINE 散步趣》任務卡片之水平中心座標：
-     * 嚴格比對節點文字或描述含「散步趣」或「LINE Walk」，避免誤滑除其他使用者應用程式。
+     * 掃描前景及非本助手之系統視窗，嚴格透過 [isLineWalkRecentsLabel] 正向比對並排除「散步趣助手」，
+     * 若同時出現多張符合卡片則優先選取最右側（One UI 最近任務）卡片，避免誤滑除其他使用者應用程式。
      */
     fun findRecentsAppCardCenterX(sw: Int, sh: Int): Int? {
         if (sw <= 0 || sh <= 0) return null
-        val root = getSafeRootNode() ?: return null
+        val selfPkg = getSelfPackageName()
+        val roots = collectRecentsRootNodes(selfPkg)
+        if (roots.isEmpty()) return null
+
         val queue = java.util.ArrayDeque<android.view.accessibility.AccessibilityNodeInfo>()
-        queue.add(root)
+        roots.forEach { queue.add(it) }
+        val matchedRects = mutableListOf<Rect>()
         var visited = 0
-        while (queue.isNotEmpty() && visited < 220) {
+        while (queue.isNotEmpty() && visited < 450) {
             val node = queue.removeFirst()
             visited++
             try {
                 if (node.isVisibleToUser) {
                     val txt = node.text?.toString().orEmpty()
                     val desc = node.contentDescription?.toString().orEmpty()
-                    val combined = "$txt $desc"
-                    if (combined.contains("散步趣") || combined.contains("LINE Walk", ignoreCase = true)) {
+                    if (isLineWalkRecentsLabel(txt) || isLineWalkRecentsLabel(desc)) {
                         val rect = Rect()
                         node.getBoundsInScreen(rect)
                         val cy = rect.centerY()
                         if (cy in (sh * 0.05f).toInt()..(sh * 0.85f).toInt() && rect.width() >= 20) {
-                            return rect.centerX().coerceIn((sw * 0.18f).toInt(), (sw * 0.82f).toInt())
+                            matchedRects.add(rect)
                         }
                     }
                 }
@@ -545,7 +551,86 @@ class AutoAdAccessibilityService : AccessibilityService() {
             } catch (_: Exception) {
             }
         }
-        return null
+        val bestRect = matchedRects.maxByOrNull { it.centerX() } ?: return null
+        return bestRect.centerX().coerceIn((sw * 0.14f).toInt(), (sw * 0.86f).toInt())
+    }
+
+    /**
+     * 擷取系統多工切換畫面目前可見卡片標籤摘要（供 Level 3 診斷日誌追溯卡片位置與識別結果）。
+     */
+    fun describeRecentsCardsForLog(sw: Int, sh: Int): String {
+        if (sw <= 0 || sh <= 0) return ""
+        return try {
+            val selfPkg = getSelfPackageName()
+            val roots = collectRecentsRootNodes(selfPkg)
+            if (roots.isEmpty()) return ""
+            val queue = java.util.ArrayDeque<android.view.accessibility.AccessibilityNodeInfo>()
+            roots.forEach { queue.add(it) }
+            val entries = mutableListOf<String>()
+            val seen = mutableSetOf<String>()
+            var visited = 0
+            while (queue.isNotEmpty() && visited < 450 && entries.size < 6) {
+                val node = queue.removeFirst()
+                visited++
+                try {
+                    if (node.isVisibleToUser) {
+                        val label = sequenceOf(node.text?.toString(), node.contentDescription?.toString())
+                            .mapNotNull { it?.trim()?.replace("\n", " ") }
+                            .firstOrNull { it.length in 2..24 }
+                        if (label != null) {
+                            val rect = Rect()
+                            node.getBoundsInScreen(rect)
+                            val cy = rect.centerY()
+                            if (cy in (sh * 0.05f).toInt()..(sh * 0.85f).toInt() && rect.width() >= 20) {
+                                val nx = (rect.centerX() * 100f / sw).toInt()
+                                val key = "$label@$nx"
+                                if (seen.add(key)) {
+                                    entries.add("\"$label\"@${nx}%")
+                                }
+                            }
+                        }
+                    }
+                    for (i in 0 until node.childCount) {
+                        node.getChild(i)?.let { queue.add(it) }
+                    }
+                } catch (_: Exception) {
+                }
+            }
+            entries.joinToString(", ")
+        } catch (_: Throwable) {
+            ""
+        }
+    }
+
+    private fun collectRecentsRootNodes(selfPkg: String?): List<android.view.accessibility.AccessibilityNodeInfo> {
+        val result = mutableListOf<android.view.accessibility.AccessibilityNodeInfo>()
+        fun tryAdd(node: android.view.accessibility.AccessibilityNodeInfo?) {
+            if (node == null) return
+            val pkg = try {
+                node.packageName?.toString()
+            } catch (_: Throwable) {
+                null
+            }
+            if (selfPkg != null && pkg == selfPkg) return
+            if (result.none { it === node }) {
+                result.add(node)
+            }
+        }
+        tryAdd(getSafeRootNode())
+        val allWindows = try {
+            windows.orEmpty()
+        } catch (_: Throwable) {
+            emptyList()
+        }
+        for (win in allWindows) {
+            val wRoot = try {
+                win.root
+            } catch (_: Throwable) {
+                null
+            }
+            tryAdd(wRoot)
+        }
+        return result
     }
 
     /**
@@ -605,5 +690,26 @@ class AutoAdAccessibilityService : AccessibilityService() {
 
         private val _instance = MutableStateFlow<AutoAdAccessibilityService?>(null)
         val instance: StateFlow<AutoAdAccessibilityService?> = _instance.asStateFlow()
+
+        /**
+         * 判斷多工畫面卡片文字是否為《LINE 散步趣》遊戲本體，嚴格排除本助手《散步趣助手》自身卡片。
+         */
+        fun isLineWalkRecentsLabel(raw: String): Boolean {
+            val clean = raw.trim()
+            if (clean.isEmpty()) return false
+            if (clean.contains("助手") || clean.contains("AutoAd", ignoreCase = true) ||
+                clean.contains("輔助") || clean.contains("巡邏") ||
+                clean.contains("待命") || clean.contains("監控") || clean.contains("設定保護")
+            ) {
+                return false
+            }
+            return clean.contains("LINE 散步趣", ignoreCase = true) ||
+                clean.contains("LINE散步趣", ignoreCase = true) ||
+                clean.contains("LINE Walk", ignoreCase = true) ||
+                clean.contains("LINEWalk", ignoreCase = true) ||
+                clean.contains("散步趣") ||
+                clean.contains("LGWKTW", ignoreCase = true) ||
+                clean.contains("LGWALK", ignoreCase = true)
+        }
     }
 }

@@ -980,7 +980,7 @@ class OcrRecognizer {
             val t = item.text.replace(" ", "")
             val cy = item.bounds.centerY().toFloat() / sh
             cy in 0.08f..0.18f && t.length <= 3 &&
-                (t == "首頁" || t == "首真" || t == "步數" || t == "步敷" || t == "時間" || t == "時問" || t == "遊戲" || t == "移動")
+                (t == "首頁" || t == "首真" || t == "首夏" || t == "步數" || t == "步敷" || t == "時間" || t == "時問" || t == "遊戲" || t == "移動")
         }
         val hasBottomNavPre = items.any { item ->
             val t = item.text.replace(" ", "")
@@ -1069,7 +1069,7 @@ class OcrRecognizer {
             (cy < 0.35f && (
                 t.contains("每日賓果") || t.contains("今日賓果") || (t == "賓果" && cy < 0.20f) ||
                 t.contains("抽抽樂") ||
-                t.contains("任務") ||
+                ((t == "任務" || t.contains("特別任務") || t.contains("每日任務") || t.contains("每週任務")) && !t.contains("貼圖") && (cy < 0.20f || topTabCountPre < 2)) ||
                 t.contains("禮物盒") || t.contains("接收禮物") ||
                 (cy in 0.18f..0.32f && (t == "禮物" || t == "禮物盒")) ||
                 t.contains("送來的禮物") || (t.contains("收到") && t.contains("禮物")) ||
@@ -1095,9 +1095,9 @@ class OcrRecognizer {
             val t = item.text.replace(" ", "")
             val cy = item.bounds.centerY().toFloat() / sh
 
-            // 頂部四大分頁 (cy in 0.08f..0.18f, 長度<=3 全詞比對，含 ML Kit 常見辨識近似字 首真/步敷/時問，避免廣告文案誤判)
+            // 頂部四大分頁 (cy in 0.08f..0.18f, 長度<=3 全詞比對，含 ML Kit 常見辨識近似字 首真/首夏/步敷/時問，避免廣告文案誤判)
             if (cy in 0.08f..0.18f && t.length <= 3 &&
-                (t == "首頁" || t == "首真" || t == "步數" || t == "步敷" || t == "時間" || t == "時問" || t == "遊戲" || t == "移動")
+                (t == "首頁" || t == "首真" || t == "首夏" || t == "步數" || t == "步敷" || t == "時間" || t == "時問" || t == "遊戲" || t == "移動")
             ) {
                 topTabCount++
             }
@@ -1157,9 +1157,10 @@ class OcrRecognizer {
 
     /**
      * 偵測裝置處於鎖定畫面 / Samsung Always-On Display 充電待機畫面：
-     * 只要畫面出現任何《LINE 散步趣》主畫面分頁、底部導覽列或日常任務彈窗即排除，絕不誤停遊戲。
+     * 只要畫面出現任何《LINE 散步趣》主畫面分頁、底部導覽列或日常任務彈窗即排除，絕不誤停遊戲；
+     * 若傳入 screenHeight > 0，會先排除頂部系統狀態列 (cy < 5.0% sh) 的時鐘與電量數字（避免黑色廣告緩衝黑屏誤判為 AOD 鎖屏）。
      */
-    fun isLockscreenOrAodOcr(items: List<OcrItem>): Boolean {
+    fun isLockscreenOrAodOcr(items: List<OcrItem>, screenHeight: Int = 0): Boolean {
         if (items.isEmpty()) return false
         val hasGameOrDialogChrome = items.any { item ->
             val t = item.text.replace(" ", "")
@@ -1173,7 +1174,15 @@ class OcrRecognizer {
         }
         if (hasGameOrDialogChrome) return false
 
-        val hasStrongLockMarker = items.any { item ->
+        val effectiveItems = if (screenHeight > 0) {
+            val statusBarMaxY = (screenHeight * 0.050f).toInt()
+            items.filterNot { it.bounds.centerY() < statusBarMaxY }
+        } else {
+            items
+        }
+        if (effectiveItems.isEmpty()) return false
+
+        val hasStrongLockMarker = effectiveItems.any { item ->
             val t = item.text.replace(" ", "")
             t.contains("即充飽") ||
                 t.contains("完全充電") ||
@@ -1190,11 +1199,11 @@ class OcrRecognizer {
         }
         if (hasStrongLockMarker) return true
 
-        val hasChargingEstimate = items.any { item ->
+        val hasChargingEstimate = effectiveItems.any { item ->
             val t = item.text.replace(" ", "")
             t.contains("還有") && t.contains("分鐘")
         }
-        val hasWeekday = items.any { item ->
+        val hasWeekday = effectiveItems.any { item ->
             val t = item.text
             t.contains("週一") || t.contains("週二") || t.contains("週三") ||
                 t.contains("週四") || t.contains("週五") || t.contains("週六") || t.contains("週日")
@@ -1202,9 +1211,9 @@ class OcrRecognizer {
         if (hasChargingEstimate && hasWeekday) return true
 
         val lockClockRegex = Regex("""^\d{1,2}:\d{2}$""")
-        val hasStandaloneClock = items.any { lockClockRegex.matches(it.text.trim()) }
-        if (items.size <= 5 && (hasWeekday || hasStandaloneClock)) {
-            val isAllLockStatusTokens = items.all { item ->
+        val hasStandaloneClock = effectiveItems.any { lockClockRegex.matches(it.text.trim()) }
+        if (effectiveItems.size <= 5 && (hasWeekday || hasStandaloneClock)) {
+            val isAllLockStatusTokens = effectiveItems.all { item ->
                 val t = item.text.replace(" ", "")
                 t.contains("週") || t.contains("星期") || t.contains("°") || t.contains("。") ||
                     lockClockRegex.containsMatchIn(t) || t.contains("請勿打") || t.contains("開啟") ||
@@ -1292,6 +1301,14 @@ class OcrRecognizer {
     }
 
     fun detectAdCountdownSeconds(items: List<OcrItem>, screenHeight: Int, screenWidth: Int = 0): Int? {
+        return detectAdCountdownWithSource(items, screenHeight, screenWidth)?.first
+    }
+
+    fun detectAdCountdownWithSource(
+        items: List<OcrItem>,
+        screenHeight: Int,
+        screenWidth: Int = 0
+    ): Pair<Int, String>? {
         val effectiveSw = if (screenWidth > 0) {
             screenWidth
         } else {
@@ -1304,6 +1321,9 @@ class OcrRecognizer {
             val itText = item.text.replace(" ", "")
             itText.contains("距離下次") || itText.contains("抽選還有") || itText.contains("分鐘") || itText.contains("次抽選")
         }
+        val adPodRegex = Regex("""(?i)(?:\bad\s*\d+\s*(?:of|/)\s*\d+|\b\d+\s*of\s*\d+\b|ads\s*served)""")
+        val adPodItems = items.filter { adPodRegex.containsMatchIn(it.text) }
+        val adPodRowTolY = maxOf(36, (screenHeight * 0.035f).toInt())
 
         for (item in items) {
             val cx = item.bounds.centerX()
@@ -1321,21 +1341,28 @@ class OcrRecognizer {
             ) {
                 continue
             }
+            val safeToken = t.trim().replace("|", " ").replace("\n", " ").replace("\r", " ")
             val regexMatch = COUNTDOWN_REGEX.find(t)
             if (regexMatch != null) {
                 val sec = regexMatch.groupValues.drop(1).firstOrNull { it.isNotEmpty() }?.toIntOrNull()
                 if (sec != null && sec in 1..60) {
-                    return sec
+                    return sec to "kw(${safeToken.take(12)}@${cx},${cy})"
                 }
             }
-            // 支援頂部與底部兩側角落純數字圓圈倒數計時 (如 15、25、41、36) 等)，若存在遊戲內長週期計時器則嚴格略過純數字
+            // 支援頂部與底部兩側角落純數字圓圈倒數計時 (如 15、25、41、36) 等)，若存在遊戲內長週期計時器或屬於「Ad 1 of 2」輪播標籤則嚴格略過純數字
             // 嚴格限定位於左右兩側角落 (cx < 25% 或 cx > 75% 螢幕寬)，避免將抽抽樂結果彈窗正中央「BIG 8獎」的「8」誤認為廣告倒數秒數
             if (!hasLongPeriodTimer) {
+                if (adPodRegex.containsMatchIn(t)) continue
+                val inAdPodBadge = adPodItems.any { pod ->
+                    kotlin.math.abs(pod.bounds.centerY() - cy) <= adPodRowTolY &&
+                        cx in (pod.bounds.left - 40)..(pod.bounds.right + 40)
+                }
+                if (inAdPodBadge) continue
                 val digitCore = t.trim().trim('(', ')', '[', ']', '{', '}', '|', '/', '\\', '°', '.', ',', ' ')
                 if (digitCore.length in 1..2 && digitCore.all { it.isDigit() }) {
                     val sec = digitCore.toIntOrNull()
                     if (inSideCorner && sec != null && sec in 1..60) {
-                        return sec
+                        return sec to "digit(${digitCore}@${cx},${cy})"
                     }
                 }
             }
